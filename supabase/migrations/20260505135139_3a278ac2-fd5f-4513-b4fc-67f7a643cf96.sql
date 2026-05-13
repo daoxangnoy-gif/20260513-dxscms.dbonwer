@@ -1,0 +1,1 @@
+ALTER TABLE public.data_master ADD COLUMN IF NOT EXISTS jmart_price numeric;

@@ -1,0 +1,1 @@
+ALTER TABLE public.payment_overdue ADD COLUMN IF NOT EXISTS drive_link text;

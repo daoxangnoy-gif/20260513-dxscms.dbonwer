@@ -1,0 +1,1 @@
+ALTER VIEW public.po_cost_enriched SET (security_invoker = true);

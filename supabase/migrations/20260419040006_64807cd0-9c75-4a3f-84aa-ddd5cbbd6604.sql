@@ -1,0 +1,1 @@
+ALTER TABLE public.store_type ADD COLUMN IF NOT EXISTS size_store text;

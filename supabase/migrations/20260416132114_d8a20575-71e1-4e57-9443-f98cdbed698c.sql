@@ -1,0 +1,1 @@
+ALTER TABLE public.minmax ADD COLUMN unit_pick text;
