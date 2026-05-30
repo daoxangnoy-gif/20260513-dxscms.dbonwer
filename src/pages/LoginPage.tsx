@@ -57,16 +57,23 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader className="text-center">
-          <img
-            src={dxScmLogo}
-            alt="DX SCM Logo"
-            className="mx-auto w-24 h-24 object-contain mb-2"
-          />
-          <CardTitle className="text-xl">DX Supplychain Management System</CardTitle>
-          <CardDescription>{isSignUp ? "สร้างบัญชีใหม่" : "เข้าสู่ระบบ"}</CardDescription>
+    <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900">
+      {/* Background decorations */}
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_rgba(59,130,246,0.15),transparent_60%)] pointer-events-none" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_bottom_left,_rgba(99,102,241,0.1),transparent_60%)] pointer-events-none" />
+      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-blue-500/5 rounded-full blur-3xl pointer-events-none" />
+
+      <Card className="w-full max-w-md shadow-2xl border-0 bg-white/95 backdrop-blur-sm relative z-10">
+        <CardHeader className="text-center pb-4">
+          <div className="mx-auto mb-3 w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center">
+            <img
+              src={dxScmLogo}
+              alt="DX SCM Logo"
+              className="w-10 h-10 object-contain"
+            />
+          </div>
+          <CardTitle className="text-xl font-bold">DX Supplychain Management</CardTitle>
+          <CardDescription className="text-sm">{isSignUp ? "สร้างบัญชีใหม่เพื่อเข้าใช้งาน" : "เข้าสู่ระบบเพื่อดำเนินการต่อ"}</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">

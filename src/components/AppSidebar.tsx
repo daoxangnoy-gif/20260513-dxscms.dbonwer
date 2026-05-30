@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
 import {
   Database, BarChart3, Package, ArrowUpDown, DollarSign,
-  ShoppingCart, TrendingUp, Calendar, Truck, Calculator,
-  ChevronRight, Plus, Minus, Users, FileText, History, Store,
+  ShoppingCart, TrendingUp, Calendar, Truck,
+  ChevronRight, ChevronDown, ChevronLeft, Users, FileText, History, Store,
   LogOut, Shield, Settings2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -144,8 +144,10 @@ export default function AppSidebar({ currentPage, setCurrentPage, activeTable, s
                 <button
                   onClick={() => handleMainClick(menu.key)}
                   className={cn(
-                    "flex-1 flex items-center gap-2 px-3 py-2 rounded-md text-sm font-semibold transition-colors",
-                    isActive ? "bg-sidebar-accent text-sidebar-accent-foreground" : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+                    "flex-1 flex items-center gap-2 py-2 rounded-md text-sm font-semibold transition-all border-l-[3px]",
+                    isActive
+                      ? "bg-sidebar-accent text-sidebar-accent-foreground border-primary pl-2.5 pr-3"
+                      : "text-sidebar-foreground hover:bg-sidebar-accent/50 border-transparent px-3"
                   )}
                 >
                   <menu.icon className="w-4 h-4 flex-shrink-0" />
@@ -160,9 +162,9 @@ export default function AppSidebar({ currentPage, setCurrentPage, activeTable, s
                       if (menu.key === "report") setReportExpanded(!reportExpanded);
                       if (menu.key === "config") setConfigExpanded(!configExpanded);
                     }}
-                    className="p-1 rounded hover:bg-sidebar-accent/50 text-sidebar-foreground transition-colors"
+                    className="p-1 rounded hover:bg-sidebar-accent/50 text-sidebar-foreground/60 transition-colors"
                   >
-                    {isExpanded ? <Minus className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+                    <ChevronDown className={cn("w-3.5 h-3.5 transition-transform duration-200", isExpanded ? "rotate-0" : "-rotate-90")} />
                   </button>
                 )}
               </div>
@@ -178,10 +180,10 @@ export default function AppSidebar({ currentPage, setCurrentPage, activeTable, s
                         key={t.name}
                         onClick={() => setActiveTable(t.name)}
                         className={cn(
-                          "w-full flex items-center gap-2 px-3 py-1.5 rounded-md text-xs transition-colors",
+                          "w-full flex items-center gap-2 py-1.5 rounded-md text-xs transition-all border-l-[2px]",
                           activeTable === t.name
-                            ? "bg-sidebar-primary text-sidebar-primary-foreground"
-                            : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+                            ? "bg-sidebar-primary text-sidebar-primary-foreground border-primary/70 pl-2.5 pr-3"
+                            : "text-sidebar-foreground hover:bg-sidebar-accent/50 border-transparent px-3"
                         )}
                       >
                         <ChevronRight className={cn("w-3 h-3 flex-shrink-0 transition-transform", activeTable === t.name && "rotate-90")} />
@@ -211,10 +213,10 @@ export default function AppSidebar({ currentPage, setCurrentPage, activeTable, s
                       key={sub.key}
                       onClick={() => setActiveSrrSub(sub.key)}
                       className={cn(
-                        "w-full flex items-center gap-2 px-3 py-1.5 rounded-md text-xs transition-colors",
+                        "w-full flex items-center gap-2 py-1.5 rounded-md text-xs transition-all border-l-[2px]",
                         activeSrrSub === sub.key
-                          ? "bg-sidebar-primary text-sidebar-primary-foreground"
-                          : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+                          ? "bg-sidebar-primary text-sidebar-primary-foreground border-primary/70 pl-2.5 pr-3"
+                          : "text-sidebar-foreground hover:bg-sidebar-accent/50 border-transparent px-3"
                       )}
                     >
                       <ChevronRight className={cn("w-3 h-3 flex-shrink-0 transition-transform", activeSrrSub === sub.key && "rotate-90")} />
@@ -247,10 +249,10 @@ export default function AppSidebar({ currentPage, setCurrentPage, activeTable, s
                       key={sub.key}
                       onClick={() => setActiveLogSub(sub.key)}
                       className={cn(
-                        "w-full flex items-center gap-2 px-3 py-1.5 rounded-md text-xs transition-colors",
+                        "w-full flex items-center gap-2 py-1.5 rounded-md text-xs transition-all border-l-[2px]",
                         activeLogSub === sub.key
-                          ? "bg-sidebar-primary text-sidebar-primary-foreground"
-                          : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+                          ? "bg-sidebar-primary text-sidebar-primary-foreground border-primary/70 pl-2.5 pr-3"
+                          : "text-sidebar-foreground hover:bg-sidebar-accent/50 border-transparent px-3"
                       )}
                     >
                       <ChevronRight className={cn("w-3 h-3 flex-shrink-0 transition-transform", activeLogSub === sub.key && "rotate-90")} />
@@ -268,10 +270,10 @@ export default function AppSidebar({ currentPage, setCurrentPage, activeTable, s
                       key={sub.key}
                       onClick={() => setActiveReportSub(sub.key)}
                       className={cn(
-                        "w-full flex items-center gap-2 px-3 py-1.5 rounded-md text-xs transition-colors",
+                        "w-full flex items-center gap-2 py-1.5 rounded-md text-xs transition-all border-l-[2px]",
                         activeReportSub === sub.key
-                          ? "bg-sidebar-primary text-sidebar-primary-foreground"
-                          : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+                          ? "bg-sidebar-primary text-sidebar-primary-foreground border-primary/70 pl-2.5 pr-3"
+                          : "text-sidebar-foreground hover:bg-sidebar-accent/50 border-transparent px-3"
                       )}
                     >
                       <ChevronRight className={cn("w-3 h-3 flex-shrink-0 transition-transform", activeReportSub === sub.key && "rotate-90")} />
@@ -289,10 +291,10 @@ export default function AppSidebar({ currentPage, setCurrentPage, activeTable, s
                       key={sub.key}
                       onClick={() => setActiveConfigSub(sub.key)}
                       className={cn(
-                        "w-full flex items-center gap-2 px-3 py-1.5 rounded-md text-xs transition-colors",
+                        "w-full flex items-center gap-2 py-1.5 rounded-md text-xs transition-all border-l-[2px]",
                         activeConfigSub === sub.key
-                          ? "bg-sidebar-primary text-sidebar-primary-foreground"
-                          : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+                          ? "bg-sidebar-primary text-sidebar-primary-foreground border-primary/70 pl-2.5 pr-3"
+                          : "text-sidebar-foreground hover:bg-sidebar-accent/50 border-transparent px-3"
                       )}
                     >
                       <ChevronRight className={cn("w-3 h-3 flex-shrink-0 transition-transform", activeConfigSub === sub.key && "rotate-90")} />
@@ -310,16 +312,19 @@ export default function AppSidebar({ currentPage, setCurrentPage, activeTable, s
       <div className="border-t border-sidebar-border">
         <button
           onClick={signOut}
-          className="w-full px-4 py-2.5 text-xs text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors flex items-center gap-2"
+          className="w-full px-4 py-2.5 text-xs text-sidebar-foreground/70 hover:bg-red-500/10 hover:text-red-400 transition-all flex items-center gap-2 group"
         >
-          <LogOut className="w-3.5 h-3.5" />
-          {!collapsed && "ออกจากระบบ"}
+          <LogOut className="w-3.5 h-3.5 group-hover:text-red-400 transition-colors" />
+          {!collapsed && <span>ออกจากระบบ</span>}
         </button>
         <button
           onClick={() => setCollapsed(!collapsed)}
-          className="w-full px-4 py-2.5 border-t border-sidebar-border text-xs text-sidebar-foreground hover:bg-sidebar-accent/50 transition-colors"
+          className="w-full px-4 py-2.5 border-t border-sidebar-border text-xs text-sidebar-foreground/40 hover:text-sidebar-foreground hover:bg-sidebar-accent/50 transition-all flex items-center gap-2 justify-center"
         >
-          {collapsed ? "→" : "← ย่อเมนู"}
+          {collapsed
+            ? <ChevronRight className="w-3.5 h-3.5" />
+            : <><ChevronLeft className="w-3.5 h-3.5" /><span>ย่อเมนู</span></>
+          }
         </button>
       </div>
     </aside>
