@@ -23,6 +23,8 @@ import appLogo from "@/assets/dx-scm-logo.png";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 
+const SCROLL_CONTAINER_ID = "send-docs-scroll-container";
+
 // Floating custom vertical scrollbar: drag thumb or use mouse wheel to scroll the page
 function FloatingScrollSlider() {
   const trackRef = useRef<HTMLDivElement>(null);
@@ -30,25 +32,31 @@ function FloatingScrollSlider() {
   const [thumbPct, setThumbPct] = useState(10);
   const draggingRef = useRef<{ startY: number; startScroll: number } | null>(null);
 
+  const getEl = () => document.getElementById(SCROLL_CONTAINER_ID);
+
   useEffect(() => {
     const update = () => {
-      const doc = document.documentElement;
-      const max = (doc.scrollHeight - window.innerHeight) || 1;
-      setPct(Math.min(100, Math.max(0, (window.scrollY / max) * 100)));
-      setThumbPct(Math.min(100, Math.max(8, (window.innerHeight / doc.scrollHeight) * 100)));
+      const el = getEl();
+      if (!el) return;
+      const max = (el.scrollHeight - el.clientHeight) || 1;
+      setPct(Math.min(100, Math.max(0, (el.scrollTop / max) * 100)));
+      setThumbPct(Math.min(100, Math.max(8, (el.clientHeight / el.scrollHeight) * 100)));
     };
     update();
-    window.addEventListener("scroll", update, { passive: true });
+    const el = getEl();
+    el?.addEventListener("scroll", update, { passive: true });
     window.addEventListener("resize", update);
     return () => {
-      window.removeEventListener("scroll", update);
+      el?.removeEventListener("scroll", update);
       window.removeEventListener("resize", update);
     };
   }, []);
 
   const scrollToPct = (p: number) => {
-    const max = document.documentElement.scrollHeight - window.innerHeight;
-    window.scrollTo({ top: Math.max(0, Math.min(max, (p / 100) * max)), behavior: "auto" });
+    const el = getEl();
+    if (!el) return;
+    const max = el.scrollHeight - el.clientHeight;
+    el.scrollTop = Math.max(0, Math.min(max, (p / 100) * max));
   };
 
   const onTrackClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -61,14 +69,18 @@ function FloatingScrollSlider() {
   const onThumbMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    draggingRef.current = { startY: e.clientY, startScroll: window.scrollY };
+    const el = getEl();
+    if (!el) return;
+    draggingRef.current = { startY: e.clientY, startScroll: el.scrollTop };
     const onMove = (ev: MouseEvent) => {
       if (!draggingRef.current || !trackRef.current) return;
+      const el2 = getEl();
+      if (!el2) return;
       const rect = trackRef.current.getBoundingClientRect();
-      const max = document.documentElement.scrollHeight - window.innerHeight;
+      const max = el2.scrollHeight - el2.clientHeight;
       const dy = ev.clientY - draggingRef.current.startY;
       const ratio = dy / rect.height;
-      window.scrollTo({ top: draggingRef.current.startScroll + ratio * max, behavior: "auto" });
+      el2.scrollTop = Math.max(0, Math.min(max, draggingRef.current.startScroll + ratio * max));
     };
     const onUp = () => {
       draggingRef.current = null;
@@ -80,7 +92,8 @@ function FloatingScrollSlider() {
   };
 
   const onWheel = (e: React.WheelEvent) => {
-    window.scrollBy({ top: e.deltaY, behavior: "auto" });
+    const el = getEl();
+    if (el) el.scrollTop += e.deltaY;
   };
 
   const thumbTop = ((100 - thumbPct) * pct) / 100;
@@ -1537,12 +1550,13 @@ export default function SRRSendDocsPage() {
     XLSX.writeFile(wb, `${safe}.xlsx`);
   };
 
-  const scrollToTop = () => window.scrollTo({ top: 0, behavior: "smooth" });
-  const scrollToBottom = () => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
+  const getScrollEl = () => document.getElementById(SCROLL_CONTAINER_ID);
+  const scrollToTop = () => { const el = getScrollEl(); if (el) el.scrollTo({ top: 0, behavior: "smooth" }); };
+  const scrollToBottom = () => { const el = getScrollEl(); if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" }); };
 
 
   return (
-    <div className="p-6 space-y-4">
+    <div id={SCROLL_CONTAINER_ID} className="p-6 space-y-4 h-full overflow-y-auto">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">ส่งเอกสาร</h1>
       </div>
