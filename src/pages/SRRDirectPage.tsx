@@ -1045,6 +1045,12 @@ export default function SRRDirectPage() {
   const [page, setPage] = useState(d2sStateRef.current?.page || 0);
   const [pageSize, setPageSize] = useState(d2sStateRef.current?.pageSize || 30);
 
+  // Tab 2: Custom Safety Days per Rank (persisted)
+  const DEFAULT_SAFETY_BY_RANK = { A: 21, B: 14, C: 10, D: 7 };
+  const [safetyByRank, setSafetyByRank] = useState<Record<string, number>>(
+    d2sStateRef.current?.safetyByRank || DEFAULT_SAFETY_BY_RANK
+  );
+
   // Tab 2: Odoo-style chip search
   const [tableSearchChips, setTableSearchChips] = useState<SearchChip[]>([]);
   const TABLE_SEARCH_COLS = useMemo(
@@ -1159,6 +1165,7 @@ export default function SRRDirectPage() {
         showOnlyFinalGt0,
         tab2Mode,
         showData,
+        safetyByRank,
         assignMinValue,
         assignOcValue,
         // --- mode isolation persistence ---
@@ -2720,14 +2727,15 @@ export default function SRRDirectPage() {
   // Paged
   const filteredShowData = useMemo(() => {
     const base = showOnlyFinalGt0 ? showData.filter((r) => r.final_order_qty > 0) : showData;
-    // Ensure orig_on_order_store is always set — covers state restored from d2sStateRef
-    // and any other path that bypasses showFilteredData's patch.
-    const patched = base.map(r => ({
-      ...r,
-      orig_on_order_store: r.orig_on_order_store ?? r.on_order_store,
-    }));
+    const patched = base.map(r => {
+      const origOnOrderStore = r.orig_on_order_store ?? r.on_order_store;
+      const newSafety = safetyByRank[r.rank_sales?.toUpperCase()] ?? safetyByRank["D"] ?? 7;
+      const needsSafetyUpdate = r.safety !== newSafety;
+      if (!needsSafetyUpdate && r.orig_on_order_store != null) return r;
+      return recalcD2SRow({ ...r, orig_on_order_store: origOnOrderStore, safety: newSafety });
+    });
     return applyChipFilter(patched, tableSearchChips, TABLE_SEARCH_KEYS);
-  }, [showData, tableSearchChips, TABLE_SEARCH_KEYS, showOnlyFinalGt0]);
+  }, [showData, tableSearchChips, TABLE_SEARCH_KEYS, showOnlyFinalGt0, safetyByRank]);
   const pagedData = filteredShowData.slice(page * pageSize, (page + 1) * pageSize);
   const totalPages = Math.ceil(filteredShowData.length / pageSize);
 
@@ -4058,6 +4066,29 @@ export default function SRRDirectPage() {
                   <Button size="sm" variant="outline" onClick={restoreAllOnOrderStore} className="text-xs gap-1">
                     <RefreshCw className="w-3.5 h-3.5" /> Restore All ON ORDER
                   </Button>
+                  {/* Safety Days per Rank */}
+                  <div className="flex items-center gap-1 px-2 py-1 rounded-md bg-muted/40 border border-border">
+                    <span className="text-[10px] text-muted-foreground font-medium shrink-0">Safety:</span>
+                    {(["A", "B", "C", "D"] as const).map(rank => (
+                      <div key={rank} className="flex items-center gap-0.5">
+                        <span className="text-[10px] text-muted-foreground">{rank}=</span>
+                        <Input
+                          type="number"
+                          min={0}
+                          value={safetyByRank[rank] ?? DEFAULT_SAFETY_BY_RANK[rank]}
+                          onChange={e => {
+                            const v = parseInt(e.target.value);
+                            if (!isNaN(v) && v >= 0) setSafetyByRank(prev => ({ ...prev, [rank]: v }));
+                          }}
+                          className="h-6 w-10 text-xs px-1 py-0"
+                        />
+                      </div>
+                    ))}
+                    <Button size="sm" variant="ghost" className="h-6 text-[10px] px-1.5 shrink-0"
+                      onClick={() => setSafetyByRank(DEFAULT_SAFETY_BY_RANK)}>
+                      Reset
+                    </Button>
+                  </div>
                   {showImportSkipped.length > 0 && (
                     <ImportSkipBar
                       count={showImportSkipped.length}
