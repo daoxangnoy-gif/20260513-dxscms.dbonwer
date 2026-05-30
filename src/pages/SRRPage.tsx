@@ -1860,6 +1860,13 @@ function SRRDCItemPage() {
       console.warn("[SRR DC Show] pack/box overlay failed:", e);
     }
 
+    // Backward-compat: snapshots saved before orig_on_order was added will have undefined here.
+    // Fall back to current on_order so Restore can return to the DB-loaded value correctly.
+    merged = merged.map(r => ({
+      ...r,
+      orig_on_order: r.orig_on_order ?? r.on_order,
+    }));
+
     const _excluded = await (await import("@/lib/filterTemplates")).applyExcludeFilters(merged as any[], "srr_dc");
     setShowData(_excluded as any);
     setPage(0);
