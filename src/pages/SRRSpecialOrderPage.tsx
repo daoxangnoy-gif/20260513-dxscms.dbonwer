@@ -17,7 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import * as XLSX from "xlsx";
 import { ImportSkipBar, type SkippedItem } from "@/components/ImportSkipDialog";
-import { ListImportPO } from "@/pages/SRRPage";
+import { ListImportPO } from "@/components/ListImportPO";
 
 // =================================================================
 // Column Groups - drives Prepare/Read (only fetch what's selected)

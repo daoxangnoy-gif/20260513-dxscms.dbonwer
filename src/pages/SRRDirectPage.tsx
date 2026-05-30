@@ -72,7 +72,7 @@ import {
   mergeSnapshotBatches,
   type SnapshotBatch,
 } from "@/lib/snapshotService";
-import { ListImportPO, getLocalPOBatches, applyHighPrecisionFormat } from "@/pages/SRRPage";
+import { ListImportPO, getLocalPOBatches, applyHighPrecisionFormat } from "@/components/ListImportPO";
 import { DocsPopupDialog, formatDocNo, type DocRow } from "@/components/DocsPopupDialog";
 import { buildCost0Doc, appendCost0Docs, COST0_KEY_D2S, type Cost0Doc } from "@/lib/cost0Docs";
 import { listPublicViews, savePublicView, deletePublicView, type SrrPublicView } from "@/lib/srrPublicViews";
