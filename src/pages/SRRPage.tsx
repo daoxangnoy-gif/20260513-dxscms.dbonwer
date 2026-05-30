@@ -2892,39 +2892,6 @@ function SRRDCItemPage() {
                   </>
                 )}
 
-                {importMode !== "filter" && (
-                  <>
-                    <MultiSelect
-                      compact
-                      label="SPC"
-                      options={(() => {
-                        const set = new Set<string>();
-                        for (const v of vendorInfoList) if (v.spc_name) set.add(v.spc_name);
-                        return [...set].sort().map(s => ({ value: s, display: s }));
-                      })()}
-                      selected={selectedSpcForCal}
-                      onChange={(v) => { setSelectedSpcForCal(v); }}
-                    />
-                    <MultiSelect compact label="Type Store" options={TYPE_STORE_OPTIONS} selected={typeStoreCal} onChange={setTypeStoreCal} searchable={false} />
-                    <MultiSelect
-                      compact
-                      label="Store"
-                      options={[...new Set(storeTypes.map((s: any) => s.store_name || s.ship_to).filter(Boolean))].sort().map((s: string) => ({ value: s, display: s }))}
-                      selected={storeNameCal}
-                      onChange={setStoreNameCal}
-                    />
-                    {(typeStoreCal.length > 0 || storeNameCal.length > 0) && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 text-[11px] px-1.5"
-                        onClick={() => { setTypeStoreCal([]); setStoreNameCal([]); }}
-                      >
-                        <X className="w-3 h-3 mr-0.5" /> Clear
-                      </Button>
-                    )}
-                  </>
-                )}
               </div>
 
               {/* GO zone — green: prepare + run */}
