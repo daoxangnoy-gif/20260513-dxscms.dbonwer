@@ -2022,7 +2022,13 @@ function SRRDCItemPage() {
   // Apply chip search to showData
   const filteredShowData = useMemo(() => {
     const base = showOnlyFinalGt0 ? showData.filter(r => r.final_suggest_qty > 0) : showData;
-    return applyChipFilter(base, tableSearchChips, TABLE_SEARCH_KEYS);
+    // Ensure orig_on_order is always set — covers state restored from srrStateRef
+    // and any other path that bypasses showFilteredData's patch.
+    const patched = base.map(r => ({
+      ...r,
+      orig_on_order: r.orig_on_order ?? r.on_order,
+    }));
+    return applyChipFilter(patched, tableSearchChips, TABLE_SEARCH_KEYS);
   }, [showData, tableSearchChips, TABLE_SEARCH_KEYS, showOnlyFinalGt0]);
   const pagedData = filteredShowData.slice(page * pageSize, (page + 1) * pageSize);
   const totalPages = Math.ceil(filteredShowData.length / pageSize);

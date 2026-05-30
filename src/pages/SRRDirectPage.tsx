@@ -2720,7 +2720,13 @@ export default function SRRDirectPage() {
   // Paged
   const filteredShowData = useMemo(() => {
     const base = showOnlyFinalGt0 ? showData.filter((r) => r.final_order_qty > 0) : showData;
-    return applyChipFilter(base, tableSearchChips, TABLE_SEARCH_KEYS);
+    // Ensure orig_on_order_store is always set — covers state restored from d2sStateRef
+    // and any other path that bypasses showFilteredData's patch.
+    const patched = base.map(r => ({
+      ...r,
+      orig_on_order_store: r.orig_on_order_store ?? r.on_order_store,
+    }));
+    return applyChipFilter(patched, tableSearchChips, TABLE_SEARCH_KEYS);
   }, [showData, tableSearchChips, TABLE_SEARCH_KEYS, showOnlyFinalGt0]);
   const pagedData = filteredShowData.slice(page * pageSize, (page + 1) * pageSize);
   const totalPages = Math.ceil(filteredShowData.length / pageSize);
