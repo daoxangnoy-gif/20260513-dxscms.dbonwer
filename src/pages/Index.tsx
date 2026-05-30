@@ -15,6 +15,7 @@ import UserManagementPage from "@/pages/UserManagementPage";
 import ConfigColumnExportPage from "@/pages/ConfigColumnExportPage";
 import ConfigFilterPage from "@/pages/ConfigFilterPage";
 import { AllTableName, DATA_TABLES, SRR_SUB_MENUS, REPORT_SUB_MENUS } from "@/lib/tableConfig";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Loader2, BarChart3 } from "lucide-react";
 
 const PAGE_SLUG: Record<MainPage, string> = {
@@ -193,6 +194,7 @@ const Index = () => {
         setActiveConfigSub={setActiveConfigSub}
       />
       <main className="flex-1 overflow-hidden">
+        <ErrorBoundary>
         {currentPage === "data_control" && !tableAllowed && (
           <div className="flex h-full items-center justify-center text-muted-foreground">ไม่มีสิทธิ์เข้าถึงตารางนี้</div>
         )}
@@ -220,6 +222,7 @@ const Index = () => {
         {currentPage === "config" && activeConfigSub === "config_filter" && <ConfigFilterPage />}
         {currentPage === "log" && activeLogSub === "log_po_cost" && <LogPoCostPage />}
         {currentPage === "log" && activeLogSub !== "log_po_cost" && <LogPage />}
+        </ErrorBoundary>
       </main>
     </div>
   );
