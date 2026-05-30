@@ -67,7 +67,6 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
     let cancelled = false;
     (async () => {
       try {
-        const { supabase } = await import("@/integrations/supabase/client");
         const m = new Map<string, string>();
         let from = 0; const step = 1000;
         while (true) {
