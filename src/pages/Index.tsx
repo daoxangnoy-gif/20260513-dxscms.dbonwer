@@ -11,8 +11,10 @@ import ReportPage from "@/pages/ReportPage";
 import LogPage from "@/pages/LogPage";
 import LogPoCostPage from "@/pages/LogPoCostPage";
 import UserManagementPage from "@/pages/UserManagementPage";
-import { AllTableName, DATA_TABLES, SRR_SUB_MENUS } from "@/lib/tableConfig";
-import { Loader2 } from "lucide-react";
+import ConfigColumnExportPage from "@/pages/ConfigColumnExportPage";
+import ConfigFilterPage from "@/pages/ConfigFilterPage";
+import { AllTableName, DATA_TABLES, SRR_SUB_MENUS, REPORT_SUB_MENUS } from "@/lib/tableConfig";
+import { Loader2, BarChart3 } from "lucide-react";
 
 const PAGE_TO_MENU: Record<MainPage, string> = {
   data_control: "data_control",
@@ -20,6 +22,7 @@ const PAGE_TO_MENU: Record<MainPage, string> = {
   user_control: "admin",
   report: "report",
   log: "log",
+  config: "config",
 };
 
 const Index = () => {
@@ -27,7 +30,19 @@ const Index = () => {
   const [currentPage, setCurrentPage] = useState<MainPage>("data_control");
   const [activeTable, setActiveTable] = useState<AllTableName>("data_master");
   const [activeSrrSub, setActiveSrrSub] = useState("dc_item");
+
+  // Deep-link: ?send_docs_dest=<id> → jump to SRR > Send Docs (used by "ถึงปลายทาง" new tab)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("send_docs_dest")) {
+      setCurrentPage("srr");
+      setActiveSrrSub("srr_send_docs");
+    }
+  }, []);
+
   const [activeLogSub, setActiveLogSub] = useState("log_po_cost");
+  const [activeReportSub, setActiveReportSub] = useState("report_po");
+  const [activeConfigSub, setActiveConfigSub] = useState("config_column_export");
 
   const canSeePage = (p: MainPage) => isAdmin || canViewMenu(PAGE_TO_MENU[p]);
 
@@ -59,6 +74,16 @@ const Index = () => {
     const allowed = SRR_SUB_MENUS.filter(s => isAdmin || canViewMenu(s.key));
     if (allowed.length && !allowed.find(s => s.key === activeSrrSub)) {
       setActiveSrrSub(allowed[0].key);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPage, userPermissions, isAdmin]);
+
+  // Pick first allowed Report sub
+  useEffect(() => {
+    if (currentPage !== "report") return;
+    const allowed = REPORT_SUB_MENUS.filter(s => isAdmin || canViewMenu(s.menuCode));
+    if (allowed.length && !allowed.find(s => s.key === activeReportSub)) {
+      setActiveReportSub(allowed[0].key);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPage, userPermissions, isAdmin]);
@@ -109,6 +134,10 @@ const Index = () => {
         setActiveSrrSub={setActiveSrrSub}
         activeLogSub={activeLogSub}
         setActiveLogSub={setActiveLogSub}
+        activeReportSub={activeReportSub}
+        setActiveReportSub={setActiveReportSub}
+        activeConfigSub={activeConfigSub}
+        setActiveConfigSub={setActiveConfigSub}
       />
       <main className="flex-1 overflow-hidden">
         {currentPage === "data_control" && !tableAllowed && (
@@ -119,7 +148,23 @@ const Index = () => {
         {currentPage === "data_control" && tableAllowed && activeTable !== "range_store" && activeTable !== "minmax" && <DataControlPage activeTable={activeTable} />}
         {currentPage === "srr" && <SRRPage activeSub={activeSrrSub} />}
         {currentPage === "user_control" && <UserManagementPage />}
-        {currentPage === "report" && <ReportPage />}
+        {currentPage === "report" && activeReportSub === "report_po" && <ReportPage />}
+        {currentPage === "report" && activeReportSub === "report_oos" && (
+          <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground">
+            <BarChart3 className="w-12 h-12 text-muted-foreground/40" />
+            <div className="text-lg font-medium">Report OOS</div>
+            <div className="text-sm">Coming soon</div>
+          </div>
+        )}
+        {currentPage === "report" && activeReportSub === "report_doh" && (
+          <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground">
+            <BarChart3 className="w-12 h-12 text-muted-foreground/40" />
+            <div className="text-lg font-medium">Report DOH</div>
+            <div className="text-sm">Coming soon</div>
+          </div>
+        )}
+        {currentPage === "config" && activeConfigSub === "config_column_export" && <ConfigColumnExportPage />}
+        {currentPage === "config" && activeConfigSub === "config_filter" && <ConfigFilterPage />}
         {currentPage === "log" && activeLogSub === "log_po_cost" && <LogPoCostPage />}
         {currentPage === "log" && activeLogSub !== "log_po_cost" && <LogPage />}
       </main>

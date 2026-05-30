@@ -13,21 +13,38 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [department, setDepartment] = useState("");
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSignUp) {
+      if (!fullName.trim() || !phone.trim() || !department.trim() || !email.trim() || !password.trim()) {
+        toast({ title: "กรุณากรอกข้อมูลให้ครบทุกช่อง", variant: "destructive" });
+        return;
+      }
+    }
     setLoading(true);
     try {
       if (isSignUp) {
-        const { error } = await supabase.auth.signUp({
+        const { error, data } = await supabase.auth.signUp({
           email,
           password,
-          options: { data: { full_name: fullName } },
+          options: { data: { full_name: fullName.trim(), phone: phone.trim(), department: department.trim() } },
         });
         if (error) throw error;
-        toast({ title: "สมัครสมาชิกสำเร็จ", description: "เข้าสู่ระบบอัตโนมัติ" });
+        // Best-effort: update profile with phone/department in case trigger doesn't pick them up
+        const uid = data.user?.id;
+        if (uid) {
+          await supabase.from("profiles").update({
+            full_name: fullName.trim(),
+            phone: phone.trim(),
+            department: department.trim(),
+          }).eq("user_id", uid);
+        }
+        toast({ title: "สมัครสมาชิกสำเร็จ", description: "รอ Admin อนุมัติเข้าใช้งาน" });
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
@@ -54,10 +71,20 @@ export default function LoginPage() {
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             {isSignUp && (
-              <div className="space-y-2">
-                <Label htmlFor="fullName">ชื่อ-นามสกุล</Label>
-                <Input id="fullName" value={fullName} onChange={e => setFullName(e.target.value)} placeholder="ชื่อ นามสกุล" required />
-              </div>
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="fullName">ชื่อ-นามสกุล <span className="text-red-500">*</span></Label>
+                  <Input id="fullName" value={fullName} onChange={e => setFullName(e.target.value)} placeholder="ชื่อ นามสกุล" required />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="phone">เบอร์โทร <span className="text-red-500">*</span></Label>
+                  <Input id="phone" value={phone} onChange={e => setPhone(e.target.value)} placeholder="020 xxx xxxx" required />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="department">แผนก <span className="text-red-500">*</span></Label>
+                  <Input id="department" value={department} onChange={e => setDepartment(e.target.value)} placeholder="เช่น Buyer, SPC, Operations" required />
+                </div>
+              </>
             )}
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>

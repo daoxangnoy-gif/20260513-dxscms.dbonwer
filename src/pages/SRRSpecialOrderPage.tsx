@@ -891,7 +891,8 @@ export default function SRRSpecialOrderPage() {
         );
       }
 
-      setRows(built);
+      const _excluded = await (await import("@/lib/filterTemplates")).applyExcludeFilters(built as any[], "srr_special");
+      setRows(_excluded as any);
       setReadProgress(100);
       const qtyMsg = importedQty.size > 0 ? ` · ใส่ Qty ${built.filter(b => b.quantity > 0).length} แถว` : "";
       toast({ title: `Read สำเร็จ`, description: `${built.length} รายการ · ${storeNames.length} stores${qtyMsg}` });

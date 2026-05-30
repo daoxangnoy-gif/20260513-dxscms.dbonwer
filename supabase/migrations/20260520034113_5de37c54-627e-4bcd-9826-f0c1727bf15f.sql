@@ -1,0 +1,1 @@
+ALTER TABLE public.vendor_master ADD CONSTRAINT vendor_master_vendor_code_key UNIQUE (vendor_code);

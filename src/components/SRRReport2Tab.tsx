@@ -156,18 +156,9 @@ export function SRRReport2Tab({ mode }: Props) {
   const [expandedType, setExpandedType] = useState<Set<string>>(new Set());
   const [expandedStore, setExpandedStore] = useState<Set<string>>(new Set());
 
-  const load = async (autoBackfill = true) => {
+  const load = async (_autoBackfill = true) => {
     setLoading(true);
     try {
-      // 0) Backfill any localStorage POs not in DB yet
-      if (autoBackfill && user?.id) {
-        const key = mode === "dc" ? "srr_saved_pos" : "srr_saved_pos_d2s";
-        const filled = await backfillLocalPOs(key, user.id, "filter");
-        if (filled > 0) {
-          toast({ title: "ซิงค์ PO จาก local เรียบร้อย", description: `${filled} เอกสาร` });
-        }
-      }
-
       const fromStr = format(from, "yyyy-MM-dd");
       const toStr = format(to, "yyyy-MM-dd");
 
@@ -208,14 +199,45 @@ export function SRRReport2Tab({ mode }: Props) {
         setStores([]);
       }
 
-      // 3) Load saved POs in date range
-      const { data: posRaw, error: poErr } = await supabase
-        .from("saved_po_documents")
-        .select("date_key, spc_name, vendor_code, vendor_display, po_data")
-        .gte("date_key", fromStr)
-        .lte("date_key", toStr);
-      if (poErr) throw poErr;
-      setPoDocs((posRaw || []) as PoDoc[]);
+      // 3) Load SNAPSHOT docs in date range (Act source)
+      //    DC      → srr_snapshots
+      //    Direct  → srr_d2s_snapshots (store_name at doc level)
+      const snapTable = mode === "dc" ? "srr_snapshots" : "srr_d2s_snapshots";
+      const selectCols = mode === "dc"
+        ? "date_key, spc_name, vendor_code, vendor_display, data"
+        : "date_key, spc_name, vendor_code, vendor_display, data, store_name";
+
+      const snapRows: any[] = [];
+      let sp = 0;
+      while (true) {
+        const { data, error } = await (supabase as any)
+          .from(snapTable)
+          .select(selectCols)
+          .gte("date_key", fromStr)
+          .lte("date_key", toStr)
+          .range(sp, sp + PAGE - 1);
+        if (error) throw error;
+        const batch = (data || []) as any[];
+        snapRows.push(...batch);
+        if (batch.length < PAGE) break;
+        sp += PAGE;
+      }
+
+      // Map snapshots → PoDoc shape (po_data = data; inject store_name for direct)
+      const mapped: PoDoc[] = snapRows.map((r: any) => {
+        const rawData: any[] = Array.isArray(r.data) ? r.data : [];
+        const po_data = (mode === "direct" && r.store_name)
+          ? rawData.map((row: any) => ({ ...row, store_name: row.store_name || r.store_name }))
+          : rawData;
+        return {
+          date_key: r.date_key,
+          spc_name: r.spc_name,
+          vendor_code: r.vendor_code,
+          vendor_display: r.vendor_display,
+          po_data,
+        };
+      });
+      setPoDocs(mapped);
     } catch (e: any) {
       toast({ title: "Load failed", description: e.message, variant: "destructive" });
     } finally {
@@ -305,7 +327,7 @@ export function SRRReport2Tab({ mode }: Props) {
       const spc = doc.spc_name || lookup?.spc || "";
       if (!od || !spc) continue;
       const sku = Array.isArray(doc.po_data)
-        ? doc.po_data.filter((r: any) => Number(r["Products to Purchase/Quantity"] || 0) > 0).length
+        ? doc.po_data.filter((r: any) => Number(r.final_suggest_qty ?? r.final_order_qty ?? r["Products to Purchase/Quantity"] ?? 0) > 0).length
         : 0;
       let entry = actByVendor.get(vc);
       if (!entry) {
@@ -434,7 +456,7 @@ export function SRRReport2Tab({ mode }: Props) {
           const st = String(r.store_name || r["Store Name"] || r["Delivery To"] || r["Store"] || "").trim();
           if (!st) continue;
           if (!storeAgg.has(st)) storeAgg.set(st, { sku: 0 });
-          if (Number(r["Products to Purchase/Quantity"] || 0) > 0) storeAgg.get(st)!.sku += 1;
+          if (Number(r.final_order_qty ?? r.final_suggest_qty ?? r["Products to Purchase/Quantity"] ?? 0) > 0) storeAgg.get(st)!.sku += 1;
         }
       }
       for (const [st, agg] of storeAgg) {
@@ -671,8 +693,8 @@ export function SRRReport2Tab({ mode }: Props) {
 
         <div className="ml-auto text-xs text-muted-foreground">
           {mode === "dc"
-            ? "Plan = vendors in Vendor Master · Act = saved POs · Group: SPC → Vendor"
-            : "Plan = vendors × stores · Act = saved POs · Group: SPC → Type → Store → Vendor"}
+            ? "Plan = vendors in Vendor Master · Act = snapshot docs · Group: SPC → Vendor"
+            : "Plan = vendors × stores · Act = snapshot docs · Group: SPC → Type → Store → Vendor"}
         </div>
       </Card>
 

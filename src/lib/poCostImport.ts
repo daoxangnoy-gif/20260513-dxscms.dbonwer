@@ -42,6 +42,22 @@ export interface PoCostMarginWarning {
   poCostUnitLak?: number | null;
 }
 
+export interface PoCostVendorMismatch {
+  resolved: PoCostResolved;
+  skip: PoCostSkipRow;
+  importedVendor: string;
+  masterVendors: string[]; // distinct vendor_codes from data_master for this SKU
+  productName: string;
+}
+
+export interface PoCostMoqPackingWarning {
+  resolved: PoCostResolved;
+  skip: PoCostSkipRow;
+  productName: string;
+  importedMoq: number;
+  packingSizes: number[]; // distinct packing_size_qty > 1 for this SKU in data_master
+}
+
 export interface PoCostFxOptions {
   rateTHB?: number | null;
   rateUSD?: number | null;
@@ -51,6 +67,8 @@ export interface PoCostImportResult {
   toUpsert: PoCostResolved[];
   skipped: PoCostSkipRow[];
   marginWarnings: PoCostMarginWarning[];
+  vendorMismatches: PoCostVendorMismatch[];
+  moqPackingWarnings: PoCostMoqPackingWarning[];
 }
 
 const NORMALIZE = (s: any) => String(s ?? "").trim();
@@ -103,7 +121,7 @@ export async function resolvePoCostImport(
   onProgress?: (cur: number, total: number, phase: string) => void,
   fxOptions?: PoCostFxOptions,
 ): Promise<PoCostImportResult> {
-  if (rows.length === 0) return { toUpsert: [], skipped: [], marginWarnings: [] };
+  if (rows.length === 0) return { toUpsert: [], skipped: [], marginWarnings: [], vendorMismatches: [], moqPackingWarnings: [] };
 
   // 1) Collect all unique keys + variants (handle Excel leading-zero loss)
   const keysOriginal = Array.from(new Set(rows.map(r => r.rawKey)));
@@ -293,6 +311,8 @@ export async function resolvePoCostImport(
   const toUpsert: PoCostResolved[] = [];
   const skipped: PoCostSkipRow[] = [];
   const marginWarnings: PoCostMarginWarning[] = [];
+  const vendorMismatches: PoCostVendorMismatch[] = [];
+  const moqPackingWarnings: PoCostMoqPackingWarning[] = [];
 
   // Helper: lookup ALL master candidates for a key (try original + zero-padded variants)
   const lookupCandidates = (rawKey: string): MasterRow[] => {
@@ -412,21 +432,16 @@ export async function resolvePoCostImport(
     }
 
     // Margin check (per side, 2KM and Jmart computed independently):
-    // PO Cost in vendor's currency must be converted to LAK before comparing with prices (LAK).
-    // For each side: prefer the MOQ-matching row's price (compare vs full po_cost).
-    // If that row's price for this side is null/0, fall back to unit row price (compare vs po_cost_unit).
+    // Always compare unit-level: PO Cost Unit (vendor ccy → LAK) vs price where packing_size_qty = 1.
+    // MOQ is NOT considered here; only the unit row's price is used.
     const poCostUnit = r.poCost / r.moq;
     const vendorCurrency = vendorCurrencyMap.get(vendor) || "";
     const poCostLak = toLak(r.poCost, vendorCurrency);
     const poCostUnitLak = toLak(poCostUnit, vendorCurrency);
-    const moqRow = candidates.find(c => Number(c.packing_size_qty) === Number(r.moq));
-    const unitRow = candidates.find(c => Number(c.packing_size_qty) === 1) || m;
+    const unitRow = candidates.find(c => Number(c.packing_size_qty) === 1);
     const validPrice = (p: any) => p !== null && p !== undefined && Number.isFinite(Number(p)) && Number(p) > 0;
 
     const pickFor = (field: "list_price" | "jmart_price") => {
-      if (moqRow && validPrice((moqRow as any)[field]) && poCostLak !== null) {
-        return { price: Number((moqRow as any)[field]) as number, cost: poCostLak };
-      }
       if (unitRow && validPrice((unitRow as any)[field]) && poCostUnitLak !== null) {
         return { price: Number((unitRow as any)[field]) as number, cost: poCostUnitLak };
       }
@@ -457,6 +472,25 @@ export async function resolvePoCostImport(
     };
     toUpsert.push(resolved);
 
+    // Vendor mismatch check: imported vendor ≠ any vendor_code in data_master for this SKU.
+    // Row is still upserted with imported vendor, but flagged for user confirmation.
+    const masterVendors = Array.from(new Set(
+      candidates.map(c => (c.vendor_code || "").split("-")[0].trim()).filter(Boolean)
+    ));
+    if (r.rawVendor && masterVendors.length > 0 && !masterVendors.includes(vendor)) {
+      vendorMismatches.push({
+        resolved,
+        importedVendor: vendor,
+        masterVendors,
+        productName,
+        skip: {
+          key: r.rawKey, productName, poCost: r.poCost, moq: r.moq, vendor,
+          reason: `Vendor Code (${vendor}) ไม่ตรงกับ Data Master (${masterVendors.join(", ")})`,
+          suggestUnit: m.packing_size_qty,
+        },
+      });
+    }
+
     if (reasons.length > 0) {
       const fxRate = vendorCurrency === "THB" ? rThb : vendorCurrency === "USD" ? rUsd : (vendorCurrency === "LAK" || vendorCurrency === "" ? 1 : null);
       marginWarnings.push({
@@ -476,9 +510,31 @@ export async function resolvePoCostImport(
         poCostUnitLak,
       });
     }
+
+    // MOQ=1 but data_master has packings >1 → warn user to confirm
+    if (Number(r.moq) === 1) {
+      const bigPacks = Array.from(new Set(
+        candidates
+          .map(c => Number(c.packing_size_qty))
+          .filter(v => Number.isFinite(v) && v > 1)
+      )).sort((a, b) => a - b);
+      if (bigPacks.length > 0) {
+        moqPackingWarnings.push({
+          resolved,
+          productName,
+          importedMoq: 1,
+          packingSizes: bigPacks,
+          skip: {
+            key: r.rawKey, productName, poCost: r.poCost, moq: r.moq, vendor,
+            reason: `นำเข้า MOQ=1 แต่ Data Master มี Packing Size Qty > 1 (${bigPacks.join(", ")})`,
+            suggestUnit: bigPacks[0],
+          },
+        });
+      }
+    }
   }
 
-  return { toUpsert, skipped, marginWarnings };
+  return { toUpsert, skipped, marginWarnings, vendorMismatches, moqPackingWarnings };
 }
 
 // Split resolved rows into existing (will be updated) and missing (not found by item_id+vendor)

@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { Loader2, Upload, RefreshCw, Search, Save, Download, FileText, Eye, Trash2, Columns3, Store, Eraser, ChevronLeft, ChevronRight, Building2, X, Pencil, Filter, Play, Database, FileSpreadsheet } from "lucide-react";
 import * as XLSX from "xlsx";
 import { MultiSelectFilter } from "@/components/MultiSelectFilter";
+import { useAuth } from "@/hooks/useAuth";
 
 type SearchFilter = { column: string; value: string };
 
@@ -207,6 +208,9 @@ async function rpcAllParallel(
 }
 
 export default function RangeStorePage() {
+  const { canDo } = useAuth();
+  const canImportRange = canDo("range_store", "import");
+  const canDeleteRange = canDo("range_store", "delete");
   const [forceTick, force] = useState(0);
   const rerender = () => force(x => x + 1);
 
@@ -232,6 +236,26 @@ export default function RangeStorePage() {
   const [prepAvgStores, setPrepAvgStores] = useState<string[]>(cache.prepareFilter.avgStores);
   const [prepRangeStores, setPrepRangeStores] = useState<string[]>(cache.prepareFilter.rangeStores);
   const [prepTypeStores, setPrepTypeStores] = useState<string[]>(cache.prepareFilter.typeStores);
+  // Pre-Prepare row filter (Hierarchy + Attributes + SKU) — บังคับเลือก ≥1 อย่างก่อน Read
+  const [prepDivGroups, setPrepDivGroups] = useState<string[]>([]);
+  const [prepDivisions, setPrepDivisions] = useState<string[]>([]);
+  const [prepDepartments, setPrepDepartments] = useState<string[]>([]);
+  const [prepSubDepts, setPrepSubDepts] = useState<string[]>([]);
+  const [prepClasses, setPrepClasses] = useState<string[]>([]);
+  const [prepItemTypes, setPrepItemTypes] = useState<string[]>([]);
+  const [prepBuyings, setPrepBuyings] = useState<string[]>([]);
+  const [prepOwners, setPrepOwners] = useState<string[]>([]);
+  const [prepSkuText, setPrepSkuText] = useState<string>("");
+  const [filterLists, setFilterLists] = useState<{
+    division_groups: string[]; divisions: string[]; departments: string[];
+    sub_departments: string[]; classes: string[]; item_types: string[];
+    buying_statuses: string[]; owners: string[];
+  }>({ division_groups: [], divisions: [], departments: [], sub_departments: [], classes: [], item_types: [], buying_statuses: [], owners: [] });
+  // Post-import dialog (Save to Doc / Download Skip)
+  const [importDoneDialog, setImportDoneDialog] = useState<null | {
+    kind: "range" | "super" | "mart"; saved: number; skipped: number; skus: number; stores: number; fileName: string;
+    yPerStore?: Array<{ store: string; oldY: number; addedY: number; removedY: number; totalY: number }>;
+  }>(null);
 
   const [loadingPhase, setLoadingPhase] = useState<string | null>(null);
   const [loadProgress, setLoadProgress] = useState<{ loaded: number; total: number | null } | null>(null);
@@ -299,12 +323,33 @@ export default function RangeStorePage() {
   useEffect(() => { cache.prepareFilter.rangeStores = prepRangeStores; }, [prepRangeStores]);
   useEffect(() => { cache.prepareFilter.typeStores = prepTypeStores; }, [prepTypeStores]);
 
-  // No auto-load — user clicks Prepare. Pre-load store list for filter UI.
+  // No auto-load — user clicks Prepare. Pre-load store list + department list for filter UI.
   useEffect(() => {
     if (cache.loaded.master) rerender();
     loadStoreList();
-    loadSnapshots();
+    // loadSnapshots removed — Save Document feature deleted
+    loadFilterLists();
   }, []);
+
+  async function loadFilterLists() {
+    try {
+      const { data, error } = await supabase.rpc("get_range_store_filter_lists" as any);
+      if (error) throw error;
+      const d = (data || {}) as any;
+      setFilterLists({
+        division_groups: d.division_groups || [],
+        divisions: d.divisions || [],
+        departments: d.departments || [],
+        sub_departments: d.sub_departments || [],
+        classes: d.classes || [],
+        item_types: d.item_types || [],
+        buying_statuses: d.buying_statuses || [],
+        owners: d.owners || [],
+      });
+    } catch (err: any) {
+      console.warn("[loadFilterLists]", err);
+    }
+  }
 
   // ดึง list store มาให้ผู้ใช้เลือกก่อน Prepare (เร็ว, ดึงครั้งเดียว)
   async function loadStoreList() {
@@ -363,10 +408,24 @@ export default function RangeStorePage() {
 
   async function prepareData() {
     const t0 = performance.now();
-    const hasFilter = prepAvgStores.length > 0 || prepRangeStores.length > 0 || prepTypeStores.length > 0;
+    // Parse SKU text → array
+    const prepSkus = prepSkuText
+      .split(/[\s,;\n\r]+/)
+      .map(s => s.trim())
+      .filter(Boolean);
+    const hasStoreFilter = prepAvgStores.length > 0 || prepRangeStores.length > 0 || prepTypeStores.length > 0;
+    const hasRowFilter =
+      prepDivGroups.length > 0 || prepDivisions.length > 0 || prepDepartments.length > 0 ||
+      prepSubDepts.length > 0 || prepClasses.length > 0 || prepItemTypes.length > 0 ||
+      prepBuyings.length > 0 || prepOwners.length > 0 || prepSkus.length > 0;
+
+    // ❗ บังคับเลือก ≥1 filter ก่อน Read (Tab Data ไม่ดึงทุกอย่างอีกแล้ว)
+    if (!hasStoreFilter && !hasRowFilter) {
+      toast.error("เลือก Filter ก่อน Read (Type/Store หรือ Hierarchy/Attribute หรือ SKU)");
+      return;
+    }
 
     // Detect filter change: ถ้า filter เปลี่ยนจากครั้งล่าสุด → ต้อง reload จาก scratch (ไม่ merge)
-    // เพื่อให้ Pre-Prepare Filter ทำงานจริง — ไม่อย่างนั้น cache เก่าจะเหลืออยู่ ทำให้เห็น store/SKU ที่ filter ออกไปแล้ว
     const eqArr = (a: string[], b: string[]) =>
       a.length === b.length && a.every((v, i) => v === b[i]);
     const lpf = cache.lastPreparedFilter || { avgStores: [], rangeStores: [], typeStores: [] };
@@ -378,33 +437,35 @@ export default function RangeStorePage() {
     const isIncremental = cache.loaded.master && cache.master.length > 0 && !filterChanged;
     const ctrl = new AbortController();
     prepareAbortRef.current = ctrl;
-    setLoadingPhase(hasFilter ? "mv-filtered" : "mv-all");
-    setLoadProgress({ loaded: 0, total: hasFilter ? null : 41567 });
+    setLoadingPhase("read-view");
+    setLoadProgress({ loaded: 0, total: null });
     try {
       const onProgress = (loaded: number, totalEst: number | null) => {
         setLoadProgress(prev => ({
           loaded,
-          // ถ้าไม่มี filter ใช้ค่าประมาณคงที่ (~41.5K), filter ใช้ loaded เป็น total ชั่วคราว
           total: prev?.total ?? totalEst ?? null,
         }));
       };
 
-      let rows: any[];
-      if (hasFilter) {
-        const params = {
-          p_avg_stores: prepAvgStores.length > 0 ? prepAvgStores : null,
-          p_range_stores: prepRangeStores.length > 0 ? prepRangeStores : null,
-          p_type_stores: prepTypeStores.length > 0 ? prepTypeStores : null,
-        };
-        rows = await rpcAllParallel("get_mv_range_store_filtered", params, {
-          batch: 1000, concurrency: 6, signal: ctrl.signal, onProgress,
-        });
-      } else {
-        rows = await rpcAllParallel("get_mv_range_store", null, {
-          batch: 1000, concurrency: 6, signal: ctrl.signal, onProgress,
-        });
-      }
+      const params = {
+        p_division_groups: prepDivGroups.length > 0 ? prepDivGroups : null,
+        p_divisions: prepDivisions.length > 0 ? prepDivisions : null,
+        p_departments: prepDepartments.length > 0 ? prepDepartments : null,
+        p_sub_departments: prepSubDepts.length > 0 ? prepSubDepts : null,
+        p_classes: prepClasses.length > 0 ? prepClasses : null,
+        p_item_types: prepItemTypes.length > 0 ? prepItemTypes : null,
+        p_buying_statuses: prepBuyings.length > 0 ? prepBuyings : null,
+        p_owners: prepOwners.length > 0 ? prepOwners : null,
+        p_skus: prepSkus.length > 0 ? prepSkus : null,
+        p_avg_stores: prepAvgStores.length > 0 ? prepAvgStores : null,
+        p_range_stores: prepRangeStores.length > 0 ? prepRangeStores : null,
+        p_type_stores: prepTypeStores.length > 0 ? prepTypeStores : null,
+      };
+      const rawRows: any[] = await rpcAllParallel("read_range_store_view", params, {
+        batch: 1000, concurrency: 6, signal: ctrl.signal, onProgress,
+      });
       if (ctrl.signal.aborted) throw new Error("ABORTED");
+      const rows: any[] = await (await import("@/lib/filterTemplates")).applyExcludeFilters(rawRows, "range_store");
 
       // Helper: merge ใหม่เข้ากับ existing (ใช้ sku_code เป็น key)
       const mergeBySku = (existing: any[], incoming: any[], merger?: (old: any, neu: any) => any): any[] => {
@@ -474,7 +535,7 @@ export default function RangeStorePage() {
       cache.loaded.perStore = true;
       // สร้าง stores list — incremental: union กับของเดิม
       const allowedStores = new Set<string>(isIncremental ? cache.stores.map(s => s.name) : []);
-      if (hasFilter) {
+      if (hasStoreFilter) {
         prepAvgStores.forEach(s => allowedStores.add(s));
         prepRangeStores.forEach(s => allowedStores.add(s));
         if (prepTypeStores.length > 0) {
@@ -490,35 +551,6 @@ export default function RangeStorePage() {
       cache.stores.sort((a, b) => a.name.localeCompare(b.name));
       cache.loaded.stores = true;
 
-      // Overlay จาก Doc ล่าสุด: ถ้า DB (range_store) ไม่มีค่า ให้ใช้จาก Doc แทน
-      // (ผู้ใช้ต้องการเห็น Y/Min/Avg จาก Save ล่าสุด ตอนกด Prepare; การลบใน UI ไม่กระทบ Doc จนกว่าจะ Save ใหม่)
-      let overlayInfo = "";
-      try {
-        const { data: latestSnap } = await supabase
-          .from("range_store_snapshots")
-          .select("data")
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        const snapRows: any[] = (latestSnap?.data as any[]) || [];
-        if (snapRows.length > 0) {
-          const snapMap = new Map<string, any>(snapRows.map((r: any) => [r.sku_code, r]));
-          let overlaid = 0;
-          cache.perStore = cache.perStore.map((r: any) => {
-            const snap = snapMap.get(r.sku_code);
-            if (!snap) return r;
-            // DB เป็นแหล่งจริง — Snapshot เติมเฉพาะ store ที่ DB ไม่มี
-            const mergedRange = { ...(snap.range_data || {}), ...(r.range_data || {}) };
-            const mergedAvg = { ...(snap.avg_per_store || {}), ...(r.avg_per_store || {}) };
-            overlaid++;
-            return { ...r, range_data: mergedRange, avg_per_store: mergedAvg };
-          });
-          overlayInfo = ` · overlay ${overlaid.toLocaleString()} SKU จาก Doc ล่าสุด`;
-        }
-      } catch (e) {
-        console.warn("[Prepare] overlay snapshot failed", e);
-      }
-
       rebuildRangeMap();
       // บันทึก snapshot ของ filter ที่เพิ่ง prepare → ใช้เทียบ "dirty" กับ filter ปัจจุบัน
       cache.lastPreparedFilter = {
@@ -530,10 +562,10 @@ export default function RangeStorePage() {
       setLoadProgress(null);
       rerender();
       const ms = Math.round(performance.now() - t0);
-      const filterTag = hasFilter ? `· filtered (${cache.stores.length} stores)` : "· ALL stores";
+      const filterTag = hasStoreFilter ? `· filtered (${cache.stores.length} stores)` : "· ALL stores";
       const mode = isIncremental ? "merged" : "loaded";
-      toast.success(`Prepare ${mode} ${cache.master.length.toLocaleString()} SKU ${filterTag}${overlayInfo} · ${ms}ms`);
-      console.log(`[RangeStore] prepare ${mode}: +${rows.length} rows, total ${cache.master.length} · ${ms}ms · hasFilter=${hasFilter}${overlayInfo}`);
+      toast.success(`Prepare ${mode} ${cache.master.length.toLocaleString()} SKU ${filterTag} · ${ms}ms`);
+      console.log(`[RangeStore] prepare ${mode}: +${rows.length} rows, total ${cache.master.length} · ${ms}ms · hasStoreFilter=${hasStoreFilter}`);
     } catch (err: any) {
       setLoadingPhase(null);
       setLoadProgress(null);
@@ -549,21 +581,21 @@ export default function RangeStorePage() {
   }
 
   async function refreshMV() {
-    if (!confirm("Refresh Materialized View? (ใช้หลัง import ข้อมูลใหม่ ใช้เวลา ~10-30 วิ)")) return;
-    setLoadingPhase("refresh-mv");
+    if (!confirm("Sync Range Store View ใหม่ทั้งหมด? (ใช้หลัง import master/avg_sale ใหม่ ใช้เวลา ~5-10 วิ)")) return;
+    setLoadingPhase("sync-view");
     const t0 = performance.now();
     try {
-      const { data, error } = await supabase.rpc("refresh_mv_range_store" as any);
+      const { data, error } = await supabase.rpc("sync_range_store_view" as any);
       if (error) throw error;
-      // Clear cache เพื่อให้ Prepare รอบหน้าดึงใหม่
+      const result = Array.isArray(data) && data[0] ? `${data[0].rows_synced?.toLocaleString()} rows in ${data[0].ms}ms` : String(data);
       Object.keys(cache.loaded).forEach(k => { if (k !== "storeList") (cache.loaded as any)[k] = false; });
       cache.ui.rangeMap.clear();
       setLoadingPhase(null);
-      toast.success(`Refresh MV: ${data} · ${Math.round(performance.now() - t0)}ms — กด Prepare เพื่อโหลดใหม่`);
+      toast.success(`✅ Sync View: ${result} · ${Math.round(performance.now() - t0)}ms — กด Read เพื่อโหลดใหม่`);
       rerender();
     } catch (err: any) {
       setLoadingPhase(null);
-      toast.error(`Refresh error: ${err.message}`);
+      toast.error(`Sync error: ${err.message}`);
     }
   }
 
@@ -843,14 +875,14 @@ export default function RangeStorePage() {
 
   const visibleCols = useMemo(() => {
     const cols: string[] = [];
-    selectedGroups.forEach(g => { if (g !== "per_store") cols.push(...COL_GROUPS[g].fields); });
+    selectedGroups.forEach(g => { if (g !== "per_store" && g !== "unit_pick") cols.push(...COL_GROUPS[g].fields); });
     return cols.filter(c => !hiddenFields.includes(c));
   }, [selectedGroups, hiddenFields]);
 
   // All available fields across selected groups (for "Filter Columns" multi-select)
   const allAvailableFields = useMemo(() => {
     const fields: string[] = [];
-    selectedGroups.forEach(g => { if (g !== "per_store") fields.push(...COL_GROUPS[g].fields); });
+    selectedGroups.forEach(g => { if (g !== "per_store" && g !== "unit_pick") fields.push(...COL_GROUPS[g].fields); });
     return fields;
   }, [selectedGroups]);
 
@@ -1149,214 +1181,9 @@ export default function RangeStorePage() {
     toast.success(`${action} สำเร็จ · ${affectedRows.toLocaleString()} rows`);
   }
 
-  // ============== Snapshots ==============
-  async function loadSnapshots() {
-    const { data } = await supabase
-      .from("range_store_snapshots")
-      .select("id, user_id, name, store_list, item_count, created_at")
-      .order("created_at", { ascending: false })
-      .limit(50);
-    setSnapshots(data || []);
-    setLatestSnapFull(null);
-  }
+  // ============== Snapshots — REMOVED (Save Document feature deleted) ==============
 
-  async function loadSnapshotData(id: string) {
-    const { data, error } = await supabase
-      .from("range_store_snapshots")
-      .select("*")
-      .eq("id", id)
-      .maybeSingle();
-    if (error) throw error;
-    return data;
-  }
-
-  async function openSnapshotPreview(meta: any) {
-    try {
-      setPreviewLoading(true);
-      setPreviewSnap({ ...meta, data: [] });
-      const full = await loadSnapshotData(meta.id);
-      setPreviewSnap(full || meta);
-    } catch (err: any) {
-      toast.error(`โหลด Document ไม่ได้: ${err.message || err}`);
-      setPreviewSnap(null);
-    } finally {
-      setPreviewLoading(false);
-    }
-  }
-
-  async function saveSnapshot() {
-    const name = prompt("ตั้งชื่อ Document:", `Range ${new Date().toLocaleString("th-TH")}`);
-    if (!name) return;
-    const { data: u } = await supabase.auth.getUser();
-    if (!u.user) { toast.error("กรุณาเข้าสู่ระบบ"); return; }
-
-    const LANEXANG = "Lanexang Green Property Sole Co.,Ltd";
-    try {
-      setSavingDoc("loading-prev");
-      toast.info("กำลังโหลด Document เดิม…");
-
-      // 1) โหลด Doc ล่าสุดของ user มาเป็น base — store ที่ "ไม่ได้ดึงรอบนี้" จะใช้ค่าจาก Doc เดิม
-      const { data: latest } = await supabase
-        .from("range_store_snapshots")
-        .select("data, store_list")
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      const prevBySku = new Map<string, any>(
-        (((latest?.data as any[]) || []) as any[]).map((r: any) => [r.sku_code, r])
-      );
-      const prevStores = new Set<string>(((latest?.store_list as string[]) || []));
-
-      // 2) คำนวณ "scope ของรอบนี้" = store ที่อยู่ใน cache ปัจจุบัน (= store ที่ Prepare ครั้งล่าสุดดึงมา)
-      //    Store ที่อยู่ใน scope → ใช้ค่าจาก cache (ถ้าผู้ใช้ลบไป → จะหายจริง)
-      //    Store ที่ "ไม่อยู่ใน scope" → คงค่าจาก Doc เดิม (ไม่ได้แตะ ไม่ควรหาย)
-      const currentStoreSet = new Set<string>(cache.stores.map(s => s.name));
-
-      setSavingDoc("saving");
-      toast.info("กำลังบันทึก Document…");
-
-      const pbMap = new Map(cache.packbox.map((r: any) => [r.sku_code, r]));
-      const stMap = new Map(cache.status.map((r: any) => [r.sku_code, r]));
-      const avMap = new Map(cache.avgType.map((r: any) => [r.sku_code, r]));
-      const psMap = new Map(cache.perStore.map((r: any) => [r.sku_code, r]));
-      const allFields = [...COL_GROUPS.master.fields, ...COL_GROUPS.packbox.fields, ...COL_GROUPS.price.fields, ...COL_GROUPS.status.fields, ...COL_GROUPS.avg_type.fields];
-
-      const payload = (cache.master as any[])
-        .filter((m: any) => m.product_owner === LANEXANG)
-        .map((m: any) => {
-          const pb: any = pbMap.get(m.sku_code) || {};
-          const st: any = stMap.get(m.sku_code) || {};
-          const av: any = avMap.get(m.sku_code) || {};
-          const ps: any = psMap.get(m.sku_code) || {};
-          const merged: any = { ...m, ...pb, ...st, ...av };
-          const out: any = {};
-          for (const f of allFields) out[f] = merged[f];
-
-          // Merge range_data:
-          //   - Start จาก Doc เดิม (ถ้ามี) เพื่อเก็บ store ที่ไม่อยู่ใน scope
-          //   - ลบ store ที่อยู่ใน scope ออก (จะใส่ค่าใหม่จาก cache)
-          //   - ใส่ค่าจาก cache สำหรับ store ที่อยู่ใน scope (ถ้าใน cache ไม่มี = ผู้ใช้ลบ → ไม่ใส่)
-          const prev: any = prevBySku.get(m.sku_code) || {};
-          const prevRd: Record<string, any> = prev.range_data || {};
-          const prevAvg: Record<string, any> = prev.avg_per_store || {};
-          const curRd: Record<string, any> = (ps.range_data || {}) as Record<string, any>;
-          const curAvg: Record<string, any> = (ps.avg_per_store || {}) as Record<string, any>;
-
-          const finalRd: Record<string, any> = {};
-          const finalAvg: Record<string, any> = {};
-          // Step 1: เก็บ store จาก Doc เดิม "เฉพาะที่ไม่อยู่ใน scope รอบนี้"
-          for (const k in prevRd) {
-            if (!currentStoreSet.has(k)) finalRd[k] = prevRd[k];
-          }
-          for (const k in prevAvg) {
-            if (!currentStoreSet.has(k)) finalAvg[k] = prevAvg[k];
-          }
-          // Step 2: ใส่ค่าใหม่จาก cache (เฉพาะ store ที่อยู่ใน scope และยังมีค่าใน cache)
-          for (const k in curRd) {
-            if (currentStoreSet.has(k)) finalRd[k] = curRd[k];
-          }
-          for (const k in curAvg) {
-            if (currentStoreSet.has(k)) finalAvg[k] = curAvg[k];
-          }
-
-          // Recompute store_apply จาก finalRd
-          let storeApply = 0;
-          for (const k in finalRd) if (finalRd[k]?.apply_yn === "Y") storeApply++;
-          out.store_apply = storeApply;
-          out.range_data = finalRd;
-          out.avg_per_store = finalAvg;
-          return out;
-        });
-
-      // 3) เก็บ SKU เก่าที่ไม่อยู่ใน cache ปัจจุบัน (เพื่อไม่ให้ SKU สูญหาย — เฉพาะ Lanexang)
-      //    ⚠️ CRITICAL: ต้อง strip "store ที่อยู่ใน scope รอบนี้" ออกจาก range_data/avg_per_store ของ prev
-      //    มิฉะนั้นถ้า user เคลียร์ store ออก แต่ SKU บางตัวไม่อยู่ในรอบ Prepare นี้ →
-      //    ค่าเก่าของ store นั้นจะถูก "ดึงกลับ" มาทาง prev → ลบไม่หายจริง (bug ที่ user เจอ)
-      const currentSkus = new Set(payload.map((r: any) => r.sku_code));
-      for (const [sku, prev] of prevBySku) {
-        if (!currentSkus.has(sku) && prev.product_owner === LANEXANG) {
-          const cleanedRd: Record<string, any> = {};
-          const cleanedAvg: Record<string, any> = {};
-          const prd: Record<string, any> = prev.range_data || {};
-          const pavg: Record<string, any> = prev.avg_per_store || {};
-          for (const k in prd) if (!currentStoreSet.has(k)) cleanedRd[k] = prd[k];
-          for (const k in pavg) if (!currentStoreSet.has(k)) cleanedAvg[k] = pavg[k];
-          let storeApply = 0;
-          for (const k in cleanedRd) if (cleanedRd[k]?.apply_yn === "Y") storeApply++;
-          payload.push({ ...prev, range_data: cleanedRd, avg_per_store: cleanedAvg, store_apply: storeApply });
-        }
-      }
-
-      // 4) store_list = Union (Doc เดิม ∪ scope รอบนี้)
-      //    เพราะ payload ยังมี store เก่าฝัง อยู่ใน range_data — store_list ต้องครอบคลุม
-      const mergedStores = new Set<string>([...prevStores, ...currentStoreSet]);
-
-      const { error } = await supabase.from("range_store_snapshots").insert({
-        user_id: u.user.id, name, data: payload,
-        store_list: Array.from(mergedStores).sort(),
-        item_count: payload.length,
-      });
-      if (error) { toast.error(error.message); return; }
-      toast.success(`บันทึกสำเร็จ · ${payload.length.toLocaleString()} SKU (Lanexang) · ${mergedStores.size} stores (scope รอบนี้: ${currentStoreSet.size})`);
-      loadSnapshots();
-    } catch (err: any) {
-      toast.error(`Save failed: ${err.message || err}`);
-    } finally {
-      setSavingDoc(null);
-    }
-  }
-
-  const ESSENTIAL_EXPORT_FIELDS = [
-    "sku_code", "main_barcode", "product_name_la", "product_name_en",
-    "division", "department", "sub_department", "class",
-    "buyer_code", "product_owner", "unit_of_measure",
-    "item_status", "item_type", "buying_status", "rank_sale",
-    "standard_price", "list_price",
-    "avg_jmart", "avg_kokkok", "avg_kokkok_fc", "avg_udee", "store_apply",
-  ] as const;
-  const EXPORT_DETAIL_KEY_FIELDS = ["sku_code", "main_barcode", "product_name_la", "product_name_en"] as const;
-  const EXPORT_STORE_BATCH_SIZE = 8;
-  const CSV_YIELD_ROWS = 2000;
-
-  type CsvFileSpec = {
-    filename: string;
-    headers: string[];
-    source: any[];
-    buildRow: (row: any) => any[];
-  };
-
-  const chunkArray = <T,>(arr: T[], size: number): T[][] => {
-    const chunks: T[][] = [];
-    for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
-    return chunks;
-  };
-
-  const getUnitPickValue = (row: any, stores: string[], field: "unit_picking_super" | "unit_picking_mart") => {
-    const direct = row?.[field];
-    if (direct != null && direct !== "") return direct;
-    const rangeData = row?.range_data || {};
-    for (const s of stores) {
-      const v = rangeData?.[s]?.[field];
-      if (v != null && v !== "") return v;
-    }
-    for (const cell of Object.values(rangeData)) {
-      const v = (cell as any)?.[field];
-      if (v != null && v !== "") return v;
-    }
-    return "";
-  };
-
-  const getStoreApplyValue = (row: any) => {
-    if (row?.store_apply != null && row.store_apply !== "") return row.store_apply;
-    return Object.values(row?.range_data || {}).reduce<number>((sum, cell) => {
-      const typedCell = cell as { apply_yn?: string } | null;
-      return sum + (typedCell?.apply_yn === "Y" ? 1 : 0);
-    }, 0);
-  };
-
-  // Export ทุกคอลัมน์ + ทุก store เป็น XLSX binary
-  // แบ่งเป็นหลายไฟล์ถ้า rows > MAX_ROWS_PER_FILE (กัน "Too many properties to enumerate" ใน V8/SheetJS)
-  // Build aoa เป็น chunk + yield to main thread → UI ไม่ค้าง
+  // Export "Range Y/N + Min + Avg/Day per store" XLSX (used by doExport)
   async function exportRangeXLSX(
     source: any[],
     stores: string[],
@@ -1365,35 +1192,17 @@ export default function RangeStorePage() {
   ) {
     if (!source.length) { toast.error("ไม่มีข้อมูลจะ Export"); return; }
     const allStores = stores.slice();
-    const canonicalOrder = [
-      ...COL_GROUPS.master.fields,
-      ...COL_GROUPS.packbox.fields,
-      ...COL_GROUPS.price.fields,
-      ...COL_GROUPS.status.fields,
-      ...COL_GROUPS.avg_type.fields,
-    ] as string[];
-    const ignore = new Set(["range_data", "avg_per_store"]);
-    const seen = new Set<string>();
-    const baseKeys: string[] = [];
-    for (const k of canonicalOrder) {
-      if (ignore.has(k)) continue;
-      if (seen.has(k)) continue;
-      seen.add(k); baseKeys.push(k);
-    }
-    for (const k of Object.keys(source[0] || {})) {
-      if (ignore.has(k) || seen.has(k)) continue;
-      seen.add(k); baseKeys.push(k);
-    }
+    const baseKeys = Object.keys(source[0]).filter(k => k !== "range_data" && k !== "avg_per_store");
     const headers: string[] = [
       ...baseKeys.map(k => COL_LABEL[k] || k),
       ...allStores.flatMap(s => [`${s} - Y/N`, `${s} - Min`, `${s} - Avg/Day`]),
     ];
-
-    // Build 1 row → flat array (สำหรับ aoa_to_sheet)
-    const buildRow = (row: any): any[] => {
+    const aoa: any[][] = [headers];
+    for (let i = 0; i < source.length; i++) {
+      const row = source[i];
       const rangeData = row?.range_data || {};
       const avgPerStore = row?.avg_per_store || {};
-      const cells: any[] = baseKeys.map(k => {
+      const out: any[] = baseKeys.map(k => {
         const v = row?.[k];
         if (v == null) return "";
         if (typeof v === "object") return "";
@@ -1403,94 +1212,26 @@ export default function RangeStorePage() {
         const cell = rangeData?.[s] || {};
         const minV = cell?.min_display;
         const avgV = avgPerStore?.[s];
-        cells.push(cell?.apply_yn || "");
-        cells.push((minV === 0 || minV == null) ? "" : minV);
-        cells.push((avgV === 0 || avgV == null) ? "" : Number(avgV));
+        out.push(
+          cell?.apply_yn || "",
+          (minV === 0 || minV == null) ? "" : minV,
+          (avgV === 0 || avgV == null) ? "" : Number(avgV),
+        );
       }
-      return cells;
-    };
-
-    // บังคับแบ่งสูงสุด 2 ไฟล์เสมอ (ผู้ใช้ขอ)
-    // Threshold: ถ้า ≤ ~1.2M cells ใช้ไฟล์เดียว, มากกว่านั้นแบ่ง 2
-    // Note: .xlsb เขียนได้เฉพาะ SheetJS Pro (เสียเงิน) — ใช้ .xlsx แทน
-    const totalCells = source.length * (baseKeys.length + allStores.length * 3);
-    const SINGLE_FILE_THRESHOLD = 1_200_000;
-    const numFiles = totalCells <= SINGLE_FILE_THRESHOLD ? 1 : 2;
-    const rowsPerFile = Math.ceil(source.length / numFiles);
-
-    const total = source.length;
-    let processed = 0;
-
-    for (let f = 0; f < numFiles; f++) {
-      const sliceStart = f * rowsPerFile;
-      const sliceEnd = Math.min(sliceStart + rowsPerFile, source.length);
-      const aoa: any[][] = [headers];
-      for (let i = sliceStart; i < sliceEnd; i++) {
-        aoa.push(buildRow(source[i]));
-        processed++;
-        if (processed % 1000 === 0) {
-          onProgress?.(processed, total);
-          await new Promise(r => setTimeout(r, 0));
-        }
+      aoa.push(out);
+      if ((i + 1) % 2000 === 0) {
+        onProgress?.(i + 1, source.length);
+        await new Promise(r => setTimeout(r, 0));
       }
-
-      const ws = XLSX.utils.aoa_to_sheet(aoa, { dense: true } as any);
-      (ws as any)["!views"] = [{ state: "frozen", ySplit: 1 }];
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Range");
-
-      const fileName = numFiles === 1
-        ? `${baseName}.xlsx`
-        : `${baseName}_part${f + 1}of2.xlsx`;
-
-      // ใช้ XLSX.write → Blob → trigger download เอง (ลด memory peak vs writeFile)
-      const wbout = XLSX.write(wb, {
-        bookType: "xlsx",
-        type: "array",
-        bookSST: false,
-        compression: true,
-      });
-      const blob = new Blob([wbout], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = fileName;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-
-      aoa.length = 0;
-      // Yield + รอ browser flush download ก่อนเริ่มไฟล์ถัดไป (กัน OOM)
-      await new Promise(r => setTimeout(r, 800));
     }
-    onProgress?.(total, total);
+    onProgress?.(source.length, source.length);
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    (ws as any)["!views"] = [{ state: "frozen", ySplit: 1 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Range");
+    XLSX.writeFile(wb, `${baseName}.xlsx`);
   }
 
-  async function exportSnapshotXLSX(snap: any) {
-    if (!snap?.data?.length) { toast.error("ไม่มีข้อมูลใน snapshot"); return; }
-    try {
-      const data: any[] = snap.data;
-      const stores: string[] = (snap.store_list || []).slice().sort();
-      const safe = String(snap.name || "snapshot").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 40);
-      const baseName = `range_${safe}_${new Date().toISOString().slice(0,10)}`;
-      const tId = toast.loading(`กำลัง Export ${data.length.toLocaleString()} แถว · ${stores.length} stores → XLSX…`);
-      await new Promise(r => setTimeout(r, 50));
-      await exportRangeXLSX(data, stores, baseName, (cur, total) => {
-        toast.loading(`Export ${cur.toLocaleString()} / ${total.toLocaleString()} แถว…`, { id: tId });
-      });
-      toast.success(`✓ Export ${data.length.toLocaleString()} แถว → ${baseName}.xlsx`, { id: tId });
-    } catch (err: any) {
-      toast.error(`Export failed: ${err.message || err}`);
-      console.error("[Export Snapshot]", err);
-    }
-  }
-
-  async function deleteSnapshot(id: string) {
-    if (!confirm("ลบ Document นี้?")) return;
-    await supabase.from("range_store_snapshots").delete().eq("id", id);
-    loadSnapshots();
-  }
 
   // ============== Import / Export ==============
   function exportTemplate(kind: "range" | "super" | "mart") {
@@ -1745,6 +1486,42 @@ export default function RangeStorePage() {
       // ⚡ Stream UI updates: merge in-memory ของแต่ละ wave ทันทีหลัง upsert สำเร็จ
       // → ผู้ใช้เห็น Y/N/Min ขึ้นทันทีโดยไม่ต้องรอจบทั้งไฟล์
       const psIndex = new Map(cache.perStore.map((r: any) => [r.sku_code, r]));
+      // Snapshot Y count per store ก่อน import (สำหรับ popup "Y เดิม")
+      const preYPerStore = new Map<string, number>();
+      for (const row of cache.perStore) {
+        const rd = row?.range_data || {};
+        for (const store of Object.keys(rd)) {
+          if ((rd as any)[store]?.apply_yn === "Y") {
+            preYPerStore.set(store, (preYPerStore.get(store) || 0) + 1);
+          }
+        }
+      }
+      // Snapshot ค่า apply_yn เดิม per (sku|store) ก่อน import — เพื่อคำนวณ Added/Removed
+      const preCellYN = new Map<string, "Y" | "N">(); // key = `${sku}|${store}`
+      if (kind === "range") {
+        for (const row of cache.perStore) {
+          const sku = (row as any)?.sku_code;
+          const rd = (row as any)?.range_data || {};
+          for (const store of Object.keys(rd)) {
+            preCellYN.set(`${sku}|${store}`, rd[store]?.apply_yn === "Y" ? "Y" : "N");
+          }
+        }
+      }
+      // นับ Added/Removed ต่อ store จากไฟล์ที่ import (เฉพาะ kind === "range")
+      const addedYPerStore = new Map<string, number>();
+      const removedYPerStore = new Map<string, number>();
+      if (kind === "range") {
+        for (const u of upserts) {
+          if (!u.store_name || !u.sku_code) continue;
+          const prev = preCellYN.get(`${u.sku_code}|${u.store_name}`) || "N";
+          const next = u.apply_yn === "Y" ? "Y" : "N";
+          if (prev === "N" && next === "Y") {
+            addedYPerStore.set(u.store_name, (addedYPerStore.get(u.store_name) || 0) + 1);
+          } else if (prev === "Y" && next === "N") {
+            removedYPerStore.set(u.store_name, (removedYPerStore.get(u.store_name) || 0) + 1);
+          }
+        }
+      }
       const allTouchedStores = new Set<string>();
       const mergeChunkIntoMemory = (chunk: any[]) => {
         // ⚡ ทำงานเสมอ — แม้ user ยังไม่กด Read Range/Store (cache.loaded.perStore = false)
@@ -1838,14 +1615,51 @@ export default function RangeStorePage() {
       });
       if (skipped.length > 0) {
         setSkippedRows({ kind, fileName: file.name, rows: skipped });
-        toast.warning(`✅ Import ${done.toLocaleString()} rows · ข้าม ${skipped.length.toLocaleString()} rows`, {
-          id: toastId,
-          description: "กดปุ่ม 'Skip' ใน IMPORT เพื่อดู/ดาวน์โหลดรายการที่ถูกข้าม",
-          duration: 8000,
-        });
-      } else {
-        toast.success(`✅ Import ${done.toLocaleString()} rows สำเร็จ · เปิด Per-Store columns เพื่อดูข้อมูล`, { id: toastId, duration: 5000 });
       }
+      // Sync range_store_view เฉพาะ SKU ที่ touched (incremental — เร็ว)
+      const importedSkus = [...new Set(upserts.map((u: any) => u.sku_code).filter(Boolean))] as string[];
+      if (importedSkus.length > 0) {
+        setImportProgress({ kind, phase: `Sync View ${importedSkus.length.toLocaleString()} SKU...`, current: done, total: totalUpserts });
+        updateToast(`📥 IMPORT ${kind.toUpperCase()} · กำลัง sync view (${importedSkus.length.toLocaleString()} SKU)...`);
+        try {
+          const { data: syncCount, error: syncErr } = await supabase.rpc("sync_range_store_view_skus" as any, { p_skus: importedSkus });
+          if (syncErr) throw syncErr;
+          console.log(`[Import] sync_range_store_view_skus: ${syncCount} rows`);
+        } catch (e: any) {
+          console.warn("[Import] sync view error:", e?.message);
+        }
+      }
+      // คำนวณ Y ต่อ store หลัง import (สำหรับ popup)
+      const totalYPerStore = new Map<string, number>();
+      for (const row of psIndex.values()) {
+        const rd = (row as any)?.range_data || {};
+        for (const store of Object.keys(rd)) {
+          if (rd[store]?.apply_yn === "Y") {
+            totalYPerStore.set(store, (totalYPerStore.get(store) || 0) + 1);
+          }
+        }
+      }
+      const storesForPopup = new Set<string>([
+        ...touchedStoreSet,
+        ...(kind === "range" ? Array.from(addedYPerStore.keys()) : []),
+        ...(kind === "range" ? Array.from(removedYPerStore.keys()) : []),
+      ] as string[]);
+      const yPerStore = Array.from(storesForPopup).sort((a, b) => a.localeCompare(b)).map(store => ({
+        store,
+        oldY: preYPerStore.get(store) || 0,
+        addedY: kind === "range" ? (addedYPerStore.get(store) || 0) : 0,
+        removedY: kind === "range" ? (removedYPerStore.get(store) || 0) : 0,
+        totalY: totalYPerStore.get(store) || 0,
+      }));
+      // เปิด Popup สรุปผล Import
+      setImportDoneDialog({
+        kind, saved: done, skipped: skipped.length, skus: importedSkuCount,
+        stores: touchedStoreSet.size, fileName: file.name,
+        yPerStore,
+      });
+      toast.success(`✅ Import ${done.toLocaleString()} rows สำเร็จ${skipped.length > 0 ? ` · ข้าม ${skipped.length.toLocaleString()}` : ""}`, {
+        id: toastId, duration: 5000,
+      });
       rerender();
     } catch (err: any) {
       toast.error(`❌ Import ผิดพลาด: ${err.message}`, { id: toastId, duration: 8000 });
@@ -1881,31 +1695,34 @@ export default function RangeStorePage() {
     toast.success(`Export ${exportRows.length.toLocaleString()} rows`);
   }
 
-  // ============== Pivot — ใช้ข้อมูลจาก Document ล่าสุด (snapshots[0]) ==============
-  const latestSnapMeta = snapshots[0];
-  const latestSnap = latestSnapFull?.id === latestSnapMeta?.id ? latestSnapFull : latestSnapMeta;
-  const latestSnapData: any[] = latestSnapFull?.id === latestSnapMeta?.id ? ((latestSnapFull?.data as any[]) || []) : [];
-  const latestSnapStores: string[] = (latestSnapMeta?.store_list as string[]) || [];
+  // ============== Pivot — ใช้ข้อมูลจาก range_store_view (live joined) ==============
+  // Live source (สำหรับ Get Report button)
+  const liveSnapData: any[] = useMemo(() => {
+    const LANEXANG = "Lanexang Green Property Sole Co.,Ltd";
+    return (joined as any[]).filter((r: any) => r?.product_owner === LANEXANG);
+  }, [joined]);
+  const liveSnapStores: string[] = useMemo(() => cache.stores.map(s => s.name), [cache.stores, forceTick]);
 
-  useEffect(() => {
-    if (!latestSnapMeta?.id) { setLatestSnapFull(null); return; }
-    if (latestSnapFull?.id === latestSnapMeta.id) return;
-    if (activeTab !== "pivot") return;
-    let cancelled = false;
-    setLatestSnapLoading(true);
-    setSkuSpcMap(new Map());
-    (async () => {
-      try {
-        const full = await loadSnapshotData(latestSnapMeta.id);
-        if (!cancelled) setLatestSnapFull(full || null);
-      } catch (e: any) {
-        if (!cancelled) toast.error(`โหลด Document ล่าสุดไม่ได้: ${e.message || e}`);
-      } finally {
-        if (!cancelled) setLatestSnapLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [latestSnapMeta?.id, latestSnapFull?.id, activeTab]);
+  // Frozen snapshot ที่ user กด "Get Report" — Pivot ทั้งหมดอ้างอิงจากนี้ (ไม่ใช่ live)
+  const [pivotSnapshot, setPivotSnapshot] = useState<{ data: any[]; stores: string[]; ts: number } | null>(null);
+  const latestSnapData: any[] = pivotSnapshot?.data || [];
+  const latestSnapStores: string[] = pivotSnapshot?.stores || [];
+  const latestSnapMeta: any = pivotSnapshot ? { id: "live", ts: pivotSnapshot.ts } : null;
+  const latestSnap: any = pivotSnapshot ? { name: `Live @ ${new Date(pivotSnapshot.ts).toLocaleString()}`, item_count: pivotSnapshot.data.length } : null;
+
+  const runPivotReport = () => {
+    if (liveSnapData.length === 0) { toast.warning("ยังไม่มีข้อมูลใน Prepare — กด Read Range/Store ก่อน"); return; }
+    setPivotSnapshot({ data: liveSnapData, stores: liveSnapStores, ts: Date.now() });
+    toast.success(`Get Report: ${liveSnapData.length.toLocaleString()} SKU · ${liveSnapStores.length} stores`);
+  };
+
+  // Snapshot loaders removed — no-op stubs to satisfy any remaining call sites.
+  const loadSnapshotData = async (_id: string) => null;
+  const openSnapshotPreview = (_meta: any) => { toast.info("Save Document feature ถูกยกเลิกแล้ว"); };
+  const deleteSnapshot = async (_id: string) => { /* no-op */ };
+  const saveSnapshot = async () => { toast.info("Save Document feature ถูกยกเลิกแล้ว"); };
+  const exportSnapshotXLSX = async (_snap: any) => { toast.info("Save Document feature ถูกยกเลิกแล้ว"); };
+
 
   // โหลด SKU → SPC map ครั้งเดียว (background, ไม่บล็อก) เมื่อมี snapshot และยังไม่ได้โหลด
   useEffect(() => {
@@ -2221,8 +2038,9 @@ export default function RangeStorePage() {
 
         <div className="h-5 w-px bg-border mx-1" />
 
+        {/* Store filters */}
         <MultiSelectFilter
-          label="Type"
+          label={`Type Store (${prepTypeStores.length || "all"})`}
           options={Array.from(new Set(cache.storeList.map(s => s.type_store).filter(Boolean))).sort()}
           selected={prepTypeStores}
           onChange={(next) => {
@@ -2235,28 +2053,52 @@ export default function RangeStorePage() {
           }}
         />
         <MultiSelectFilter
-          label={`Avg (${prepAvgStores.length || "all"})`}
+          label={`Store (${prepAvgStores.length || "all"})`}
           options={(prepTypeStores.length > 0 ? cache.storeList.filter(s => prepTypeStores.includes(s.type_store)) : cache.storeList).map(s => s.store_name)}
           selected={prepAvgStores}
-          onChange={setPrepAvgStores}
+          onChange={(next) => { setPrepAvgStores(next); setPrepRangeStores(next); }}
           emptyHint={prepTypeStores.length > 0 ? `ไม่มี store ใน type [${prepTypeStores.join(",")}]` : undefined}
         />
-        <MultiSelectFilter
-          label={`Range (${prepRangeStores.length || "all"})`}
-          options={(prepTypeStores.length > 0 ? cache.storeList.filter(s => prepTypeStores.includes(s.type_store)) : cache.storeList).map(s => s.store_name)}
-          selected={prepRangeStores}
-          onChange={setPrepRangeStores}
-          emptyHint={prepTypeStores.length > 0 ? `ไม่มี store ใน type [${prepTypeStores.join(",")}]` : undefined}
+        <div className="h-5 w-px bg-border mx-1" />
+        {/* Hierarchy */}
+        <MultiSelectFilter label={`Div Grp (${prepDivGroups.length || "all"})`}  options={filterLists.division_groups} selected={prepDivGroups}  onChange={setPrepDivGroups} />
+        <MultiSelectFilter label={`Division (${prepDivisions.length || "all"})`} options={filterLists.divisions}       selected={prepDivisions} onChange={setPrepDivisions} />
+        <MultiSelectFilter label={`Dept (${prepDepartments.length || "all"})`}   options={filterLists.departments}     selected={prepDepartments} onChange={setPrepDepartments} />
+        <MultiSelectFilter label={`Sub-Dept (${prepSubDepts.length || "all"})`}  options={filterLists.sub_departments} selected={prepSubDepts} onChange={setPrepSubDepts} />
+        <MultiSelectFilter label={`Class (${prepClasses.length || "all"})`}      options={filterLists.classes}         selected={prepClasses} onChange={setPrepClasses} />
+        <div className="h-5 w-px bg-border mx-1" />
+        {/* Attributes */}
+        <MultiSelectFilter label={`Item Type (${prepItemTypes.length || "all"})`} options={filterLists.item_types}      selected={prepItemTypes} onChange={setPrepItemTypes} />
+        <MultiSelectFilter label={`Buying (${prepBuyings.length || "all"})`}      options={filterLists.buying_statuses} selected={prepBuyings}   onChange={setPrepBuyings} />
+        <MultiSelectFilter label={`Owner (${prepOwners.length || "all"})`}        options={filterLists.owners}          selected={prepOwners}    onChange={setPrepOwners} />
+        <Input
+          placeholder="SKU/Barcode (คั่นด้วย ,)"
+          value={prepSkuText}
+          onChange={(e) => setPrepSkuText(e.target.value)}
+          className="h-7 w-44 text-xs"
         />
-        {(prepAvgStores.length > 0 || prepRangeStores.length > 0 || prepTypeStores.length > 0) && (
+        {(prepAvgStores.length > 0 || prepRangeStores.length > 0 || prepTypeStores.length > 0 ||
+          prepDivGroups.length > 0 || prepDivisions.length > 0 || prepDepartments.length > 0 ||
+          prepSubDepts.length > 0 || prepClasses.length > 0 || prepItemTypes.length > 0 ||
+          prepBuyings.length > 0 || prepOwners.length > 0 || prepSkuText) && (
           <Button variant="ghost" size="sm" className="h-7 w-7 p-0" title="Clear filter"
-            onClick={() => { setPrepAvgStores([]); setPrepRangeStores([]); setPrepTypeStores([]); }}>
+            onClick={() => {
+              setPrepAvgStores([]); setPrepRangeStores([]); setPrepTypeStores([]);
+              setPrepDivGroups([]); setPrepDivisions([]); setPrepDepartments([]);
+              setPrepSubDepts([]); setPrepClasses([]); setPrepItemTypes([]);
+              setPrepBuyings([]); setPrepOwners([]); setPrepSkuText("");
+            }}>
             <X className="h-3.5 w-3.5" />
           </Button>
         )}
 
         <div className="ml-auto flex items-center gap-1 flex-wrap">
           {(() => {
+            const hasAnyFilter =
+              prepAvgStores.length > 0 || prepRangeStores.length > 0 || prepTypeStores.length > 0 ||
+              prepDivGroups.length > 0 || prepDivisions.length > 0 || prepDepartments.length > 0 ||
+              prepSubDepts.length > 0 || prepClasses.length > 0 || prepItemTypes.length > 0 ||
+              prepBuyings.length > 0 || prepOwners.length > 0 || prepSkuText.trim().length > 0;
             const prev = cache.lastPreparedFilter;
             const sameArr = (a: string[], b: string[]) => a.length === b.length && a.every(x => b.includes(x));
             const dirty = !!prev && (
@@ -2264,16 +2106,18 @@ export default function RangeStorePage() {
               !sameArr(prev.rangeStores, prepRangeStores) ||
               !sameArr(prev.typeStores, prepTypeStores)
             );
-            const label = !cache.loaded.master ? "Prepare" : (dirty ? "Reprepare" : "+ Prepare");
+            const label = !cache.loaded.master ? "Read" : (dirty ? "Re-Read" : "+ Read");
             const variant: "default" | "secondary" | "destructive" = !cache.loaded.master
               ? "default"
               : (dirty ? "destructive" : "secondary");
             const cls = dirty ? "h-7 px-2 text-xs ring-2 ring-amber-400 bg-amber-500 hover:bg-amber-600 text-white" : "h-7 px-2 text-xs";
-            const title = !cache.loaded.master
-              ? "ดึงข้อมูลครั้งแรก"
-              : (dirty ? "Filter เปลี่ยน — กดเพื่อโหลดใหม่ตาม filter" : "เพิ่มข้อมูลเข้ากับของเดิม");
+            const title = !hasAnyFilter
+              ? "เลือก Filter ก่อน (Type/Store หรือ Hierarchy/Attribute หรือ SKU)"
+              : !cache.loaded.master
+                ? "ดึงข้อมูลตาม filter"
+                : (dirty ? "Filter เปลี่ยน — กดเพื่อโหลดใหม่" : "เพิ่มข้อมูลเข้ากับของเดิม");
             return (
-              <Button size="sm" className={cls} onClick={prepareData} disabled={!!loadingPhase} variant={dirty ? "default" : variant} title={title}>
+              <Button size="sm" className={cls} onClick={prepareData} disabled={!!loadingPhase || !hasAnyFilter} variant={dirty ? "default" : variant} title={title}>
                 <Database className="h-3 w-3 mr-1" />{label}
               </Button>
             );
@@ -2292,11 +2136,7 @@ export default function RangeStorePage() {
               <Button variant="ghost" size="sm" className="w-full justify-start h-8 text-xs" onClick={readRangePerStore} disabled={!!loadingPhase || !cache.loaded.master}>
                 {cache.loaded.perStore ? "✓ " : ""}Read Range/Store
               </Button>
-              <div className="h-px bg-border my-1" />
-              <Button variant="ghost" size="sm" className="w-full justify-start h-8 text-xs" onClick={saveSnapshot} disabled={!cache.loaded.master || !!savingDoc}>
-                {savingDoc ? <Loader2 className="h-3 w-3 mr-2 animate-spin" /> : <Save className="h-3 w-3 mr-2" />}
-                {savingDoc === "loading-prev" ? "กำลังโหลด…" : savingDoc === "saving" ? "กำลังบันทึก…" : "Save All"}
-              </Button>
+              {/* Save All — REMOVED (Save Document feature deleted) */}
               <Button variant="ghost" size="sm" className="w-full justify-start h-8 text-xs text-destructive" onClick={clearAllData} disabled={!!loadingPhase}>
                 <Trash2 className="h-3 w-3 mr-2" />Clear Data
               </Button>
@@ -2324,7 +2164,7 @@ export default function RangeStorePage() {
         <TabsList className="h-8">
           <TabsTrigger value="data" className="text-xs h-6">Data View</TabsTrigger>
           <TabsTrigger value="pivot" className="text-xs h-6">Pivot + Dashboard</TabsTrigger>
-          <TabsTrigger value="docs" className="text-xs h-6">Save Document ({snapshots.length})</TabsTrigger>
+          {/* Save Document tab — REMOVED */}
         </TabsList>
 
         {/* ============ TAB 1 ============ */}
@@ -2407,7 +2247,7 @@ export default function RangeStorePage() {
                           </PopoverTrigger>
                           <PopoverContent className="w-56 p-2" align="start">
                             <div className="text-xs font-semibold mb-1.5 text-muted-foreground">กลุ่มคอลัมน์</div>
-                            {(Object.keys(COL_GROUPS) as GroupKey[]).map(g => (
+                            {(Object.keys(COL_GROUPS) as GroupKey[]).filter(g => g !== "unit_pick").map(g => (
                               <label key={g} className="flex items-center gap-2 cursor-pointer text-sm py-1 px-1 hover:bg-accent rounded">
                                 <Checkbox checked={selectedGroups.includes(g)} onCheckedChange={(c) => setSelectedGroups(prev => c ? [...prev, g] : prev.filter(x => x !== g))} />
                                 <span className="text-xs">{COL_GROUPS[g].label}</span>
@@ -2497,6 +2337,7 @@ export default function RangeStorePage() {
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-72 p-2 space-y-2" align="end">
+                  {canImportRange && (
                   <div>
                     <div className="text-[10px] font-semibold text-muted-foreground mb-1 flex items-center justify-between">
                       <span>IMPORT</span>
@@ -2518,8 +2359,8 @@ export default function RangeStorePage() {
                         />
                       </div>
                     )}
-                    <div className="grid grid-cols-3 gap-1">
-                      {(["range", "super", "mart"] as const).map(k => {
+                    <div className="grid grid-cols-1 gap-1">
+                      {(["range"] as const).map(k => {
                         const isActive = importProgress?.kind === k;
                         return (
                         <div key={k} className="flex flex-col gap-0.5">
@@ -2556,6 +2397,7 @@ export default function RangeStorePage() {
                       </div>
                     )}
                   </div>
+                  )}
 
                   <div>
                     <div className="text-[10px] font-semibold text-muted-foreground mb-1">EXPORT</div>
@@ -2573,6 +2415,7 @@ export default function RangeStorePage() {
                     {exporting && <div className="text-[10px] text-primary inline-flex items-center gap-1 mt-1"><Loader2 className="h-2.5 w-2.5 animate-spin" />exporting…</div>}
                   </div>
 
+                  {canDeleteRange && (
                   <div>
                     <div className="text-[10px] font-semibold text-muted-foreground mb-1">
                       <span>CLEAR Y/N</span>
@@ -2603,6 +2446,7 @@ export default function RangeStorePage() {
                       </Button>
                     </div>
                   </div>
+                  )}
                 </PopoverContent>
               </Popover>
             </div>
@@ -2763,9 +2607,13 @@ export default function RangeStorePage() {
 
         {/* ============ TAB 2 — Pivot + Dashboard (Report) ============ */}
         <TabsContent value="pivot" className="space-y-3 mt-2">
-          {!latestSnap ? (
-            <Card className="p-6 text-center text-sm text-muted-foreground">
-              ยังไม่มี Document — ไป Tab "Save Document" เพื่อบันทึกก่อน
+          {!pivotSnapshot ? (
+            <Card className="p-6 text-center text-sm text-muted-foreground space-y-3">
+              <div>ยังไม่มีรายงาน — กด <b>Get Report</b> เพื่อดึงข้อมูลปัจจุบันมาคำนวณ</div>
+              <div className="text-xs">Live source: {liveSnapData.length.toLocaleString()} SKU · {liveSnapStores.length} stores</div>
+              <Button size="sm" className="h-8 text-xs gap-1.5" onClick={runPivotReport} disabled={liveSnapData.length === 0}>
+                <Play className="h-3.5 w-3.5" /> Get Report
+              </Button>
             </Card>
           ) : (
             <>
@@ -2778,6 +2626,9 @@ export default function RangeStorePage() {
                   {latestSnap.item_count?.toLocaleString()} SKU · {latestSnapStores.length} stores
                 </span>
                 <div className="flex-1" />
+                <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5" onClick={runPivotReport} title="ดึงข้อมูลล่าสุด">
+                  <RefreshCw className="h-3.5 w-3.5" /> Get Report
+                </Button>
                 <MultiSelectFilter
                   label={`SPC${skuSpcLoading ? " (กำลังโหลด…)" : ""}`}
                   options={pivotSpcOptions}
@@ -2957,6 +2808,77 @@ export default function RangeStorePage() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* Post-Import Dialog: Save to Doc / Download Skip */}
+      <Dialog open={!!importDoneDialog} onOpenChange={(o) => { if (!o) setImportDoneDialog(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-base">
+              ✅ Import {importDoneDialog?.kind.toUpperCase()} เสร็จสิ้น
+            </DialogTitle>
+          </DialogHeader>
+          {importDoneDialog && (
+            <div className="space-y-3 text-sm">
+              <div className="grid grid-cols-2 gap-2 p-3 bg-muted/40 rounded">
+                <div>
+                  <div className="text-[10px] uppercase text-muted-foreground">นำเข้า</div>
+                  <div className="text-lg font-bold text-emerald-600 tabular-nums">
+                    {importDoneDialog.saved.toLocaleString()}
+                  </div>
+                  <div className="text-[10px] text-muted-foreground">
+                    {importDoneDialog.skus.toLocaleString()} SKU · {importDoneDialog.stores.toLocaleString()} store
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase text-muted-foreground">ข้าม (Skip)</div>
+                  <div className={`text-lg font-bold tabular-nums ${importDoneDialog.skipped > 0 ? "text-amber-600" : "text-muted-foreground"}`}>
+                    {importDoneDialog.skipped.toLocaleString()}
+                  </div>
+                  <div className="text-[10px] text-muted-foreground truncate">
+                    {importDoneDialog.fileName}
+                  </div>
+                </div>
+              </div>
+              <div className="text-[11px] text-muted-foreground">
+                ✓ บันทึกลง <code className="text-foreground">range_store</code> และ sync <code className="text-foreground">range_store_view</code> แล้ว
+              </div>
+              {importDoneDialog.kind === "range" && importDoneDialog.yPerStore && importDoneDialog.yPerStore.length > 0 && (
+                <div className="border rounded">
+                  <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-3 px-3 py-1.5 bg-muted/60 text-[10px] uppercase text-muted-foreground font-semibold">
+                    <div>Store</div>
+                    <div className="text-right">Y เดิม</div>
+                    <div className="text-right">+ Added</div>
+                    <div className="text-right">− Removed</div>
+                    <div className="text-right">รวม</div>
+                  </div>
+                  <div className="max-h-[280px] overflow-y-auto">
+                    {importDoneDialog.yPerStore.map(r => (
+                      <div key={r.store} className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-3 px-3 py-1 text-xs border-t tabular-nums">
+                        <div className="truncate" title={r.store}>{r.store}</div>
+                        <div className="text-right text-muted-foreground">{r.oldY.toLocaleString()}</div>
+                        <div className="text-right text-emerald-600 font-medium">{r.addedY > 0 ? `+${r.addedY.toLocaleString()}` : "0"}</div>
+                        <div className="text-right text-rose-600 font-medium">{r.removedY > 0 ? `−${r.removedY.toLocaleString()}` : "0"}</div>
+                        <div className="text-right font-semibold">{r.totalY.toLocaleString()} SKU</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="flex gap-2 flex-wrap pt-2">
+                {importDoneDialog.skipped > 0 && (
+                  <Button variant="outline" size="sm" onClick={exportSkipList} className="text-xs">
+                    <Download className="h-3.5 w-3.5 mr-1" />
+                    Download Skip ({importDoneDialog.skipped.toLocaleString()})
+                  </Button>
+                )}
+                <Button size="sm" className="text-xs ml-auto" onClick={() => setImportDoneDialog(null)}>
+                  ปิด
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!previewSnap} onOpenChange={() => setPreviewSnap(null)}>
         <DialogContent className="max-w-[95vw] max-h-[90vh] overflow-hidden flex flex-col">

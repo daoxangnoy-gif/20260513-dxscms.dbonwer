@@ -10,7 +10,8 @@ export type TableName =
   | "sales_by_week" 
   | "vendor_master"
   | "store_type"
-  | "customers";
+  | "customers"
+  | "list_po";
 
 // Tables that are placeholder only (no DB table yet)
 export type PlaceholderTable = "range_store";
@@ -33,6 +34,7 @@ export const DATA_TABLES: DataTableConfig[] = [
   { name: "vendor_master", label: "Vendor Master", labelTh: "ข้อมูล Vendor" },
   { name: "store_type", label: "Store Type", labelTh: "ประเภทร้าน" },
   { name: "customers", label: "Customer", labelTh: "ลูกค้า" },
+  { name: "list_po", label: "List PO", labelTh: "List PO" },
   { name: "range_store", label: "Range Store", labelTh: "Range Store" },
 ];
 
@@ -42,6 +44,15 @@ export const SRR_SUB_MENUS = [
   { key: "special_order", label: "Special Order" },
   { key: "order_b2b", label: "Order B2B" },
   { key: "srr_payment_overdue", label: "Payment Overdue" },
+  { key: "srr_job_assign", label: "Job Assign" },
+  { key: "srr_send_docs", label: "ส่งเอกสาร" },
+  { key: "sar", label: "SAR" },
+];
+
+export const REPORT_SUB_MENUS: { key: string; label: string; menuCode: string }[] = [
+  { key: "report_po", label: "Report PO", menuCode: "report" },
+  { key: "report_oos", label: "Report OOS", menuCode: "report" },
+  { key: "report_doh", label: "Report DOH", menuCode: "report" },
 ];
 
 // Column display configs per table (excluding id, created_at, updated_at)
@@ -87,6 +98,7 @@ export const TABLE_COLUMNS: Record<AllTableName, string[]> = {
   ],
   store_type: ["ship_to", "code", "type_store", "size_store", "type_doc", "store_name"],
   customers: ["customer_code", "name", "country", "district", "email", "gender", "phone", "state", "street"],
+  list_po: ["order_reference", "partner", "source", "document", "status", "total", "currency_name", "delivery_to1", "delivery_to2"],
   range_store: [],
 };
 
@@ -95,6 +107,8 @@ export const TABLE_COLUMNS: Record<AllTableName, string[]> = {
 // on duplicates.
 export const TABLE_UNIQUE_KEY: Partial<Record<TableName, string>> = {
   customers: "customer_code",
+  list_po: "order_reference",
+  vendor_master: "vendor_code",
 };
 
 // Key columns for search highlighting (main columns per table)
@@ -109,6 +123,7 @@ export const KEY_COLUMNS: Partial<Record<TableName, string[]>> = {
   vendor_master: ["vendor_code", "vendor_name_en", "vendor_name_la", "spc_name"],
   store_type: ["ship_to", "code", "type_store", "size_store", "type_doc", "store_name"],
   customers: ["customer_code", "name", "email", "phone", "country"],
+  list_po: ["order_reference", "partner", "document", "status"],
 };
 
 // Per-table label overrides. Falls back to COLUMN_LABELS when not set.
@@ -291,4 +306,13 @@ export const COLUMN_LABELS: Record<string, string> = {
   phone: "Phone",
   state: "State",
   street: "Street",
+  // List PO
+  order_reference: "Order Reference",
+  partner: "Partner",
+  source: "Source",
+  document: "Document",
+  total: "Total",
+  currency_name: "Currency/Name",
+  delivery_to1: "Delivery to1",
+  delivery_to2: "Delivery to2",
 };

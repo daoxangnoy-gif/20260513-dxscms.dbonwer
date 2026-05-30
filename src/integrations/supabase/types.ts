@@ -406,6 +406,206 @@ export type Database = {
         }
         Relationships: []
       }
+      document_locations: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          description: string | null
+          id: string
+          name: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          description?: string | null
+          id?: string
+          name: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          description?: string | null
+          id?: string
+          name?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      document_movements: {
+        Row: {
+          action: string
+          attachment_uploaded_by: string | null
+          attachment_url: string | null
+          codes: Json
+          created_at: string
+          depositor_name: string | null
+          id: string
+          location_name: string
+          notes: string | null
+          receiver_name: string | null
+          shipment_id: string
+          user_id: string | null
+        }
+        Insert: {
+          action: string
+          attachment_uploaded_by?: string | null
+          attachment_url?: string | null
+          codes?: Json
+          created_at?: string
+          depositor_name?: string | null
+          id?: string
+          location_name: string
+          notes?: string | null
+          receiver_name?: string | null
+          shipment_id: string
+          user_id?: string | null
+        }
+        Update: {
+          action?: string
+          attachment_uploaded_by?: string | null
+          attachment_url?: string | null
+          codes?: Json
+          created_at?: string
+          depositor_name?: string | null
+          id?: string
+          location_name?: string
+          notes?: string | null
+          receiver_name?: string | null
+          shipment_id?: string
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "document_movements_shipment_id_fkey"
+            columns: ["shipment_id"]
+            isOneToOne: false
+            referencedRelation: "document_shipments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      document_shipments: {
+        Row: {
+          compared_at: string | null
+          created_at: string
+          depositor_name: string | null
+          destination_codes: Json
+          destination_location: string | null
+          destination_scanned_at: string | null
+          doc_name: string
+          id: string
+          origin_codes: Json
+          origin_location: string | null
+          origin_scanned_at: string | null
+          receiver_name: string | null
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          compared_at?: string | null
+          created_at?: string
+          depositor_name?: string | null
+          destination_codes?: Json
+          destination_location?: string | null
+          destination_scanned_at?: string | null
+          doc_name: string
+          id?: string
+          origin_codes?: Json
+          origin_location?: string | null
+          origin_scanned_at?: string | null
+          receiver_name?: string | null
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          compared_at?: string | null
+          created_at?: string
+          depositor_name?: string | null
+          destination_codes?: Json
+          destination_location?: string | null
+          destination_scanned_at?: string | null
+          doc_name?: string
+          id?: string
+          origin_codes?: Json
+          origin_location?: string | null
+          origin_scanned_at?: string | null
+          receiver_name?: string | null
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      export_templates: {
+        Row: {
+          columns: Json
+          created_at: string
+          created_by: string | null
+          id: string
+          is_active: boolean
+          name: string
+          target_menu: string
+          updated_at: string
+        }
+        Insert: {
+          columns?: Json
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          is_active?: boolean
+          name: string
+          target_menu: string
+          updated_at?: string
+        }
+        Update: {
+          columns?: Json
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          is_active?: boolean
+          name?: string
+          target_menu?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      filter_templates: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          id: string
+          is_active: boolean
+          name: string
+          rules: Json
+          target_table: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          is_active?: boolean
+          name: string
+          rules?: Json
+          target_table: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          is_active?: boolean
+          name?: string
+          rules?: Json
+          target_table?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       help_sections: {
         Row: {
           data: Json
@@ -424,6 +624,99 @@ export type Database = {
           id?: string
           updated_at?: string
           updated_by?: string | null
+        }
+        Relationships: []
+      }
+      job_assignments: {
+        Row: {
+          assignee_name: string
+          assignee_phone: string | null
+          attachment_name: string | null
+          attachment_type: string | null
+          attachment_url: string | null
+          completed_at: string | null
+          content: string
+          created_at: string
+          due_date: string
+          id: string
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          assignee_name: string
+          assignee_phone?: string | null
+          attachment_name?: string | null
+          attachment_type?: string | null
+          attachment_url?: string | null
+          completed_at?: string | null
+          content: string
+          created_at?: string
+          due_date: string
+          id?: string
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          assignee_name?: string
+          assignee_phone?: string | null
+          attachment_name?: string | null
+          attachment_type?: string | null
+          attachment_url?: string | null
+          completed_at?: string | null
+          content?: string
+          created_at?: string
+          due_date?: string
+          id?: string
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      list_po: {
+        Row: {
+          created_at: string
+          currency_name: string | null
+          delivery_to1: string | null
+          delivery_to2: string | null
+          document: string | null
+          id: string
+          order_reference: string
+          partner: string | null
+          source: string | null
+          status: string | null
+          total: number | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          currency_name?: string | null
+          delivery_to1?: string | null
+          delivery_to2?: string | null
+          document?: string | null
+          id?: string
+          order_reference: string
+          partner?: string | null
+          source?: string | null
+          status?: string | null
+          total?: number | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          currency_name?: string | null
+          delivery_to1?: string | null
+          delivery_to2?: string | null
+          document?: string | null
+          id?: string
+          order_reference?: string
+          partner?: string | null
+          source?: string | null
+          status?: string | null
+          total?: number | null
+          updated_at?: string
         }
         Relationships: []
       }
@@ -579,15 +872,56 @@ export type Database = {
         }
         Relationships: []
       }
+      on_order_dc: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          id: string
+          product_name_en: string | null
+          product_name_la: string | null
+          qty: number
+          sku_code: string
+          store_name: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          product_name_en?: string | null
+          product_name_la?: string | null
+          qty?: number
+          sku_code: string
+          store_name: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          product_name_en?: string | null
+          product_name_la?: string | null
+          qty?: number
+          sku_code?: string
+          store_name?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       payment_overdue: {
         Row: {
           amount_overdue: number
           attachment_name: string | null
           attachment_url: string | null
           created_at: string
+          document_name: string | null
+          document_url: string | null
           drive_link: string | null
           id: string
+          paid_at: string | null
+          paid_total: number
           reason: string | null
+          status: string
           supplier_currency: string | null
           updated_at: string
           user_id: string
@@ -600,9 +934,14 @@ export type Database = {
           attachment_name?: string | null
           attachment_url?: string | null
           created_at?: string
+          document_name?: string | null
+          document_url?: string | null
           drive_link?: string | null
           id?: string
+          paid_at?: string | null
+          paid_total?: number
           reason?: string | null
+          status?: string
           supplier_currency?: string | null
           updated_at?: string
           user_id: string
@@ -615,9 +954,14 @@ export type Database = {
           attachment_name?: string | null
           attachment_url?: string | null
           created_at?: string
+          document_name?: string | null
+          document_url?: string | null
           drive_link?: string | null
           id?: string
+          paid_at?: string | null
+          paid_total?: number
           reason?: string | null
+          status?: string
           supplier_currency?: string | null
           updated_at?: string
           user_id?: string
@@ -816,36 +1160,108 @@ export type Database = {
         }
         Relationships: []
       }
-      range_store_snapshots: {
+      range_store_view: {
         Row: {
-          created_at: string
-          data: Json
-          id: string
-          item_count: number
-          name: string
-          store_list: string[]
-          updated_at: string
-          user_id: string
+          avg_jmart: number | null
+          avg_kokkok: number | null
+          avg_kokkok_fc: number | null
+          avg_per_store: Json | null
+          avg_udee: number | null
+          barcode_box: string | null
+          barcode_pack: string | null
+          box_qty: number | null
+          buyer_code: string | null
+          buying_status: string | null
+          class: string | null
+          department: string | null
+          division: string | null
+          division_group: string | null
+          gm_buyer_code: string | null
+          item_status: string | null
+          item_type: string | null
+          list_price: number | null
+          main_barcode: string | null
+          pack_qty: number | null
+          packing_size_qty: number | null
+          product_bu: string | null
+          product_name_en: string | null
+          product_name_la: string | null
+          product_owner: string | null
+          range_data: Json | null
+          rank_sale: string | null
+          sku_code: string
+          standard_price: number | null
+          sub_department: string | null
+          synced_at: string
+          unit_of_measure: string | null
         }
         Insert: {
-          created_at?: string
-          data?: Json
-          id?: string
-          item_count?: number
-          name: string
-          store_list?: string[]
-          updated_at?: string
-          user_id: string
+          avg_jmart?: number | null
+          avg_kokkok?: number | null
+          avg_kokkok_fc?: number | null
+          avg_per_store?: Json | null
+          avg_udee?: number | null
+          barcode_box?: string | null
+          barcode_pack?: string | null
+          box_qty?: number | null
+          buyer_code?: string | null
+          buying_status?: string | null
+          class?: string | null
+          department?: string | null
+          division?: string | null
+          division_group?: string | null
+          gm_buyer_code?: string | null
+          item_status?: string | null
+          item_type?: string | null
+          list_price?: number | null
+          main_barcode?: string | null
+          pack_qty?: number | null
+          packing_size_qty?: number | null
+          product_bu?: string | null
+          product_name_en?: string | null
+          product_name_la?: string | null
+          product_owner?: string | null
+          range_data?: Json | null
+          rank_sale?: string | null
+          sku_code: string
+          standard_price?: number | null
+          sub_department?: string | null
+          synced_at?: string
+          unit_of_measure?: string | null
         }
         Update: {
-          created_at?: string
-          data?: Json
-          id?: string
-          item_count?: number
-          name?: string
-          store_list?: string[]
-          updated_at?: string
-          user_id?: string
+          avg_jmart?: number | null
+          avg_kokkok?: number | null
+          avg_kokkok_fc?: number | null
+          avg_per_store?: Json | null
+          avg_udee?: number | null
+          barcode_box?: string | null
+          barcode_pack?: string | null
+          box_qty?: number | null
+          buyer_code?: string | null
+          buying_status?: string | null
+          class?: string | null
+          department?: string | null
+          division?: string | null
+          division_group?: string | null
+          gm_buyer_code?: string | null
+          item_status?: string | null
+          item_type?: string | null
+          list_price?: number | null
+          main_barcode?: string | null
+          pack_qty?: number | null
+          packing_size_qty?: number | null
+          product_bu?: string | null
+          product_name_en?: string | null
+          product_name_la?: string | null
+          product_owner?: string | null
+          range_data?: Json | null
+          rank_sale?: string | null
+          sku_code?: string
+          standard_price?: number | null
+          sub_department?: string | null
+          synced_at?: string
+          unit_of_measure?: string | null
         }
         Relationships: []
       }
@@ -876,12 +1292,55 @@ export type Database = {
         }
         Relationships: []
       }
+      role_division_access: {
+        Row: {
+          can_create: boolean
+          can_delete: boolean
+          can_edit: boolean
+          can_export: boolean
+          can_import: boolean
+          can_view: boolean
+          created_at: string
+          division: string
+          id: string
+          role_id: string
+          updated_at: string
+        }
+        Insert: {
+          can_create?: boolean
+          can_delete?: boolean
+          can_edit?: boolean
+          can_export?: boolean
+          can_import?: boolean
+          can_view?: boolean
+          created_at?: string
+          division: string
+          id?: string
+          role_id: string
+          updated_at?: string
+        }
+        Update: {
+          can_create?: boolean
+          can_delete?: boolean
+          can_edit?: boolean
+          can_export?: boolean
+          can_import?: boolean
+          can_view?: boolean
+          created_at?: string
+          division?: string
+          id?: string
+          role_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       role_menu_permissions: {
         Row: {
           can_create: boolean
           can_delete: boolean
           can_edit: boolean
           can_export: boolean
+          can_import: boolean
           can_view: boolean
           id: string
           menu_id: string
@@ -892,6 +1351,7 @@ export type Database = {
           can_delete?: boolean
           can_edit?: boolean
           can_export?: boolean
+          can_import?: boolean
           can_view?: boolean
           id?: string
           menu_id: string
@@ -902,6 +1362,7 @@ export type Database = {
           can_delete?: boolean
           can_edit?: boolean
           can_export?: boolean
+          can_import?: boolean
           can_view?: boolean
           id?: string
           menu_id?: string
@@ -1014,6 +1475,39 @@ export type Database = {
         }
         Relationships: []
       }
+      sar_snapshots: {
+        Row: {
+          created_at: string
+          data: Json
+          doc_name: string
+          id: string
+          item_count: number
+          source: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          data?: Json
+          doc_name: string
+          id?: string
+          item_count?: number
+          source?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          data?: Json
+          doc_name?: string
+          id?: string
+          item_count?: number
+          source?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       saved_po_documents: {
         Row: {
           created_at: string
@@ -1053,6 +1547,39 @@ export type Database = {
           user_id?: string
           vendor_code?: string
           vendor_display?: string | null
+        }
+        Relationships: []
+      }
+      sku_no_order: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          id: string
+          product_name_en: string | null
+          product_name_la: string | null
+          sku_code: string
+          store_name: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          product_name_en?: string | null
+          product_name_la?: string | null
+          sku_code: string
+          store_name: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          product_name_en?: string | null
+          product_name_la?: string | null
+          sku_code?: string
+          store_name?: string
+          updated_at?: string
         }
         Relationships: []
       }
@@ -1251,6 +1778,36 @@ export type Database = {
         }
         Relationships: []
       }
+      store_priority: {
+        Row: {
+          created_at: string
+          id: string
+          priority: number | null
+          store_name: string
+          type_store: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          priority?: number | null
+          store_name: string
+          type_store?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          priority?: number | null
+          store_name?: string
+          type_store?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       store_type: {
         Row: {
           code: string | null
@@ -1293,6 +1850,7 @@ export type Database = {
           can_delete: boolean
           can_edit: boolean
           can_export: boolean
+          can_import: boolean
           can_view: boolean
           created_at: string
           id: string
@@ -1306,6 +1864,7 @@ export type Database = {
           can_delete?: boolean
           can_edit?: boolean
           can_export?: boolean
+          can_import?: boolean
           can_view?: boolean
           created_at?: string
           id?: string
@@ -1319,6 +1878,7 @@ export type Database = {
           can_delete?: boolean
           can_edit?: boolean
           can_export?: boolean
+          can_import?: boolean
           can_view?: boolean
           created_at?: string
           id?: string
@@ -1533,6 +2093,31 @@ export type Database = {
       clear_range_store:
         | { Args: { p_skus?: string[] }; Returns: number }
         | { Args: { p_skus?: string[]; p_stores?: string[] }; Returns: number }
+      delete_minmax_by_filter: {
+        Args: {
+          p_buying_statuses?: string[]
+          p_classes?: string[]
+          p_departments?: string[]
+          p_divisions?: string[]
+          p_item_types?: string[]
+          p_stores?: string[]
+          p_sub_departments?: string[]
+          p_type_stores?: string[]
+        }
+        Returns: number
+      }
+      delete_minmax_by_stores: {
+        Args: { p_store_names: string[] }
+        Returns: number
+      }
+      get_assignable_users: {
+        Args: never
+        Returns: {
+          full_name: string
+          phone: string
+          user_id: string
+        }[]
+      }
       get_latest_minmax_doc: {
         Args: never
         Returns: {
@@ -1567,61 +2152,56 @@ export type Database = {
           type_store: string
         }[]
       }
-      get_minmax_calc_all:
-        | {
-            Args: { p_n_factor?: number }
-            Returns: {
-              avg_sale: number
-              is_default_min: boolean
-              main_barcode: string
-              max_cal: number
-              min_cal: number
-              product_name_en: string
-              product_name_la: string
-              rank_factor: number
-              rank_sale: string
-              size_store: string
-              sku_code: string
-              store_name: string
-              type_store: string
-              unit_of_measure: string
-              unit_pick: number
-            }[]
-          }
-        | {
-            Args: {
-              p_buying_statuses?: string[]
-              p_item_types?: string[]
-              p_n_factor?: number
-              p_store_names?: string[]
-              p_type_stores?: string[]
-            }
-            Returns: {
-              avg_sale: number
-              buying_status: string
-              is_default_min: boolean
-              item_type: string
-              main_barcode: string
-              max_cal: number
-              min_cal: number
-              product_name_en: string
-              product_name_la: string
-              rank_factor: number
-              rank_sale: string
-              size_store: string
-              sku_code: string
-              store_name: string
-              type_store: string
-              unit_of_measure: string
-              unit_pick: number
-            }[]
-          }
+      get_minmax_calc_all: {
+        Args: {
+          p_barcodes?: string[]
+          p_buying_statuses?: string[]
+          p_classes?: string[]
+          p_departments?: string[]
+          p_divisions?: string[]
+          p_item_types?: string[]
+          p_n_factor?: number
+          p_sku_codes?: string[]
+          p_store_names?: string[]
+          p_sub_departments?: string[]
+          p_type_stores?: string[]
+        }
+        Returns: {
+          avg_sale: number
+          box_qty: number
+          buying_status: string
+          class: string
+          department: string
+          division: string
+          is_default_min: boolean
+          item_type: string
+          main_barcode: string
+          max_cal: number
+          min_cal: number
+          pack_qty: number
+          product_name_en: string
+          product_name_la: string
+          rank_factor: number
+          rank_sale: string
+          size_store: string
+          sku_code: string
+          store_name: string
+          sub_department: string
+          type_store: string
+          unit_of_measure: string
+          unit_pick: number
+        }[]
+      }
       get_minmax_filter_options: {
         Args: never
         Returns: {
           buying_statuses: string[]
+          classes: string[]
+          departments: string[]
+          divisions: string[]
           item_types: string[]
           stores: Json
+          sub_departments: string[]
         }[]
       }
       get_minmax_master: {
@@ -1646,12 +2226,100 @@ export type Database = {
           unit_picking_super: number
         }[]
       }
+      get_minmax_report_grouped: {
+        Args: {
+          p_buying_statuses?: string[]
+          p_classes?: string[]
+          p_departments?: string[]
+          p_divisions?: string[]
+          p_item_types?: string[]
+          p_stores?: string[]
+          p_sub_departments?: string[]
+          p_type_stores?: string[]
+        }
+        Returns: {
+          department: string
+          division: string
+          sku_count: number
+          store_name: string
+          sum_max: number
+          sum_min: number
+          type_store: string
+        }[]
+      }
+      get_minmax_report_summary: {
+        Args: never
+        Returns: {
+          sku_count: number
+          store_name: string
+          sum_max: number
+          sum_min: number
+          type_store: string
+        }[]
+      }
       get_minmax_sales_per_store: {
         Args: never
         Returns: {
           avg_sale: number
           sku_code: string
           store_name: string
+        }[]
+      }
+      get_minmax_view_by_stores: {
+        Args: {
+          p_barcodes?: string[]
+          p_buying_statuses?: string[]
+          p_classes?: string[]
+          p_departments?: string[]
+          p_divisions?: string[]
+          p_item_types?: string[]
+          p_skus?: string[]
+          p_stores?: string[]
+          p_sub_departments?: string[]
+          p_type_stores?: string[]
+        }
+        Returns: {
+          box_qty: number
+          buying_status: string
+          class: string
+          department: string
+          division: string
+          item_type: string
+          main_barcode: string
+          max_val: number
+          min_val: number
+          pack_qty: number
+          product_name_en: string
+          product_name_la: string
+          sku_code: string
+          store_name: string
+          sub_department: string
+          type_store: string
+          unit_of_measure: string
+          unit_pick: number
+        }[]
+      }
+      get_minmax_view_for_calc: {
+        Args: never
+        Returns: {
+          box_qty: number
+          buying_status: string
+          class: string
+          department: string
+          division: string
+          item_type: string
+          main_barcode: string
+          max_val: number
+          min_val: number
+          pack_qty: number
+          product_name_en: string
+          product_name_la: string
+          sku_code: string
+          store_name: string
+          sub_department: string
+          type_store: string
+          unit_of_measure: string
+          unit_pick: number
         }[]
       }
       get_mv_range_store: {
@@ -1736,6 +2404,7 @@ export type Database = {
           unit_of_measure: string
         }[]
       }
+      get_po_cost_filter_options: { Args: never; Returns: Json }
       get_range_store_avg_type: {
         Args: never
         Returns: {
@@ -1746,42 +2415,80 @@ export type Database = {
           sku_code: string
         }[]
       }
-      get_range_store_data: {
-        Args: never
-        Returns: {
-          avg_jmart: number
-          avg_kokkok: number
-          avg_kokkok_fc: number
-          avg_per_store: Json
-          avg_udee: number
-          barcode_box: string
-          barcode_pack: string
-          box_qty: number
-          buyer_code: string
-          buying_status: string
-          class: string
-          department: string
-          division: string
-          division_group: string
-          gm_buyer_code: string
-          item_status: string
-          item_type: string
-          list_price: number
-          main_barcode: string
-          pack_qty: number
-          packing_size_qty: number
-          product_bu: string
-          product_name_en: string
-          product_name_la: string
-          product_owner: string
-          range_data: Json
-          rank_sale: string
-          sku_code: string
-          standard_price: number
-          sub_department: string
-          unit_of_measure: string
-        }[]
-      }
+      get_range_store_data:
+        | {
+            Args: never
+            Returns: {
+              avg_jmart: number
+              avg_kokkok: number
+              avg_kokkok_fc: number
+              avg_per_store: Json
+              avg_udee: number
+              barcode_box: string
+              barcode_pack: string
+              box_qty: number
+              buyer_code: string
+              buying_status: string
+              class: string
+              department: string
+              division: string
+              division_group: string
+              gm_buyer_code: string
+              item_status: string
+              item_type: string
+              list_price: number
+              main_barcode: string
+              pack_qty: number
+              packing_size_qty: number
+              product_bu: string
+              product_name_en: string
+              product_name_la: string
+              product_owner: string
+              range_data: Json
+              rank_sale: string
+              sku_code: string
+              standard_price: number
+              sub_department: string
+              unit_of_measure: string
+            }[]
+          }
+        | {
+            Args: { p_skip_default_filters?: boolean }
+            Returns: {
+              avg_jmart: number
+              avg_kokkok: number
+              avg_kokkok_fc: number
+              avg_per_store: Json
+              avg_udee: number
+              barcode_box: string
+              barcode_pack: string
+              box_qty: number
+              buyer_code: string
+              buying_status: string
+              class: string
+              department: string
+              division: string
+              division_group: string
+              gm_buyer_code: string
+              item_status: string
+              item_type: string
+              list_price: number
+              main_barcode: string
+              pack_qty: number
+              packing_size_qty: number
+              product_bu: string
+              product_name_en: string
+              product_name_la: string
+              product_owner: string
+              range_data: Json
+              rank_sale: string
+              sku_code: string
+              standard_price: number
+              sub_department: string
+              unit_of_measure: string
+            }[]
+          }
+      get_range_store_filter_lists: { Args: never; Returns: Json }
       get_range_store_lists: {
         Args: never
         Returns: {
@@ -1847,6 +2554,7 @@ export type Database = {
           p_divisions?: string[]
           p_item_types?: string[]
           p_order_days?: string[]
+          p_skip_default_filters?: boolean
           p_sku_codes?: string[]
           p_spc_names?: string[]
           p_sub_classes?: string[]
@@ -1892,6 +2600,23 @@ export type Database = {
           vendor_display_name: string
         }[]
       }
+      get_srr_d2s_data_json: {
+        Args: {
+          p_classes?: string[]
+          p_departments?: string[]
+          p_division_groups?: string[]
+          p_divisions?: string[]
+          p_item_types?: string[]
+          p_order_days?: string[]
+          p_skip_default_filters?: boolean
+          p_sku_codes?: string[]
+          p_spc_names?: string[]
+          p_sub_classes?: string[]
+          p_sub_departments?: string[]
+          p_vendor_codes?: string[]
+        }
+        Returns: Json
+      }
       get_srr_data: {
         Args: {
           p_classes?: string[]
@@ -1900,6 +2625,7 @@ export type Database = {
           p_divisions?: string[]
           p_item_types?: string[]
           p_order_days?: string[]
+          p_skip_default_filters?: boolean
           p_sku_codes?: string[]
           p_spc_names?: string[]
           p_sub_classes?: string[]
@@ -1953,35 +2679,84 @@ export type Database = {
           vendor_display_name: string
         }[]
       }
-      get_srr_effective_vendors: {
+      get_srr_data_json: {
         Args: {
-          p_buying_statuses?: string[]
           p_classes?: string[]
           p_departments?: string[]
           p_division_groups?: string[]
           p_divisions?: string[]
           p_item_types?: string[]
-          p_po_groups?: string[]
+          p_order_days?: string[]
+          p_skip_default_filters?: boolean
+          p_sku_codes?: string[]
+          p_spc_names?: string[]
           p_sub_classes?: string[]
           p_sub_departments?: string[]
+          p_vendor_codes?: string[]
         }
-        Returns: {
-          order_day: string
-          spc_name: string
-          vendor_code: string
-        }[]
+        Returns: Json
       }
-      get_srr_hierarchy_options: {
-        Args: never
-        Returns: {
-          class: string
-          department: string
-          division: string
-          division_group: string
-          sub_class: string
-          sub_department: string
-        }[]
-      }
+      get_srr_effective_vendors:
+        | {
+            Args: {
+              p_buying_statuses?: string[]
+              p_classes?: string[]
+              p_departments?: string[]
+              p_division_groups?: string[]
+              p_divisions?: string[]
+              p_item_types?: string[]
+              p_po_groups?: string[]
+              p_sub_classes?: string[]
+              p_sub_departments?: string[]
+            }
+            Returns: {
+              order_day: string
+              spc_name: string
+              vendor_code: string
+            }[]
+          }
+        | {
+            Args: {
+              p_buying_statuses?: string[]
+              p_classes?: string[]
+              p_departments?: string[]
+              p_division_groups?: string[]
+              p_divisions?: string[]
+              p_item_types?: string[]
+              p_po_groups?: string[]
+              p_skip_default_filters?: boolean
+              p_sub_classes?: string[]
+              p_sub_departments?: string[]
+            }
+            Returns: {
+              order_day: string
+              spc_name: string
+              vendor_code: string
+            }[]
+          }
+      get_srr_hierarchy_options:
+        | {
+            Args: never
+            Returns: {
+              class: string
+              department: string
+              division: string
+              division_group: string
+              sub_class: string
+              sub_department: string
+            }[]
+          }
+        | {
+            Args: { p_skip_default_filters?: boolean }
+            Returns: {
+              class: string
+              department: string
+              division: string
+              division_group: string
+              sub_class: string
+              sub_department: string
+            }[]
+          }
       get_srr_pre_filter_options: {
         Args: never
         Returns: {
@@ -2010,7 +2785,176 @@ export type Database = {
         Returns: boolean
       }
       has_role: { Args: { _role: string; _user_id: string }; Returns: boolean }
+      merge_minmax_doc:
+        | {
+            Args: {
+              p_create_if_missing?: boolean
+              p_doc_name?: string
+              p_n_factor?: number
+              p_payload: Json
+              p_user_id?: string
+            }
+            Returns: {
+              doc_id: string
+              doc_name: string
+              merged_count: number
+              total_count: number
+            }[]
+          }
+        | {
+            Args: {
+              p_create_if_missing?: boolean
+              p_doc_id?: string
+              p_doc_name?: string
+              p_force_new?: boolean
+              p_n_factor?: number
+              p_payload: Json
+              p_user_id?: string
+            }
+            Returns: {
+              doc_id: string
+              doc_name: string
+              merged_count: number
+              total_count: number
+            }[]
+          }
+      range_store_view_info: {
+        Args: never
+        Returns: {
+          last_sync: string
+          row_count: number
+        }[]
+      }
+      read_range_store_view:
+        | {
+            Args: {
+              p_avg_stores?: string[]
+              p_buyers?: string[]
+              p_buying_statuses?: string[]
+              p_classes?: string[]
+              p_departments?: string[]
+              p_division_groups?: string[]
+              p_divisions?: string[]
+              p_item_types?: string[]
+              p_limit?: number
+              p_owners?: string[]
+              p_range_stores?: string[]
+              p_skus?: string[]
+              p_sub_departments?: string[]
+              p_type_stores?: string[]
+            }
+            Returns: {
+              avg_jmart: number | null
+              avg_kokkok: number | null
+              avg_kokkok_fc: number | null
+              avg_per_store: Json | null
+              avg_udee: number | null
+              barcode_box: string | null
+              barcode_pack: string | null
+              box_qty: number | null
+              buyer_code: string | null
+              buying_status: string | null
+              class: string | null
+              department: string | null
+              division: string | null
+              division_group: string | null
+              gm_buyer_code: string | null
+              item_status: string | null
+              item_type: string | null
+              list_price: number | null
+              main_barcode: string | null
+              pack_qty: number | null
+              packing_size_qty: number | null
+              product_bu: string | null
+              product_name_en: string | null
+              product_name_la: string | null
+              product_owner: string | null
+              range_data: Json | null
+              rank_sale: string | null
+              sku_code: string
+              standard_price: number | null
+              sub_department: string | null
+              synced_at: string
+              unit_of_measure: string | null
+            }[]
+            SetofOptions: {
+              from: "*"
+              to: "range_store_view"
+              isOneToOne: false
+              isSetofReturn: true
+            }
+          }
+        | {
+            Args: {
+              p_avg_stores?: string[]
+              p_buyers?: string[]
+              p_buying_statuses?: string[]
+              p_classes?: string[]
+              p_departments?: string[]
+              p_division_groups?: string[]
+              p_divisions?: string[]
+              p_item_types?: string[]
+              p_limit?: number
+              p_range_stores?: string[]
+              p_skus?: string[]
+              p_sub_departments?: string[]
+              p_type_stores?: string[]
+            }
+            Returns: {
+              avg_jmart: number | null
+              avg_kokkok: number | null
+              avg_kokkok_fc: number | null
+              avg_per_store: Json | null
+              avg_udee: number | null
+              barcode_box: string | null
+              barcode_pack: string | null
+              box_qty: number | null
+              buyer_code: string | null
+              buying_status: string | null
+              class: string | null
+              department: string | null
+              division: string | null
+              division_group: string | null
+              gm_buyer_code: string | null
+              item_status: string | null
+              item_type: string | null
+              list_price: number | null
+              main_barcode: string | null
+              pack_qty: number | null
+              packing_size_qty: number | null
+              product_bu: string | null
+              product_name_en: string | null
+              product_name_la: string | null
+              product_owner: string | null
+              range_data: Json | null
+              rank_sale: string | null
+              sku_code: string
+              standard_price: number | null
+              sub_department: string | null
+              synced_at: string
+              unit_of_measure: string | null
+            }[]
+            SetofOptions: {
+              from: "*"
+              to: "range_store_view"
+              isOneToOne: false
+              isSetofReturn: true
+            }
+          }
       refresh_mv_range_store: { Args: never; Returns: string }
+      sync_range_store_view: {
+        Args: never
+        Returns: {
+          ms: number
+          rows_synced: number
+        }[]
+      }
+      sync_range_store_view_skus: {
+        Args: { p_skus: string[] }
+        Returns: number
+      }
+      upsert_minmax_unit_pick: { Args: { p_rows: Json }; Returns: number }
+      upsert_minmax_view: { Args: { p_rows: Json }; Returns: number }
     }
     Enums: {
       [_ in never]: never

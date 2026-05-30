@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { TableName, TABLE_COLUMNS, COLUMN_LABELS, getColumnLabel, TABLE_UNIQUE_KEY } from "@/lib/tableConfig";
 import { useToast } from "@/hooks/use-toast";
 import * as XLSX from "xlsx";
+import { applyExcludeFilters, onFilterTemplatesUpdated } from "@/lib/filterTemplates";
 
 export interface SheetInfo {
   name: string;
@@ -53,55 +54,82 @@ export function useDataTable(tableName: TableName) {
     setEditedData({});
   }, [tableName]);
 
+  // Apply current chip-filters / quick search to a supabase query builder
+  const applyChipFilters = (query: any) => {
+    for (const f of filters) {
+      switch (f.operator) {
+        case "contains":
+          query = query.ilike(f.column, `%${f.value}%`);
+          break;
+        case "=":
+          query = query.eq(f.column, f.value);
+          break;
+        case "!=":
+          query = query.neq(f.column, f.value);
+          break;
+        case "starts_with":
+          query = query.ilike(f.column, `${f.value}%`);
+          break;
+        case "ends_with":
+          query = query.ilike(f.column, `%${f.value}`);
+          break;
+        case "is_set":
+          query = query.not(f.column, "is", null);
+          break;
+        case "is_not_set":
+          query = query.is(f.column, null);
+          break;
+      }
+    }
+    if (filters.length === 0 && searchValue) {
+      const searchCols = searchColumns.length > 0 ? searchColumns : columns.slice(0, 5);
+      const orFilter = searchCols.map(col => `${col}.ilike.%${searchValue}%`).join(",");
+      query = query.or(orFilter);
+    }
+    return query;
+  };
+
   const fetchData = async () => {
     setLoading(true);
     try {
       let query: any = supabase.from(tableName).select("*", { count: "exact" });
-
-      // Apply advanced filters
-      for (const f of filters) {
-        switch (f.operator) {
-          case "contains":
-            query = query.ilike(f.column, `%${f.value}%`);
-            break;
-          case "=":
-            query = query.eq(f.column, f.value);
-            break;
-          case "!=":
-            query = query.neq(f.column, f.value);
-            break;
-          case "starts_with":
-            query = query.ilike(f.column, `${f.value}%`);
-            break;
-          case "ends_with":
-            query = query.ilike(f.column, `%${f.value}`);
-            break;
-          case "is_set":
-            query = query.not(f.column, "is", null);
-            break;
-          case "is_not_set":
-            query = query.is(f.column, null);
-            break;
-        }
-      }
-
-      // Legacy quick search
-      if (filters.length === 0 && searchValue) {
-        const searchCols = searchColumns.length > 0 ? searchColumns : columns.slice(0, 5);
-        const orFilter = searchCols.map(col => `${col}.ilike.%${searchValue}%`).join(",");
-        query = query.or(orFilter);
-      }
-
+      query = applyChipFilters(query);
       const { data: rows, count, error } = await query.range(page * pageSize, (page + 1) * pageSize - 1);
       if (error) throw error;
-      setData(rows || []);
-      setTotalCount(count || 0);
+      const filtered = await applyExcludeFilters((rows || []) as any[], tableName);
+      setData(filtered);
+      setTotalCount((count || 0) - (((rows || []).length) - filtered.length));
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
     } finally {
       setLoading(false);
     }
   };
+
+  // Fetch ALL rows matching the current chip-filters (paginated)
+  const fetchAllByFilters = async (): Promise<Record<string, any>[]> => {
+    const all: Record<string, any>[] = [];
+    const fetchSize = 1000;
+    let offset = 0;
+    while (true) {
+      let query: any = supabase.from(tableName).select("*");
+      query = applyChipFilters(query);
+      const { data: rows, error } = await query.range(offset, offset + fetchSize - 1);
+      if (error) throw error;
+      if (!rows || rows.length === 0) break;
+      all.push(...rows);
+      if (rows.length < fetchSize) break;
+      offset += fetchSize;
+    }
+    return all;
+  };
+
+
+  // Re-fetch when filter templates change
+  useEffect(() => {
+    return onFilterTemplatesUpdated(() => { fetchData(); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tableName]);
 
   const addFilter = (filter: SearchFilter) => {
     setFilters(prev => [...prev, filter]);
@@ -176,10 +204,63 @@ export function useDataTable(tableName: TableName) {
         return val;
       };
 
+      // Helper: dedupe a batch by unique key (keep LAST occurrence — same as Excel "latest wins")
+      const dedupeByKey = (rows: Record<string, any>[], key: string) => {
+        const map = new Map<string, Record<string, any>>();
+        for (const r of rows) {
+          const k = r[key];
+          if (k === undefined || k === null || k === "") continue;
+          map.set(String(k), r);
+        }
+        return Array.from(map.values());
+      };
+
+      // Helper: upsert with retry on transient network errors
+      const upsertWithRetry = async (rows: any[], opts: any, attempt = 1): Promise<void> => {
+        const { error } = await supabase.from(tableName).upsert(rows, opts);
+        if (!error) return;
+        const msg = error.message || "";
+        const transient = /fetch|network|timeout|503|504|ECONN|gateway/i.test(msg);
+        if (transient && attempt < 4) {
+          await new Promise(r => setTimeout(r, 500 * attempt));
+          return upsertWithRetry(rows, opts, attempt + 1);
+        }
+        throw error;
+      };
+
       let batchIdx = 0;
-      for (let i = 0; i < jsonData.length; i += batchSize) {
+      const uniqueKey = TABLE_UNIQUE_KEY[tableName];
+
+      // Global dedupe across whole file when using a business unique key — prevents
+      // "ON CONFLICT cannot affect row a second time" at 10k+ rows when duplicates
+      // span batch boundaries. Keep LAST occurrence (latest wins).
+      let workingData = jsonData;
+      if (uniqueKey && (mode === "update" || mode === "insert")) {
+        // We need to map first to know the key value, then dedupe by mapped key.
+        // Cheap: rely on the same dedupeByKey after mapping inside the loop. But to
+        // also prevent cross-batch duplicates, do a pre-pass that maps just the key.
+        const keyExcelCol = Object.entries(columnMap).find(([, db]) => db === uniqueKey)?.[0];
+        if (keyExcelCol) {
+          const seen = new Map<string, Record<string, any>>();
+          for (const row of jsonData) {
+            const k = row[keyExcelCol];
+            if (k === undefined || k === null || k === "") continue;
+            seen.set(String(k).trim(), row);
+          }
+          workingData = Array.from(seen.values());
+          if (workingData.length !== jsonData.length) {
+            console.log(`[Import] Deduped ${jsonData.length - workingData.length} duplicate ${uniqueKey} rows`);
+          }
+        }
+      }
+
+      const totalAfterDedupe = workingData.length;
+      const totalBatchesAfter = Math.ceil(totalAfterDedupe / batchSize);
+      setImportProgress({ current: 0, total: totalAfterDedupe, phase: "กำลังนำเข้า" });
+
+      for (let i = 0; i < workingData.length; i += batchSize) {
         batchIdx++;
-        const batch = jsonData.slice(i, i + batchSize).map(row => {
+        const batch = workingData.slice(i, i + batchSize).map(row => {
           const mapped: Record<string, any> = {};
           for (const [excelCol, dbCol] of Object.entries(columnMap)) {
             if (dbCol && row[excelCol] !== undefined) {
@@ -191,15 +272,13 @@ export function useDataTable(tableName: TableName) {
         }).filter(row => Object.keys(row).length > 0);
 
         if (batch.length > 0) {
-          const uniqueKey = TABLE_UNIQUE_KEY[tableName];
           if (mode === "update" && tableName === "data_master") {
             // data_master uses composite key: sku_code + main_barcode + barcode.
-            // Match existing rows by all 3 keys then UPDATE only provided columns.
             for (const row of batch) {
               const sku = row.sku_code;
               const mb = row.main_barcode;
               const bc = row.barcode;
-              if (!sku || !mb || !bc) continue; // require all 3 keys
+              if (!sku || !mb || !bc) continue;
               const updateData: Record<string, any> = { ...row };
               delete updateData.sku_code;
               delete updateData.main_barcode;
@@ -214,19 +293,11 @@ export function useDataTable(tableName: TableName) {
               if (error) throw error;
             }
           } else if (mode === "update") {
-            const { error } = await supabase.from(tableName).upsert(batch as any, {
-              onConflict: uniqueKey || "id",
-              ignoreDuplicates: false,
-            });
-            if (error) throw error;
+            const finalBatch = uniqueKey ? dedupeByKey(batch, uniqueKey) : batch;
+            await upsertWithRetry(finalBatch, { onConflict: uniqueKey || "id", ignoreDuplicates: false });
           } else if (uniqueKey) {
-            // Insert mode but table has a business unique key — upsert on it
-            // so re-importing the same file does not fail with duplicate errors.
-            const { error } = await supabase.from(tableName).upsert(batch as any, {
-              onConflict: uniqueKey,
-              ignoreDuplicates: false,
-            });
-            if (error) throw error;
+            const finalBatch = dedupeByKey(batch, uniqueKey);
+            await upsertWithRetry(finalBatch, { onConflict: uniqueKey, ignoreDuplicates: false });
           } else {
             const { error } = await supabase.from(tableName).insert(batch as any);
             if (error) throw error;
@@ -235,8 +306,8 @@ export function useDataTable(tableName: TableName) {
         }
         setImportProgress({
           current: processed,
-          total: jsonData.length,
-          phase: `Batch ${batchIdx}/${totalBatches}`,
+          total: totalAfterDedupe,
+          phase: `Batch ${batchIdx}/${totalBatchesAfter}`,
         });
       }
 
@@ -348,6 +419,52 @@ export function useDataTable(tableName: TableName) {
     }
   };
 
+  // Export rows matching current filter chips / quick search
+  const exportByFilters = async () => {
+    try {
+      const allData = await fetchAllByFilters();
+      const exportRows = allData.map(row => {
+        const mapped: Record<string, any> = {};
+        for (const col of columns) mapped[getColumnLabel(col, tableName)] = row[col];
+        return mapped;
+      });
+      if (exportRows.length === 0) {
+        const header: Record<string, any> = {};
+        for (const col of columns) header[getColumnLabel(col, tableName)] = "";
+        exportRows.push(header);
+      }
+      const ws = XLSX.utils.json_to_sheet(exportRows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, tableName);
+      XLSX.writeFile(wb, `${tableName}_filtered.xlsx`);
+      toast({ title: "Export สำเร็จ", description: `${allData.length} แถว` });
+    } catch (err: any) {
+      toast({ title: "Export Error", description: err.message, variant: "destructive" });
+    }
+  };
+
+  // Delete rows matching current filter chips / quick search
+  const deleteByFilters = async () => {
+    try {
+      const allData = await fetchAllByFilters();
+      const ids = allData.map(r => r.id).filter(Boolean) as string[];
+      if (ids.length === 0) {
+        toast({ title: "ไม่มีข้อมูลที่ตรง Filter", variant: "destructive" });
+        return;
+      }
+      const chunk = 500;
+      for (let i = 0; i < ids.length; i += chunk) {
+        const { error } = await supabase.from(tableName).delete().in("id", ids.slice(i, i + chunk));
+        if (error) throw error;
+      }
+      toast({ title: "ลบสำเร็จ", description: `${ids.length} แถว` });
+      await fetchData();
+    } catch (err: any) {
+      toast({ title: "Delete Error", description: err.message, variant: "destructive" });
+    }
+  };
+
+
   const startEditing = (rowId: string) => {
     const row = data.find(r => r.id === rowId);
     if (row) { setEditingRow(rowId); setEditedData({ ...row }); }
@@ -426,9 +543,10 @@ export function useDataTable(tableName: TableName) {
     data, totalCount, loading, importProgress, page, setPage, pageSize, columns,
     searchColumns, setSearchColumns, searchValue, setSearchValue,
     filters, addFilter, removeFilter, updateFilter, clearFilters,
-    fetchData, getSheets, importData, exportData, exportTemplate, clearUI, deleteAll,
+    fetchData, getSheets, importData, exportData, exportByFilters, exportTemplate, clearUI, deleteAll, deleteByFilters,
     editingRow, editedData, startEditing, cancelEditing, saveEditing, updateEditedField,
     pasteToRows, groupByColumn,
+    setData, setTotalCount,
   };
 }
 
@@ -490,4 +608,3 @@ function buildColumnMap(sampleRow: Record<string, any>, tableName: TableName): R
   }
   return map;
 }
-

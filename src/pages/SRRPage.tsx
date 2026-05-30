@@ -27,6 +27,7 @@ import { enrichSkippedSkusAfterRead, buildVendorEmptyResultSkips } from "@/lib/s
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import * as XLSX from "xlsx";
+import { remapRowsByTemplate, type TargetMenu } from "@/lib/exportTemplate";
 import { buildSRRDCFormulaRow, buildSheetWithFormulaRow } from "@/lib/srrExportFormulas";
 import {
   getTodayKey, loadRecentSnapshots, saveSnapshots, updateSnapshotData,
@@ -239,8 +240,8 @@ async function fetchSRRDataRPC(
   onProgress?: (loaded: number) => void,
   skuCodes?: string[] | null
 ): Promise<any[]> {
-  const pageSize = 1000;
-  const parallelism = 4;
+  const { hasActiveFilterTemplates } = await import("@/lib/filterTemplates");
+  const skipDefaults = await hasActiveFilterTemplates("srr_dc");
   const params: any = {
     p_vendor_codes: vendorCodes,
     p_spc_names: spcNames,
@@ -253,6 +254,7 @@ async function fetchSRRDataRPC(
     p_classes: hierarchy?.classes ?? null,
     p_sub_classes: hierarchy?.subClasses ?? null,
     p_sku_codes: skuCodes && skuCodes.length > 0 ? skuCodes : null,
+    p_skip_default_filters: skipDefaults,
   };
 
   // Cache key: normalized sorted params
@@ -269,38 +271,13 @@ async function fetchSRRDataRPC(
     return cached.rows;
   }
 
-  const fetchPage = async (pageIdx: number): Promise<any[]> => {
-    const off = pageIdx * pageSize;
-    const { data, error } = await (supabase
-      .rpc("get_srr_data", params as any) as any)
-      .abortSignal(AbortSignal.timeout(55000))
-      .range(off, off + pageSize - 1);
-    if (error) throw error;
-    return data || [];
-  };
-
-  const allRows: any[] = [];
-  const first = await fetchPage(0);
-  allRows.push(...first);
+  // JSON wrapper — returns one JSONB row containing all data, bypasses PostgREST 1000-row cap
+  const { data, error } = await (supabase
+    .rpc("get_srr_data_json" as any, params as any) as any)
+    .abortSignal(AbortSignal.timeout(240000));
+  if (error) throw error;
+  const allRows: any[] = Array.isArray(data) ? data : (data || []);
   onProgress?.(allRows.length);
-  if (first.length < pageSize) {
-    SRR_RPC_CACHE.set(sortedKey, { ts: Date.now(), rows: allRows });
-    return allRows;
-  }
-
-  let nextPage = 1;
-  while (true) {
-    const wavePages = Array.from({ length: parallelism }, (_, k) => nextPage + k);
-    const results = await Promise.all(wavePages.map(p => fetchPage(p)));
-    let stop = false;
-    for (const pageRows of results) {
-      allRows.push(...pageRows);
-      if (pageRows.length < pageSize) stop = true;
-    }
-    onProgress?.(allRows.length);
-    if (stop) break;
-    nextPage += parallelism;
-  }
   SRR_RPC_CACHE.set(sortedKey, { ts: Date.now(), rows: allRows });
   return allRows;
 }
@@ -819,12 +796,22 @@ export function ListImportPO({
     setSelectedPOs(new Set());
     toast({ title: "ลบเอกสารทั้งหมดสำเร็จ" });
   };
-  const exportSelected = () => {
+  const resolveMenuFromStorageKey = (): TargetMenu | null => {
+    if (storageKey === "srr_saved_pos") return "srr_dc_po";
+    if (storageKey === "srr_saved_pos_special") return "srr_special_po";
+    if (storageKey === "srr_saved_pos_d2s") return "srr_d2s_po";
+    return null;
+  };
+  const exportSelected = async () => {
     const toExport = savedPOs.filter(p => selectedPOs.has(p.id));
     if (toExport.length === 0) { toast({ title: "กรุณาเลือกเอกสาร", variant: "destructive" }); return; }
     const wb = XLSX.utils.book_new();
+    const menu = resolveMenuFromStorageKey();
     const allRows: any[] = [];
-    for (const po of toExport) allRows.push(...po.rows);
+    for (const po of toExport) {
+      const mapped = menu ? await remapRowsByTemplate(menu, po.rows) : po.rows;
+      allRows.push(...mapped);
+    }
     const ws = XLSX.utils.json_to_sheet(allRows);
     applyHighPrecisionFormat(ws);
     XLSX.utils.book_append_sheet(wb, ws, "Combined PO");
@@ -833,9 +820,11 @@ export function ListImportPO({
     XLSX.writeFile(wb, `${ts} - MultiVendor_Combined.xlsx`);
     toast({ title: "Export สำเร็จ", description: `${toExport.length} เอกสาร, ${allRows.length} แถว` });
   };
-  const exportSingle = (po: SavedPO) => {
+  const exportSingle = async (po: SavedPO) => {
     const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(po.rows);
+    const menu = resolveMenuFromStorageKey();
+    const rows = menu ? await remapRowsByTemplate(menu, po.rows) : po.rows;
+    const ws = XLSX.utils.json_to_sheet(rows);
     applyHighPrecisionFormat(ws);
     XLSX.utils.book_append_sheet(wb, ws, po.vendor_code.substring(0, 31));
     XLSX.writeFile(wb, `${po.name}.xlsx`);
@@ -1028,6 +1017,18 @@ export function ListImportPO({
 const srrStateRef = { current: null as any };
 const srrD2SStateRef = { current: null as any };
 
+// Real-time elapsed seconds since `startedAt` (ms). Re-renders every 100ms while mounted.
+function ElapsedTimer({ startedAt }: { startedAt: number }) {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => force((x) => x + 1), 100);
+    return () => clearInterval(id);
+  }, [startedAt]);
+  const s = ((Date.now() - startedAt) / 1000).toFixed(1);
+  return <span className="text-[11px] font-mono tabular-nums text-primary font-semibold">⏱ {s}s</span>;
+}
+
+
 export default function SRRPage({ activeSub = "dc_item" }: { activeSub?: string }) {
   if (activeSub === "direct_item") {
     const SRRDirectPage = React.lazy(() => import("@/pages/SRRDirectPage"));
@@ -1044,6 +1045,18 @@ export default function SRRPage({ activeSub = "dc_item" }: { activeSub?: string 
   if (activeSub === "srr_payment_overdue") {
     const SRRPaymentOverduePage = React.lazy(() => import("@/pages/SRRPaymentOverduePage"));
     return <React.Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>}><SRRPaymentOverduePage /></React.Suspense>;
+  }
+  if (activeSub === "srr_job_assign") {
+    const SRRJobAssignPage = React.lazy(() => import("@/pages/SRRJobAssignPage"));
+    return <React.Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>}><SRRJobAssignPage /></React.Suspense>;
+  }
+  if (activeSub === "srr_send_docs") {
+    const SRRSendDocsPage = React.lazy(() => import("@/pages/SRRSendDocsPage"));
+    return <React.Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>}><SRRSendDocsPage /></React.Suspense>;
+  }
+  if (activeSub === "sar") {
+    const SARPage = React.lazy(() => import("@/pages/SARPage"));
+    return <React.Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>}><SARPage /></React.Suspense>;
   }
   if (activeSub === "help") {
     const SRRHelpPage = React.lazy(() => import("@/pages/SRRHelpPage"));
@@ -1088,11 +1101,18 @@ function SRRDCItemPage() {
   const [calcProgress, setCalcProgress] = useState(0);
   const [loadingPhase, setLoadingPhase] = useState("");
   const [loadingDetail, setLoadingDetail] = useState("");
+  const [calcStartedAt, setCalcStartedAt] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<string>(srrStateRef.current?.activeTab || "read-cal");
   const [docsDialogOpen, setDocsDialogOpen] = useState(false);
   const cancelCalcRef = useRef(false);
   const [dataReady, setDataReady] = useState(false);
   const [dataLoadingMsg, setDataLoadingMsg] = useState("");
+  const [statusBanner, setStatusBanner] = useState<{ title: string; detail?: string } | null>(null);
+  useEffect(() => {
+    if (!statusBanner) return;
+    const t = setTimeout(() => setStatusBanner(null), 12000);
+    return () => clearTimeout(t);
+  }, [statusBanner]);
   const [spcListLoaded, setSpcListLoaded] = useState(false);
 
   // Tab 1: SPC selection for Read & Cal
@@ -1167,6 +1187,10 @@ function SRRDCItemPage() {
   );
   const [importedQtyUnitBySku, setImportedQtyUnitBySku] = useState<Map<string, number>>(
     new Map(srrStateRef.current?.importedQtyUnitBySkuArr || [])
+  );
+  // Override Vendor: per-sku full vendor patch applied to raw rows before calc (leadtime/oc/spc/order_day)
+  const [importedOverrideVendorBySku, setImportedOverrideVendorBySku] = useState<Map<string, any>>(
+    new Map(srrStateRef.current?.importedOverrideVendorBySkuArr || [])
   );
   const [importedSkippedKeys, setImportedSkippedKeys] = useState<string[]>(srrStateRef.current?.importedSkippedKeys || []);
   const [importedSkippedItems, setImportedSkippedItems] = useState<SkippedItem[]>(srrStateRef.current?.importedSkippedItems || []);
@@ -1264,6 +1288,8 @@ function SRRDCItemPage() {
     if (!anyFilter) { setFilterVendorPool(null); return; }
     let cancelled = false;
     (async () => {
+      const { hasActiveFilterTemplates } = await import("@/lib/filterTemplates");
+      const skipDefaults = await hasActiveFilterTemplates("srr_dc");
       const { data, error } = await supabase.rpc("get_srr_effective_vendors" as any, {
         p_item_types:      itemTypeCal.length      ? itemTypeCal      : null,
         p_buying_statuses: buyingStatusCal.length  ? buyingStatusCal  : null,
@@ -1274,6 +1300,7 @@ function SRRDCItemPage() {
         p_sub_departments: subDepartmentCal.length ? subDepartmentCal : null,
         p_classes:         classCal.length         ? classCal         : null,
         p_sub_classes:     subClassCal.length      ? subClassCal      : null,
+        p_skip_default_filters: skipDefaults,
       });
       if (cancelled) return;
       if (error) { console.error("get_srr_effective_vendors error:", error); setFilterVendorPool([]); return; }
@@ -1384,6 +1411,7 @@ function SRRDCItemPage() {
   const [pickingType, setPickingType] = useState("");
   const [exportDescription, setExportDescription] = useState("");
   const [exportVendors, setExportVendors] = useState<string[]>([]);
+  const [exportMaxPerPO, setExportMaxPerPO] = useState<string>("");
 
   // Store Type data from DB
   const [storeTypes, setStoreTypes] = useState<{ ship_to: string; code: string; type_store: string; type_doc: string; store_name?: string }[]>([]);
@@ -1617,7 +1645,9 @@ function SRRDCItemPage() {
         console.error("Pre-filter options load failed:", err);
       }
       try {
-        const { data } = await supabase.rpc("get_srr_hierarchy_options" as any);
+        const { hasActiveFilterTemplates } = await import("@/lib/filterTemplates");
+        const skipDefaults = await hasActiveFilterTemplates("srr_dc");
+        const { data } = await supabase.rpc("get_srr_hierarchy_options" as any, { p_skip_default_filters: skipDefaults });
         if (Array.isArray(data)) setHierarchyRows(data as any);
       } catch (err: any) {
         console.error("Hierarchy options load failed:", err);
@@ -1857,13 +1887,19 @@ function SRRDCItemPage() {
         }
         const poCostMap = new Map<string, number>();
         const qtyUnitMap = new Map<string, number>();
+        const skuToOverrideVendor = new Map<string, string>();
         for (const it of importedItems) {
           const sku = keyToSku.get(it.key);
           if (!sku) continue;
           if (it.qty > 0) qtyMap.set(sku, it.qty);
           if (it.qtyUnit && it.qtyUnit > 0) qtyUnitMap.set(sku, it.qtyUnit);
           if (it.poCost && it.poCost > 0) poCostMap.set(sku, it.poCost);
+          if (it.overrideVendor && it.overrideVendor.trim()) skuToOverrideVendor.set(sku, it.overrideVendor.trim());
         }
+
+        // NOTE: do NOT mutate found[].vendor_code here — we still need the ORIGINAL vendor's SPC
+        // so the DB fetch (by SPC) returns the SKU's raw row. Override patching happens later
+        // on raw rows inside readAndCalc.
 
         const skipped = importedItems.map(i => i.key).filter(k => !matchedKeys.has(k));
         setImportedSkippedKeys(skipped);
@@ -1915,11 +1951,14 @@ function SRRDCItemPage() {
         }
 
         // Now derive vendor_master rows for those vendors → get spc_name + order_day
-        const vendorCodes = [...new Set([...found.values()].map(v => v.vendor_code).filter(Boolean))];
+        // Include ORIGINAL vendors (from data_master) + OVERRIDE vendors so SPC list covers both
+        const baseVendorCodes = [...new Set([...found.values()].map(v => v.vendor_code).filter(Boolean))];
+        const overrideVendorCodes = [...new Set([...skuToOverrideVendor.values()])];
+        const vendorCodes = [...new Set([...baseVendorCodes, ...overrideVendorCodes])];
         setDataLoadingMsg(`กำลังโหลด Vendor Master (${vendorCodes.length})...`);
         setLoadingDetail(`Vendors: ${vendorCodes.slice(0, 4).join(", ")}${vendorCodes.length > 4 ? `, +${vendorCodes.length - 4}` : ""}`);
         const vendorMasters = await fetchAllRows<any>(
-          "vendor_master", "vendor_code, spc_name, order_day, supplier_currency",
+          "vendor_master", "vendor_code, vendor_name_en, vendor_name_la, spc_name, order_day, supplier_currency, leadtime, order_cycle",
           q => q.in("vendor_code", vendorCodes)
         );
         const spcSet = new Set<string>();
@@ -1942,6 +1981,30 @@ function SRRDCItemPage() {
           });
         }
         setVendorInfoList(infoList);
+
+        // Build override map: sku → full vendor patch (only for SKUs with overrideVendor)
+        const overrideMap = new Map<string, any>();
+        for (const [sku, newVendor] of skuToOverrideVendor) {
+          const vm = vmMap.get(newVendor);
+          overrideMap.set(sku, {
+            vendor_code: newVendor,
+            vendor_display_name: vm?.vendor_name_la || vm?.vendor_name_en || newVendor,
+            spc_name: vm?.spc_name || "",
+            order_day: vm?.order_day || "",
+            supplier_currency: vm?.supplier_currency || "",
+            leadtime: Number(vm?.leadtime) || 0,
+            order_cycle: Number(vm?.order_cycle) || 0,
+          });
+        }
+        setImportedOverrideVendorBySku(overrideMap);
+        const missingOv = [...skuToOverrideVendor.values()].filter(vc => !vmMap.has(vc));
+        if (missingOv.length > 0) {
+          toast({
+            title: "Override Vendor: บาง vendor ไม่พบใน Vendor Master",
+            description: `${missingOv.slice(0, 5).join(", ")}${missingOv.length > 5 ? ` ... +${missingOv.length - 5}` : ""} — แถวจะใช้ leadtime/oc = 0`,
+            variant: "destructive",
+          });
+        }
         // Auto-select all derived SPCs so readAndCalc loops them
         const spcs = [...spcSet].sort();
         setSelectedSpcForCal(spcs);
@@ -2042,7 +2105,10 @@ function SRRDCItemPage() {
       setOrderDayOptions(days.map(d => ({ value: d, display: d })));
       setDataReady(true);
       setDataLoadingMsg(""); setLoadingDetail("");
-      toast({ title: "เตรียมข้อมูลเสร็จ", description: `โหลด ${spcsToLoad.length} SPC, ${infoList.length} Vendors` });
+      setStatusBanner({
+        title: "✅ เตรียมข้อมูลเสร็จ",
+        detail: `${infoList.length.toLocaleString()} Vendor · ${spcsToLoad.length.toLocaleString()} SPC Name (รอ Cal)`,
+      });
     } catch (err: any) {
       toast({ title: "Error loading filters", description: err.message, variant: "destructive" });
       setDataLoadingMsg("โหลดข้อมูลล้มเหลว"); setLoadingDetail("");
@@ -2061,8 +2127,9 @@ function SRRDCItemPage() {
 
     setLoading(true);
     cancelCalcRef.current = false;
-    setCalcProgress(0);
+    setCalcProgress(1);
     setLoadingDetail("");
+    setCalcStartedAt(Date.now());
     const t0 = performance.now();
     const dateKey = getDateKey();
     const now = new Date();
@@ -2118,6 +2185,58 @@ function SRRDCItemPage() {
       if (storeNameCal.length > 0) {
         const keepStores = new Set(storeNameCal);
         allRawRows = allRawRows.filter((r: any) => !r.store_name || keepStores.has(r.store_name));
+      }
+
+      // OVERRIDE VENDOR: patch raw rows in-place — swap vendor_code/spc/order_day/leadtime/oc for matched SKUs.
+      // Also re-lookup po_cost from (sku, override_vendor) because the RPC joins po_cost by
+      // data_master.vendor_code (original vendor), so override vendors get no po_cost otherwise.
+      if (isImportMode && importedOverrideVendorBySku.size > 0) {
+        // Fetch po_cost for all (sku, override_vendor) pairs
+        const ovPairs: { sku: string; vendor: string }[] = [];
+        for (const [sku, ov] of importedOverrideVendorBySku) {
+          if (sku && ov?.vendor_code) ovPairs.push({ sku, vendor: ov.vendor_code });
+        }
+        const pcMap = new Map<string, { moq: number | null; po_cost: number | null; po_cost_unit: number | null }>();
+        if (ovPairs.length > 0) {
+          setDataLoadingMsg(`กำลังโหลด PO Cost ของ Override Vendor (${ovPairs.length} รายการ)...`);
+          const ovSkus = [...new Set(ovPairs.map(p => p.sku))];
+          const ovVendors = [...new Set(ovPairs.map(p => p.vendor))];
+          try {
+            const pcRows = await fetchAllRows<any>(
+              "po_cost",
+              "item_id, vendor, moq, po_cost, po_cost_unit, updated_at",
+              q => q.in("item_id", ovSkus).in("vendor", ovVendors).order("updated_at", { ascending: false })
+            );
+            // keep latest per (item_id, vendor)
+            for (const r of pcRows) {
+              const k = `${r.item_id}__${r.vendor}`;
+              if (!pcMap.has(k)) pcMap.set(k, { moq: r.moq, po_cost: r.po_cost, po_cost_unit: r.po_cost_unit });
+            }
+          } catch (e) {
+            console.warn("[SRR DC] Override Vendor po_cost lookup failed:", e);
+          }
+          setDataLoadingMsg(""); setLoadingDetail("");
+        }
+        for (const r of allRawRows) {
+          const ov = importedOverrideVendorBySku.get(r.sku_code);
+          if (!ov) continue;
+          r.vendor_code = ov.vendor_code;
+          r.vendor_display_name = ov.vendor_display_name || ov.vendor_code;
+          r.spc_name = ov.spc_name || r.spc_name;
+          r.order_day = ov.order_day || r.order_day;
+          r.leadtime = ov.leadtime;
+          r.order_cycle = ov.order_cycle;
+          const pc = pcMap.get(`${r.sku_code}__${ov.vendor_code}`);
+          if (pc) {
+            r.moq = pc.moq ?? r.moq;
+            r.po_cost = pc.po_cost ?? null;
+            r.po_cost_unit = pc.po_cost_unit ?? (pc.po_cost != null && pc.moq ? Number(pc.po_cost) / Number(pc.moq) : null);
+          } else {
+            // No po_cost row for override vendor — clear stale values from original vendor
+            r.po_cost = null;
+            r.po_cost_unit = null;
+          }
+        }
       }
 
       // Group rows by SPC for per-SPC processing
@@ -2202,8 +2321,10 @@ function SRRDCItemPage() {
             const moq = r.moq || 1;
             const next = { ...r };
             if (pc && pc > 0) {
-              next.po_cost = pc;
-              next.po_cost_unit = moq > 0 ? pc / moq : pc;
+              // Imported PO Cost = ราคาต่อหน่วย (Po Cost Unit) โดยตรง — ไม่หาร MOQ
+              // po_cost (รวม) คำนวณกลับเป็น pc * moq เพื่อให้สอดคล้องกับสูตร po_cost_unit = po_cost / moq
+              next.po_cost_unit = pc;
+              next.po_cost = moq > 0 ? pc * moq : pc;
             }
             if (q && q > 0) {
               next.order_uom_edit = String(q);
@@ -2413,14 +2534,18 @@ function SRRDCItemPage() {
       setCalcProgress(100);
       const totalItems = newDocs.reduce((s, d) => s + d.item_count, 0);
       const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+      const uniqVendors = new Set(newDocs.map(d => d.vendor_code)).size;
+      const uniqSpcs = new Set(newDocs.map(d => d.spc_name)).size;
+      const uniqSkus = new Set<string>();
+      for (const d of newDocs) for (const r of d.data) if (r.sku_code) uniqSkus.add(r.sku_code);
       setLoadingDetail(`เสร็จสิ้น ${elapsed}s · ${totalItems.toLocaleString()} rows`);
-      toast({
-        title: `✅ Read & Cal สำเร็จ (${elapsed}s)`,
-        description: `${newDocs.length} Vendor Docs · ${totalItems.toLocaleString()} รายการ · บันทึกแล้ว`,
+      setStatusBanner({
+        title: `✅ คำนวณเสร็จ (${elapsed}s)`,
+        detail: `${uniqVendors.toLocaleString()} Vendor · ${uniqSkus.size.toLocaleString()} SKU · ${uniqSpcs.toLocaleString()} SPC · ${newDocs.length} Vendor Docs · บันทึกแล้ว`,
       });
       if (newDocs.length > 0) setDocsDialogOpen(true);
 
-      setTimeout(() => { setCalcProgress(0); setLoadingPhase(""); setLoadingDetail(""); }, 2000);
+      setTimeout(() => { setCalcProgress(0); setLoadingPhase(""); setLoadingDetail(""); setCalcStartedAt(null); }, 2000);
     } catch (err: any) {
       console.error("[SRR DC] Read & Cal failed:", err);
       const msg = String(err?.message || err || "");
@@ -2464,6 +2589,7 @@ function SRRDCItemPage() {
       }
     } finally {
       setLoading(false);
+      setCalcStartedAt(null);
     }
   };
 
@@ -2573,7 +2699,7 @@ function SRRDCItemPage() {
   // ============================================================
   // TAB 2: SHOW — load from selected VendorDocuments
   // ============================================================
-  const showFilteredData = () => {
+  const showFilteredData = async () => {
     // Tab 2 reads only docs from its own mode toggle (filter / vendor / import)
     if (docsForTab2.length === 0) {
       const modeLabel = tab2Mode === "filter" ? "Mode Filter" : tab2Mode === "vendor" ? "Import Vendor" : "Import Barcode";
@@ -2620,7 +2746,28 @@ function SRRDCItemPage() {
       if (d !== 0) return d;
       return (a.po_group || "").localeCompare(b.po_group || "");
     });
-    setShowData(merged);
+
+    // Overlay Pack/Box (qty) from latest Range Store — fixes legacy docs saved without pack/box
+    try {
+      const pbMap = await getLatestRangeStorePackBox();
+      if (pbMap.size > 0) {
+        merged = merged.map(r => {
+          if (r.pack != null && r.box != null) return r;
+          const pb = pbMap.get(r.sku_code);
+          if (!pb) return r;
+          return {
+            ...r,
+            pack: r.pack != null ? r.pack : pb.pack,
+            box: r.box != null ? r.box : pb.box,
+          };
+        });
+      }
+    } catch (e) {
+      console.warn("[SRR DC Show] pack/box overlay failed:", e);
+    }
+
+    const _excluded = await (await import("@/lib/filterTemplates")).applyExcludeFilters(merged as any[], "srr_dc");
+    setShowData(_excluded as any);
     setPage(0);
     setSelectedRows(new Set());
     setActiveCell(null);
@@ -3103,29 +3250,41 @@ function SRRDCItemPage() {
           cost0Rows.push({ row: r, qty });
         }
         if (validRows.length === 0) continue;
-        const exportRows = validRows.map((r, idx) => {
-          const up = unitPackMap.get(r.sku_code);
-          const upBarcode = up?.barcode || r.barcode_unit;
-          const upUom = up?.uom || r.unit_of_measure || "";
-          return {
-            "partner_id": idx === 0 ? vc : "",
-            "Picking Type / Database ID": idx === 0 ? pickingDbId : "",
-            "Inter Transfer": idx === 0 ? interTransfer : "",
-            "PO Group": idx === 0 ? groupKey : "",
-            "Products to Purchase/barcode": upBarcode,
-            "Products to Purchase/Product": upBarcode,
-            "Product name": r.product_name_la,
-            "Products to Purchase/UoM": upUom,
-            "Products to Purchase/Exclude In Package": "True",
-            "Products to Purchase/Quantity": r.order_uom_edit && !isNaN(Number(r.order_uom_edit))
-              ? Number(r.order_uom_edit) * (r.moq || 1)
-              : r.final_suggest_qty,
-            "Products to Purchase/Unit Price": r.po_cost_unit,
-            "assigned_to": idx === 0 ? spcManager : "",
-            "description": idx === 0 ? exportDescription : "",
-          };
-        });
-        allExportRows.push(...exportRows);
+        const maxPerPO = Math.max(0, Math.floor(Number(exportMaxPerPO) || 0));
+        const chunks: SRRRow[][] = [];
+        if (maxPerPO > 0) {
+          for (let i = 0; i < validRows.length; i += maxPerPO) chunks.push(validRows.slice(i, i + maxPerPO));
+        } else {
+          chunks.push(validRows);
+        }
+        for (let ci = 0; ci < chunks.length; ci++) {
+          const chunkRows = chunks[ci];
+          const chunkGroupKey = chunks.length > 1 ? `${groupKey}-${ci + 1}` : groupKey;
+          const exportRows = chunkRows.map((r, idx) => {
+            const up = unitPackMap.get(r.sku_code);
+            const upBarcode = up?.barcode || r.barcode_unit;
+            const upUom = up?.uom || r.unit_of_measure || "";
+            return {
+              "partner_id": idx === 0 ? vc : "",
+              "Picking Type / Database ID": idx === 0 ? pickingDbId : "",
+              "Inter Transfer": idx === 0 ? interTransfer : "",
+              "PO Group": idx === 0 ? chunkGroupKey : "",
+              "Products to Purchase/barcode": upBarcode,
+              "Products to Purchase/Product": upBarcode,
+              "Product name": r.product_name_la,
+              "Products to Purchase/UoM": upUom,
+              "Products to Purchase/Exclude In Package": "True",
+              "Products to Purchase/Quantity": r.order_uom_edit && !isNaN(Number(r.order_uom_edit))
+                ? Number(r.order_uom_edit) * (r.moq || 1)
+                : r.final_suggest_qty,
+              "Products to Purchase/Unit Price": r.po_cost_unit,
+              "assigned_to": idx === 0 ? spcManager : "",
+              "description": idx === 0 ? exportDescription : "",
+            };
+          });
+          const mappedExportRows = await remapRowsByTemplate("srr_dc_po", exportRows);
+          allExportRows.push(...mappedExportRows);
+        }
       }
 
       // Persist Cost=0 rows as a Doc per vendor under DC localStorage key
@@ -3480,6 +3639,7 @@ function SRRDCItemPage() {
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs text-muted-foreground font-medium truncate">{loadingPhase}</span>
             <div className="flex items-center gap-2 shrink-0">
+              {calcStartedAt != null && <ElapsedTimer startedAt={calcStartedAt} />}
               <span className="text-xs font-semibold tabular-nums">{calcProgress}%</span>
               <Button size="sm" variant="destructive" onClick={cancelCalc} className="h-6 text-xs px-2">
                 <X className="w-3 h-3 mr-1" /> Cancel
@@ -3507,6 +3667,25 @@ function SRRDCItemPage() {
               ▸ {loadingDetail}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Status banner — Prepare/Cal completion (replaces right-side toast) */}
+      {statusBanner && (
+        <div className="px-4 py-1.5 bg-emerald-500/10 border-b border-emerald-500/30 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 truncate">{statusBanner.title}</span>
+            {statusBanner.detail && (
+              <span className="text-[11px] text-emerald-700/80 dark:text-emerald-400/80 truncate">· {statusBanner.detail}</span>
+            )}
+          </div>
+          <button
+            onClick={() => setStatusBanner(null)}
+            className="text-emerald-700/70 hover:text-emerald-700 dark:text-emerald-400/70 shrink-0"
+            aria-label="ปิด"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
 
@@ -3545,7 +3724,7 @@ function SRRDCItemPage() {
                     setImportMode(m);
                     setDataReady(false);
                     if (m !== "import") {
-                      setImportedItems([]); setImportedSkuSet(new Set()); setImportedQtyBySku(new Map()); setImportedPoCostBySku(new Map()); setImportedSkippedKeys([]); setImportedSkippedItems([]);
+                      setImportedItems([]); setImportedSkuSet(new Set()); setImportedQtyBySku(new Map()); setImportedPoCostBySku(new Map()); setImportedOverrideVendorBySku(new Map()); setImportedSkippedKeys([]); setImportedSkippedItems([]);
                     }
                     if (m !== "vendor") { setImportedVendors([]); setImportedSkippedItems([]); }
                     if (m === "filter") { setVendorFilterCal([]); }
@@ -4292,6 +4471,22 @@ function SRRDCItemPage() {
               <label className="text-xs font-medium text-muted-foreground mb-1 block">Description</label>
               <Input placeholder="พิมพ์คำอธิบาย..." value={exportDescription}
                 onChange={e => setExportDescription(e.target.value)} className="text-xs" />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                จำนวนรายการต่อ 1 PO (ตัดพีโอ)
+              </label>
+              <Input
+                type="number"
+                min={0}
+                placeholder="ว่าง = ไม่ตัด (รวมทุกแถวเป็น PO เดียวต่อกลุ่ม)"
+                value={exportMaxPerPO}
+                onChange={e => setExportMaxPerPO(e.target.value)}
+                className="text-xs"
+              />
+              <p className="text-[10px] text-muted-foreground mt-1">
+                หากกำหนดตัวเลข N: ทุก N แถวจะถูกตัดเป็น PO ใหม่ (แถวแรกของแต่ละชุดจะเป็น header)
+              </p>
             </div>
             <div>
               <label className="text-xs font-medium text-muted-foreground mb-1 block">

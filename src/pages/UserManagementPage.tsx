@@ -56,7 +56,24 @@ const TAB_DEFS: Record<string, { label: string; tabs: { key: string; label: stri
       { key: "ro", label: "RO Doc" },
     ],
   },
+  sar: {
+    label: "SAR",
+    tabs: [
+      { key: "read-cal", label: "Read & Cal" },
+      { key: "on-order-dc", label: "On Order DC" },
+      { key: "sku-no-order", label: "SKU No Order" },
+    ],
+  },
+  srr_send_docs: {
+    label: "ส่งเอกสาร",
+    tabs: [
+      { key: "origin", label: "ต้นทาง" },
+      { key: "destination", label: "ปลายทาง" },
+      { key: "compare", label: "เปรียบเทียบ" },
+    ],
+  },
 };
+
 
 const COLUMN_DEFS: Record<string, { label: string; columns: { key: string; label: string }[] }> = {
   dc_item: {
@@ -115,12 +132,16 @@ interface RoleOption { id: string; role_name: string; description?: string | nul
 interface MenuRow { id: string; menu_code: string; menu_name: string; menu_type: string; parent_id: string | null; sort_order: number; }
 interface RmpRow {
   id?: string; role_id: string; menu_id: string;
-  can_view: boolean; can_create: boolean; can_edit: boolean; can_delete: boolean; can_export: boolean;
+  can_view: boolean; can_create: boolean; can_edit: boolean; can_delete: boolean; can_export: boolean; can_import: boolean;
 }
 interface ColPermRow { id?: string; role_id: string; menu_code: string; column_key: string; access: "hidden" | "read" | "write"; }
 interface TabPermRow {
   id?: string; role_id: string; menu_code: string; tab_key: string;
-  can_view: boolean; can_create: boolean; can_edit: boolean; can_delete: boolean; can_export: boolean;
+  can_view: boolean; can_create: boolean; can_edit: boolean; can_delete: boolean; can_export: boolean; can_import: boolean;
+}
+interface DivAccessRow {
+  id?: string; role_id: string; division: string;
+  can_view: boolean; can_create: boolean; can_edit: boolean; can_delete: boolean; can_export: boolean; can_import: boolean;
 }
 
 export default function UserManagementPage() {
@@ -133,11 +154,18 @@ export default function UserManagementPage() {
   const [roles, setRoles] = useState<RoleOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [showActiveOnly, setShowActiveOnly] = useState(false);
+  const [showPendingOnly, setShowPendingOnly] = useState(false);
   const [editUser, setEditUser] = useState<UserRow | null>(null);
   const [editRole, setEditRole] = useState("");
   const [editSpc, setEditSpc] = useState("");
   const [editVendor, setEditVendor] = useState("");
   const [editActive, setEditActive] = useState(true);
+  const [editFullName, setEditFullName] = useState("");
+  const [editEmail, setEditEmail] = useState("");
+  const [editPhone, setEditPhone] = useState("");
+  const [editDepartment, setEditDepartment] = useState("");
+  const [editPassword, setEditPassword] = useState("");
   const [saving, setSaving] = useState(false);
 
   // ===== ROLES =====
@@ -146,6 +174,9 @@ export default function UserManagementPage() {
   const [rmpRows, setRmpRows] = useState<RmpRow[]>([]);
   const [colPerms, setColPerms] = useState<ColPermRow[]>([]);
   const [tabPerms, setTabPerms] = useState<TabPermRow[]>([]);
+  const [divAccess, setDivAccess] = useState<DivAccessRow[]>([]);
+  const [allDivisions, setAllDivisions] = useState<string[]>([]);
+  const [divSearch, setDivSearch] = useState("");
   const [savingRole, setSavingRole] = useState(false);
   const [newRoleName, setNewRoleName] = useState("");
   const [showNewRole, setShowNewRole] = useState(false);
@@ -179,18 +210,35 @@ export default function UserManagementPage() {
     setMenus((data || []) as MenuRow[]);
   };
 
-  useEffect(() => { loadUsers(); loadMenus(); }, []);
+  const loadDivisions = async () => {
+    // Get distinct non-null divisions from data_master
+    const { data } = await (supabase as any)
+      .from("data_master")
+      .select("division")
+      .not("division", "is", null)
+      .limit(5000);
+    const set = new Set<string>();
+    for (const r of (data || []) as any[]) {
+      const d = (r.division || "").trim();
+      if (d) set.add(d);
+    }
+    setAllDivisions(Array.from(set).sort());
+  };
+
+  useEffect(() => { loadUsers(); loadMenus(); loadDivisions(); }, []);
 
   const loadRolePerms = async (roleId: string) => {
-    if (!roleId) { setRmpRows([]); setColPerms([]); setTabPerms([]); return; }
-    const [rmpRes, cpRes, tpRes] = await Promise.all([
+    if (!roleId) { setRmpRows([]); setColPerms([]); setTabPerms([]); setDivAccess([]); return; }
+    const [rmpRes, cpRes, tpRes, daRes] = await Promise.all([
       supabase.from("role_menu_permissions").select("*").eq("role_id", roleId),
       (supabase as any).from("column_permissions").select("*").eq("role_id", roleId),
       (supabase as any).from("tab_permissions").select("*").eq("role_id", roleId),
+      (supabase as any).from("role_division_access").select("*").eq("role_id", roleId),
     ]);
     setRmpRows((rmpRes.data || []) as RmpRow[]);
     setColPerms((cpRes.data || []) as ColPermRow[]);
     setTabPerms((tpRes.data || []) as TabPermRow[]);
+    setDivAccess((daRes.data || []) as DivAccessRow[]);
   };
 
   useEffect(() => { loadRolePerms(selectedRole); }, [selectedRole]);
@@ -201,12 +249,39 @@ export default function UserManagementPage() {
     setEditSpc(u.spc_name || "");
     setEditVendor(u.vendor_code || "");
     setEditActive(u.is_active);
+    setEditFullName(u.full_name || "");
+    setEditEmail(u.email || "");
+    setEditPhone(u.phone || "");
+    setEditDepartment(u.department || "");
+    setEditPassword("");
   };
 
   const saveUser = async () => {
     if (!editUser) return;
     setSaving(true);
     try {
+      // 1) Auth + profile main fields (via edge function, admin only)
+      const needAuth =
+        (editEmail && editEmail !== editUser.email) ||
+        (editPassword && editPassword.length >= 6) ||
+        editFullName !== (editUser.full_name || "") ||
+        editPhone !== (editUser.phone || "") ||
+        editDepartment !== (editUser.department || "");
+      if (needAuth) {
+        const { data, error } = await supabase.functions.invoke("admin-update-user", {
+          body: {
+            target_user_id: editUser.user_id,
+            email: editEmail !== editUser.email ? editEmail : undefined,
+            password: editPassword && editPassword.length >= 6 ? editPassword : undefined,
+            full_name: editFullName,
+            phone: editPhone,
+            department: editDepartment,
+          },
+        });
+        if (error) throw error;
+        if ((data as any)?.error) throw new Error((data as any).error);
+      }
+      // 2) SPC / Vendor / Active (direct, admin policy allows it)
       await supabase.from("profiles").update({
         spc_name: editSpc || null, vendor_code: editVendor || null, is_active: editActive,
       }).eq("user_id", editUser.user_id);
@@ -239,7 +314,7 @@ export default function UserManagementPage() {
   // ===== ROLE matrix helpers =====
   const getRmp = (menuId: string): RmpRow => {
     const r = rmpRows.find(x => x.menu_id === menuId);
-    return r || { role_id: selectedRole, menu_id: menuId, can_view: false, can_create: false, can_edit: false, can_delete: false, can_export: false };
+    return r || { role_id: selectedRole, menu_id: menuId, can_view: false, can_create: false, can_edit: false, can_delete: false, can_export: false, can_import: false };
   };
   const setRmpField = (menuId: string, field: keyof RmpRow, value: boolean) => {
     setRmpRows(prev => {
@@ -247,13 +322,13 @@ export default function UserManagementPage() {
       if (idx >= 0) {
         const next = [...prev];
         next[idx] = { ...next[idx], [field]: value };
-        // If turning off view, also turn off the rest
         if (field === "can_view" && !value) {
-          next[idx] = { ...next[idx], can_create: false, can_edit: false, can_delete: false, can_export: false };
+          next[idx] = { ...next[idx], can_create: false, can_edit: false, can_delete: false, can_export: false, can_import: false };
         }
         return next;
       }
-      return [...prev, { role_id: selectedRole, menu_id: menuId, can_view: false, can_create: false, can_edit: false, can_delete: false, can_export: false, [field]: value }];
+      const base: RmpRow = { role_id: selectedRole, menu_id: menuId, can_view: false, can_create: false, can_edit: false, can_delete: false, can_export: false, can_import: false };
+      return [...prev, { ...base, [field]: value }];
     });
   };
 
@@ -271,7 +346,7 @@ export default function UserManagementPage() {
 
   const getTabPerm = (menuCode: string, tabKey: string): TabPermRow => {
     const r = tabPerms.find(x => x.menu_code === menuCode && x.tab_key === tabKey);
-    return r || { role_id: selectedRole, menu_code: menuCode, tab_key: tabKey, can_view: false, can_create: false, can_edit: false, can_delete: false, can_export: false };
+    return r || { role_id: selectedRole, menu_code: menuCode, tab_key: tabKey, can_view: false, can_create: false, can_edit: false, can_delete: false, can_export: false, can_import: false };
   };
   const setTabPermField = (menuCode: string, tabKey: string, field: keyof TabPermRow, value: boolean) => {
     setTabPerms(prev => {
@@ -280,11 +355,47 @@ export default function UserManagementPage() {
         const next = [...prev];
         next[idx] = { ...next[idx], [field]: value };
         if (field === "can_view" && !value) {
-          next[idx] = { ...next[idx], can_create: false, can_edit: false, can_delete: false, can_export: false };
+          next[idx] = { ...next[idx], can_create: false, can_edit: false, can_delete: false, can_export: false, can_import: false };
         }
         return next;
       }
-      return [...prev, { role_id: selectedRole, menu_code: menuCode, tab_key: tabKey, can_view: false, can_create: false, can_edit: false, can_delete: false, can_export: false, [field]: value } as TabPermRow];
+      const base: TabPermRow = { role_id: selectedRole, menu_code: menuCode, tab_key: tabKey, can_view: false, can_create: false, can_edit: false, can_delete: false, can_export: false, can_import: false };
+      return [...prev, { ...base, [field]: value }];
+    });
+  };
+
+  const getDivAccess = (division: string): DivAccessRow => {
+    const r = divAccess.find(x => x.division === division);
+    return r || { role_id: selectedRole, division, can_view: false, can_create: false, can_edit: false, can_delete: false, can_export: false, can_import: false };
+  };
+  const setDivAccessField = (division: string, field: keyof DivAccessRow, value: boolean) => {
+    setDivAccess(prev => {
+      const idx = prev.findIndex(x => x.division === division);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], [field]: value };
+        if (field === "can_view" && !value) {
+          next[idx] = { ...next[idx], can_create: false, can_edit: false, can_delete: false, can_export: false, can_import: false };
+        }
+        return next;
+      }
+      const base: DivAccessRow = { role_id: selectedRole, division, can_view: false, can_create: false, can_edit: false, can_delete: false, can_export: false, can_import: false };
+      return [...prev, { ...base, [field]: value }];
+    });
+  };
+  const toggleAllDivisions = (field: keyof DivAccessRow, value: boolean) => {
+    const visible = (divSearch.trim() ? allDivisions.filter(d => d.toLowerCase().includes(divSearch.toLowerCase())) : allDivisions);
+    setDivAccess(prev => {
+      const map = new Map(prev.map(r => [r.division, r]));
+      for (const d of visible) {
+        const cur = map.get(d) || { role_id: selectedRole, division: d, can_view: false, can_create: false, can_edit: false, can_delete: false, can_export: false, can_import: false };
+        const next = { ...cur, [field]: value } as DivAccessRow;
+        if (field === "can_view" && !value) {
+          next.can_create = false; next.can_edit = false; next.can_delete = false; next.can_export = false; next.can_import = false;
+        }
+        map.set(d, next);
+      }
+      return Array.from(map.values());
     });
   };
 
@@ -292,11 +403,10 @@ export default function UserManagementPage() {
     if (!selectedRole) return;
     setSavingRole(true);
     try {
-      // Wipe & reinsert (simple + safe given small N)
       await supabase.from("role_menu_permissions").delete().eq("role_id", selectedRole);
       const rmpInsert = rmpRows
-        .filter(r => r.can_view || r.can_create || r.can_edit || r.can_delete || r.can_export)
-        .map(r => ({ role_id: selectedRole, menu_id: r.menu_id, can_view: r.can_view, can_create: r.can_create, can_edit: r.can_edit, can_delete: r.can_delete, can_export: r.can_export }));
+        .filter(r => r.can_view || r.can_create || r.can_edit || r.can_delete || r.can_export || r.can_import)
+        .map(r => ({ role_id: selectedRole, menu_id: r.menu_id, can_view: r.can_view, can_create: r.can_create, can_edit: r.can_edit, can_delete: r.can_delete, can_export: r.can_export, can_import: r.can_import }));
       if (rmpInsert.length) await (supabase as any).from("role_menu_permissions").insert(rmpInsert);
 
       await (supabase as any).from("column_permissions").delete().eq("role_id", selectedRole);
@@ -307,9 +417,15 @@ export default function UserManagementPage() {
 
       await (supabase as any).from("tab_permissions").delete().eq("role_id", selectedRole);
       const tpInsert = tabPerms
-        .filter(t => t.can_view || t.can_create || t.can_edit || t.can_delete || t.can_export)
-        .map(t => ({ role_id: selectedRole, menu_code: t.menu_code, tab_key: t.tab_key, can_view: t.can_view, can_create: t.can_create, can_edit: t.can_edit, can_delete: t.can_delete, can_export: t.can_export }));
+        .filter(t => t.can_view || t.can_create || t.can_edit || t.can_delete || t.can_export || t.can_import)
+        .map(t => ({ role_id: selectedRole, menu_code: t.menu_code, tab_key: t.tab_key, can_view: t.can_view, can_create: t.can_create, can_edit: t.can_edit, can_delete: t.can_delete, can_export: t.can_export, can_import: t.can_import }));
       if (tpInsert.length) await (supabase as any).from("tab_permissions").insert(tpInsert);
+
+      await (supabase as any).from("role_division_access").delete().eq("role_id", selectedRole);
+      const daInsert = divAccess
+        .filter(d => d.can_view || d.can_create || d.can_edit || d.can_delete || d.can_export || d.can_import)
+        .map(d => ({ role_id: selectedRole, division: d.division, can_view: d.can_view, can_create: d.can_create, can_edit: d.can_edit, can_delete: d.can_delete, can_export: d.can_export, can_import: d.can_import }));
+      if (daInsert.length) await (supabase as any).from("role_division_access").insert(daInsert);
 
       toast({ title: "บันทึกสิทธิ์เรียบร้อย" });
       await refreshPermissions();
@@ -372,10 +488,15 @@ export default function UserManagementPage() {
 
   if (!isAdmin) return <div className="p-8 text-center text-muted-foreground">ไม่มีสิทธิ์เข้าถึง</div>;
 
-  const filtered = users.filter(u =>
-    !search || u.full_name.toLowerCase().includes(search.toLowerCase()) ||
-    u.email.toLowerCase().includes(search.toLowerCase())
-  );
+  const filtered = users.filter(u => {
+    const matchSearch = !search || u.full_name.toLowerCase().includes(search.toLowerCase()) ||
+      u.email.toLowerCase().includes(search.toLowerCase());
+    if (!matchSearch) return false;
+    const isPending = !u.is_active || !u.role_id;
+    if (showActiveOnly && (!u.is_active || isPending)) return false;
+    if (showPendingOnly && !isPending) return false;
+    return true;
+  });
 
   const roleBadgeColor: Record<string, string> = {
     Admin: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
@@ -410,10 +531,20 @@ export default function UserManagementPage() {
 
         {/* USERS TAB */}
         <TabsContent value="users" className="flex-1 overflow-auto p-4 m-0">
-          <div className="flex justify-between items-center mb-3">
+          <div className="flex justify-between items-center mb-3 gap-3 flex-wrap">
             <div className="relative w-72">
               <Search className="absolute left-2.5 top-2.5 w-4 h-4 text-muted-foreground" />
               <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="ค้นหาชื่อ / Email" className="pl-9 h-9" />
+            </div>
+            <div className="flex items-center gap-4 text-xs">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <Checkbox checked={showActiveOnly} onCheckedChange={(c) => { setShowActiveOnly(!!c); if (c) setShowPendingOnly(false); }} />
+                Show เฉพาะ Active
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <Checkbox checked={showPendingOnly} onCheckedChange={(c) => { setShowPendingOnly(!!c); if (c) setShowActiveOnly(false); }} />
+                Show เฉพาะรออนุมัติ
+              </label>
             </div>
           </div>
 
@@ -517,11 +648,12 @@ export default function UserManagementPage() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>เมนู</TableHead>
-                      <TableHead className="text-center w-20">View</TableHead>
-                      <TableHead className="text-center w-20">Create</TableHead>
-                      <TableHead className="text-center w-20">Edit</TableHead>
-                      <TableHead className="text-center w-20">Delete</TableHead>
-                      <TableHead className="text-center w-20">Export</TableHead>
+                      <TableHead className="text-center w-16">View</TableHead>
+                      <TableHead className="text-center w-16">Create</TableHead>
+                      <TableHead className="text-center w-16">Edit</TableHead>
+                      <TableHead className="text-center w-16">Delete</TableHead>
+                      <TableHead className="text-center w-16">Export</TableHead>
+                      <TableHead className="text-center w-16">Import</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -535,7 +667,7 @@ export default function UserManagementPage() {
                                 <div className="font-bold text-primary">{main.menu_name}</div>
                                 <div className="text-[10px] text-muted-foreground">{main.menu_code} · Main</div>
                               </TableCell>
-                              {(["can_view","can_create","can_edit","can_delete","can_export"] as const).map(f => (
+                              {(["can_view","can_create","can_edit","can_delete","can_export","can_import"] as const).map(f => (
                                 <TableCell key={f} className="text-center">
                                   <Checkbox
                                     checked={(r as any)[f]}
@@ -555,7 +687,7 @@ export default function UserManagementPage() {
                                 <div className="font-medium pl-5 border-l-2 border-primary/20 ml-1">↳ {s.menu_name}</div>
                                 <div className="text-[10px] text-muted-foreground pl-6">{s.menu_code}</div>
                               </TableCell>
-                              {(["can_view","can_create","can_edit","can_delete","can_export"] as const).map(f => (
+                              {(["can_view","can_create","can_edit","can_delete","can_export","can_import"] as const).map(f => (
                                 <TableCell key={f} className="text-center">
                                   <Checkbox
                                     checked={(r as any)[f]}
@@ -632,7 +764,7 @@ export default function UserManagementPage() {
                 return (
                   <div className="border rounded-lg overflow-hidden">
                     <div className="px-3 py-2 bg-muted text-xs font-semibold border-b">
-                      สิทธิ์ระดับ Tab <span className="font-normal text-muted-foreground">(กำหนดสิทธิ์ View / Create / Edit / Delete / Export ของแต่ละ Tab ในเมนู)</span>
+                      สิทธิ์ระดับ Tab <span className="font-normal text-muted-foreground">(View / Create / Edit / Delete / Export / Import ของแต่ละ Tab)</span>
                     </div>
                     <div className="p-3 space-y-4">
                       {visibleTabMenus.map(m => {
@@ -644,11 +776,12 @@ export default function UserManagementPage() {
                               <TableHeader>
                                 <TableRow>
                                   <TableHead className="text-xs">Tab</TableHead>
-                                  <TableHead className="text-center w-16 text-xs">View</TableHead>
-                                  <TableHead className="text-center w-16 text-xs">Create</TableHead>
-                                  <TableHead className="text-center w-16 text-xs">Edit</TableHead>
-                                  <TableHead className="text-center w-16 text-xs">Delete</TableHead>
-                                  <TableHead className="text-center w-16 text-xs">Export</TableHead>
+                                  <TableHead className="text-center w-14 text-xs">View</TableHead>
+                                  <TableHead className="text-center w-14 text-xs">Create</TableHead>
+                                  <TableHead className="text-center w-14 text-xs">Edit</TableHead>
+                                  <TableHead className="text-center w-14 text-xs">Delete</TableHead>
+                                  <TableHead className="text-center w-14 text-xs">Export</TableHead>
+                                  <TableHead className="text-center w-14 text-xs">Import</TableHead>
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
@@ -657,7 +790,7 @@ export default function UserManagementPage() {
                                   return (
                                     <TableRow key={t.key}>
                                       <TableCell className="text-xs">{t.label} <span className="text-[10px] text-muted-foreground">({t.key})</span></TableCell>
-                                      {(["can_view","can_create","can_edit","can_delete","can_export"] as const).map(f => (
+                                      {(["can_view","can_create","can_edit","can_delete","can_export","can_import"] as const).map(f => (
                                         <TableCell key={f} className="text-center">
                                           <Checkbox
                                             checked={(tp as any)[f]}
@@ -674,6 +807,80 @@ export default function UserManagementPage() {
                           </div>
                         );
                       })}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Division-level access (applies to Data Master & PO Cost) */}
+              {(() => {
+                const visible = divSearch.trim()
+                  ? allDivisions.filter(d => d.toLowerCase().includes(divSearch.toLowerCase()))
+                  : allDivisions;
+                const fields: { key: keyof DivAccessRow; label: string }[] = [
+                  { key: "can_view", label: "View" },
+                  { key: "can_create", label: "Insert" },
+                  { key: "can_edit", label: "Update" },
+                  { key: "can_delete", label: "Delete" },
+                  { key: "can_import", label: "Import" },
+                  { key: "can_export", label: "Export" },
+                ];
+                return (
+                  <div className="border rounded-lg overflow-hidden">
+                    <div className="px-3 py-2 bg-muted text-xs font-semibold border-b flex items-center justify-between gap-2 flex-wrap">
+                      <span>สิทธิ์ระดับ Division <span className="font-normal text-muted-foreground">(บังคับใช้กับ Data Master &amp; PO Cost — เลือกว่า Role นี้เข้าถึง Division ใดได้บ้าง)</span></span>
+                      <span className="text-[10px] font-normal text-muted-foreground">ถ้าไม่ติกเลย = เห็นได้ทุก Division</span>
+                    </div>
+                    <div className="p-3 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Input
+                          value={divSearch}
+                          onChange={e => setDivSearch(e.target.value)}
+                          placeholder={`ค้นหา Division... (${allDivisions.length} รายการ)`}
+                          className="h-8 w-64 text-xs"
+                        />
+                        <span className="text-[10px] text-muted-foreground">แสดง {visible.length} รายการ</span>
+                      </div>
+                      <div className="max-h-[420px] overflow-auto border rounded">
+                        <Table>
+                          <TableHeader className="sticky top-0 bg-muted z-10">
+                            <TableRow>
+                              <TableHead className="text-xs">Division</TableHead>
+                              {fields.map(f => (
+                                <TableHead key={f.key} className="text-center w-20 text-xs">
+                                  <div>{f.label}</div>
+                                  <div className="flex justify-center gap-1 mt-0.5">
+                                    <button type="button" className="text-[9px] text-primary hover:underline" onClick={() => toggleAllDivisions(f.key, true)}>all</button>
+                                    <span className="text-[9px] text-muted-foreground">|</span>
+                                    <button type="button" className="text-[9px] text-muted-foreground hover:underline" onClick={() => toggleAllDivisions(f.key, false)}>none</button>
+                                  </div>
+                                </TableHead>
+                              ))}
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {visible.length === 0 ? (
+                              <TableRow><TableCell colSpan={fields.length + 1} className="text-center text-xs text-muted-foreground py-4">ไม่พบ Division</TableCell></TableRow>
+                            ) : visible.map(d => {
+                              const r = getDivAccess(d);
+                              return (
+                                <TableRow key={d}>
+                                  <TableCell className="text-xs font-medium">{d}</TableCell>
+                                  {fields.map(f => (
+                                    <TableCell key={f.key} className="text-center">
+                                      <Checkbox
+                                        checked={(r as any)[f.key]}
+                                        disabled={f.key !== "can_view" && !r.can_view}
+                                        onCheckedChange={c => setDivAccessField(d, f.key, !!c)}
+                                      />
+                                    </TableCell>
+                                  ))}
+                                </TableRow>
+                              );
+                            })}
+                          </TableBody>
+                        </Table>
+                      </div>
                     </div>
                   </div>
                 );
@@ -697,14 +904,31 @@ export default function UserManagementPage() {
           <DialogHeader>
             <DialogTitle>แก้ไขผู้ใช้: {editUser?.full_name || editUser?.email}</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="text-xs text-muted-foreground space-y-1">
-              <div>Email: {editUser?.email}</div>
-              {editUser?.phone && <div>Phone: {editUser.phone}</div>}
-              {editUser?.department && <div>แผนก: {editUser.department}</div>}
+          <div className="space-y-3 py-2 max-h-[70vh] overflow-y-auto pr-1">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">ชื่อ-นามสกุล</Label>
+                <Input value={editFullName} onChange={e => setEditFullName(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Email</Label>
+                <Input type="email" value={editEmail} onChange={e => setEditEmail(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Phone</Label>
+                <Input value={editPhone} onChange={e => setEditPhone(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">แผนก</Label>
+                <Input value={editDepartment} onChange={e => setEditDepartment(e.target.value)} />
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label>Role</Label>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Password ใหม่ <span className="text-muted-foreground">(ว่างไว้ = ไม่เปลี่ยน, ขั้นต่ำ 6 ตัว)</span></Label>
+              <Input type="text" value={editPassword} onChange={e => setEditPassword(e.target.value)} placeholder="••••••" autoComplete="new-password" />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-xs">Role</Label>
               <Select value={editRole} onValueChange={setEditRole}>
                 <SelectTrigger><SelectValue placeholder="-- เลือก Role --" /></SelectTrigger>
                 <SelectContent>
@@ -712,16 +936,18 @@ export default function UserManagementPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2">
-              <Label>SPC Name (จำกัดข้อมูล)</Label>
-              <Input value={editSpc} onChange={e => setEditSpc(e.target.value)} placeholder="ว่างไว้ = เห็นทุก SPC" />
-            </div>
-            <div className="space-y-2">
-              <Label>Vendor Code (จำกัดข้อมูล)</Label>
-              <Input value={editVendor} onChange={e => setEditVendor(e.target.value)} placeholder="ว่างไว้ = เห็นทุก Vendor" />
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">SPC Name (จำกัดข้อมูล)</Label>
+                <Input value={editSpc} onChange={e => setEditSpc(e.target.value)} placeholder="ว่างไว้ = เห็นทุก SPC" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Vendor Code (จำกัดข้อมูล)</Label>
+                <Input value={editVendor} onChange={e => setEditVendor(e.target.value)} placeholder="ว่างไว้ = เห็นทุก Vendor" />
+              </div>
             </div>
             <div className="flex items-center gap-3">
-              <Label>Active</Label>
+              <Label className="text-xs">Active</Label>
               <Switch checked={editActive} onCheckedChange={setEditActive} />
             </div>
           </div>

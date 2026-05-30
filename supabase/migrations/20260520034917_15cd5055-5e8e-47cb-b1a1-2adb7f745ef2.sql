@@ -1,0 +1,1 @@
+DROP FUNCTION IF EXISTS public.get_minmax_view_by_stores(text[],text[],text[],text[],text[],text[],text[],text[]);

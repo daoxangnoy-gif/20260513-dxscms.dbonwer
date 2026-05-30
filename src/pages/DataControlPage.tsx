@@ -6,7 +6,7 @@ import {
   parsePoCostFile, resolvePoCostImport, applyPoCostImport,
   downloadSkipList, downloadPoCostTemplate, loadVendorDisplayMap,
   splitExistingMissing, resolvedToSkipRows,
-  type PoCostSkipRow, type PoCostResolved, type PoCostMarginWarning,
+  type PoCostSkipRow, type PoCostResolved, type PoCostMarginWarning, type PoCostVendorMismatch, type PoCostMoqPackingWarning,
 } from "@/lib/poCostImport";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -29,6 +29,7 @@ import {
   Save, Eye, Clock,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { MultiSelectFilter } from "@/components/MultiSelectFilter";
 import { useAuth } from "@/hooks/useAuth";
 
 interface DataControlPageProps {
@@ -38,9 +39,13 @@ interface DataControlPageProps {
 const ALL_OPERATORS: FilterOperator[] = ["contains", "=", "!=", "starts_with", "ends_with", "is_set", "is_not_set"];
 
 export default function DataControlPage({ activeTable }: DataControlPageProps) {
-  const { isAdmin, canDo } = useAuth();
-  const canExport = canDo(activeTable, "export");
-  const canDelete = canDo(activeTable, "delete");
+  const { isAdmin, canDo, allowedDivisions, divisionAllowed, anyDivisionAllowed } = useAuth();
+  const divisionEnforced = activeTable === "data_master" || activeTable === "po_cost";
+  const allowedDivSet = divisionEnforced ? allowedDivisions() : null;
+  const canExport = canDo(activeTable, "export") && (!divisionEnforced || anyDivisionAllowed("export"));
+  const canDelete = canDo(activeTable, "delete") && (!divisionEnforced || anyDivisionAllowed("delete"));
+  const canImport = canDo(activeTable, "import") && (!divisionEnforced || anyDivisionAllowed("import"));
+  const canEdit   = canDo(activeTable, "edit")   && (!divisionEnforced || anyDivisionAllowed("edit"));
   const isPlaceholder = activeTable === "range_store";
   const safeTable = isPlaceholder ? "data_master" : activeTable as TableName;
 
@@ -48,10 +53,61 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
     data, totalCount, loading, importProgress, page, setPage, pageSize, columns,
     searchColumns, setSearchColumns, searchValue, setSearchValue,
     filters, addFilter, removeFilter, updateFilter, clearFilters,
-    fetchData, getSheets, importData, exportData, exportTemplate, clearUI, deleteAll,
+    fetchData, getSheets, importData, exportData, exportByFilters, exportTemplate, clearUI, deleteAll, deleteByFilters,
     editingRow, editedData, startEditing, cancelEditing, saveEditing, updateEditedField,
     pasteToRows, groupByColumn,
+    setData, setTotalCount,
   } = useDataTable(safeTable);
+
+  // Division-based row filtering for po_cost: map item_id -> division (loaded from data_master once)
+  const [poCostDivMap, setPoCostDivMap] = useState<Map<string, string>>(new Map());
+  useEffect(() => {
+    if (activeTable !== "po_cost" || !allowedDivSet) { return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const { supabase } = await import("@/integrations/supabase/client");
+        const m = new Map<string, string>();
+        let from = 0; const step = 1000;
+        while (true) {
+          const { data: rows, error } = await (supabase as any)
+            .from("data_master")
+            .select("sku_code,division")
+            .not("division", "is", null)
+            .range(from, from + step - 1);
+          if (error || !rows || rows.length === 0) break;
+          for (const r of rows as any[]) {
+            if (r.sku_code && r.division) m.set(String(r.sku_code), String(r.division));
+          }
+          if (rows.length < step) break;
+          from += step;
+        }
+        if (!cancelled) setPoCostDivMap(m);
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, [activeTable, allowedDivSet]);
+
+  // Return the division for a given row, depending on the active table
+  const getRowDivision = useCallback((row: any): string | null => {
+    if (activeTable === "data_master") return row?.division || null;
+    if (activeTable === "po_cost") {
+      const key = row?.item_id || row?.goodcode;
+      if (!key) return null;
+      return poCostDivMap.get(String(key)) || null;
+    }
+    return null;
+  }, [activeTable, poCostDivMap]);
+
+  // Filter the visible rows by allowed division (null = no restriction)
+  const filterByDivision = useCallback(<T extends any>(rows: T[]): T[] => {
+    if (!allowedDivSet) return rows;
+    return rows.filter(r => {
+      const d = getRowDivision(r);
+      return d !== null && allowedDivSet.has(d);
+    });
+  }, [allowedDivSet, getRowDivision]);
+
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -109,6 +165,7 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
   const [poCostImportProgress, setPoCostImportProgress] = useState<{ current: number; total: number; phase: string } | null>(null);
   const [poCostSkipped, setPoCostSkipped] = useState<PoCostSkipRow[]>([]);
   const [showPoCostSkipDialog, setShowPoCostSkipDialog] = useState(false);
+  const [postImportPrompt, setPostImportPrompt] = useState<{ itemIds: string[]; count: number } | null>(null);
   const [poCostImportSummary, setPoCostImportSummary] = useState<{ inserted: number; updated: number } | null>(null);
   const [vendorDisplayMap, setVendorDisplayMap] = useState<Map<string, string>>(new Map());
   const [vendorCurrencyMap, setVendorCurrencyMap] = useState<Map<string, string>>(new Map());
@@ -139,6 +196,11 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
   const [marginOp, setMarginOp] = useState<MarginOp>("");
   const [marginV1, setMarginV1] = useState<string>("");
   const [marginV2, setMarginV2] = useState<string>("");
+  const [filterColPo2, setFilterColPo2] = useState<string>("__jmart_margin_pct");
+  const [marginOp2, setMarginOp2] = useState<MarginOp>("");
+  const [marginV12, setMarginV12] = useState<string>("");
+  const [marginV22, setMarginV22] = useState<string>("");
+  const [filterLogic, setFilterLogic] = useState<"AND" | "OR">("AND");
   const [marginRows, setMarginRows] = useState<any[] | null>(null);
   const [marginLoading, setMarginLoading] = useState(false);
   // Report tab — 3 user-defined conditions
@@ -151,6 +213,78 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
   const [reportLoading, setReportLoading] = useState(false);
   const [poLoadProgress, setPoLoadProgress] = useState<{ phase: string; current: number; total: number } | null>(null);
   const [expandedVendors, setExpandedVendors] = useState<Set<string>>(new Set());
+
+  // PO Cost dropdown filters (server-side WHERE conditions)
+  const [poVendorFilter, setPoVendorFilter] = useState<string[]>([]);
+  const [poBarcodeFilter, setPoBarcodeFilter] = useState<string[]>([]);
+  const [poBarcodeUnitFilter, setPoBarcodeUnitFilter] = useState<string[]>([]);
+  const [poGmBuyerFilter, setPoGmBuyerFilter] = useState<string[]>([]);
+  const [poHeaderBuyerFilter, setPoHeaderBuyerFilter] = useState<string[]>([]);
+  const [poBuyerFilter, setPoBuyerFilter] = useState<string[]>([]);
+  const [poSkuFilter, setPoSkuFilter] = useState<string>("");
+  // Dropdown option lists (pre-loaded once when entering PO Cost)
+  const [poVendorOptions, setPoVendorOptions] = useState<string[]>([]);
+  const [poVendorLabelMap, setPoVendorLabelMap] = useState<Map<string, string>>(new Map());
+  const [poBarcodeOptions, setPoBarcodeOptions] = useState<string[]>([]);
+  const [poBarcodeUnitOptions, setPoBarcodeUnitOptions] = useState<string[]>([]);
+  const [poGmBuyerOptions, setPoGmBuyerOptions] = useState<string[]>([]);
+  const [poHeaderBuyerOptions, setPoHeaderBuyerOptions] = useState<string[]>([]);
+  const [poBuyerOptions, setPoBuyerOptions] = useState<string[]>([]);
+  const [poBarcodeLabelMap, setPoBarcodeLabelMap] = useState<Map<string, string>>(new Map());
+  const [poBarcodeUnitLabelMap, setPoBarcodeUnitLabelMap] = useState<Map<string, string>>(new Map());
+  const [poGmBuyerLabelMap, setPoGmBuyerLabelMap] = useState<Map<string, string>>(new Map());
+  const [poHeaderBuyerLabelMap, setPoHeaderBuyerLabelMap] = useState<Map<string, string>>(new Map());
+  const [poBuyerLabelMap, setPoBuyerLabelMap] = useState<Map<string, string>>(new Map());
+  const [poFilterOptionsLoaded, setPoFilterOptionsLoaded] = useState(false);
+
+  // Pre-load dropdown options once when entering po_cost page (single RPC call — instant)
+  useEffect(() => {
+    if (activeTable !== "po_cost" || poFilterOptionsLoaded) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error } = await supabase.rpc("get_po_cost_filter_options" as any);
+        if (error) throw error;
+        if (cancelled || !data) return;
+        const d: any = data;
+        const vMap = new Map<string, string>();
+        const vCodes: string[] = [];
+        for (const v of (d.vendors || [])) {
+          const code = String(v.code || "").trim();
+          if (!code || vMap.has(code)) continue;
+          const n = Number(v.count || 0);
+          const baseLabel = v.label || code;
+          vMap.set(code, n > 0 ? `${baseLabel} (${n.toLocaleString()})` : baseLabel);
+          vCodes.push(code);
+        }
+        setPoVendorOptions(vCodes);
+        setPoVendorLabelMap(vMap);
+        const unpack = (arr: any[]) => (arr || []).map((x: any) =>
+          typeof x === "object" && x !== null ? { v: String(x.v), n: Number(x.count || 0) } : { v: String(x), n: 0 }
+        );
+        const bp = unpack(d.main_barcode_pack);
+        const bu = unpack(d.main_barcode_unit);
+        const gm = unpack(d.gm_buyer_code);
+        const hb = unpack(d.header_buyer_code);
+        const by = unpack(d.buyer_code);
+        const mkMap = (arr: { v: string; n: number }[]) => new Map(arr.map(x => [x.v, x.n > 0 ? `${x.v} (${x.n.toLocaleString()})` : x.v]));
+        setPoBarcodeOptions(bp.map(x => x.v));
+        setPoBarcodeUnitOptions(bu.map(x => x.v));
+        setPoGmBuyerOptions(gm.map(x => x.v));
+        setPoHeaderBuyerOptions(hb.map(x => x.v));
+        setPoBuyerOptions(by.map(x => x.v));
+        setPoBarcodeLabelMap(mkMap(bp));
+        setPoBarcodeUnitLabelMap(mkMap(bu));
+        setPoGmBuyerLabelMap(mkMap(gm));
+        setPoHeaderBuyerLabelMap(mkMap(hb));
+        setPoBuyerLabelMap(mkMap(by));
+        setPoFilterOptionsLoaded(true);
+      } catch (e: any) {
+        if (!cancelled) toast({ title: "โหลด Filter Options ผิดพลาด", description: e.message, variant: "destructive" });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [activeTable, poFilterOptionsLoaded, toast]);
 
   // Compute Cost(Lak) and Margin% for a row given current rates + maps
   const computeRowMetrics = useCallback((row: any) => {
@@ -246,7 +380,7 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
   };
 
   // Load po_cost rows from the enriched VIEW with DB-side filters where possible.
-  const loadAllPoCost = useCallback(async (extraFilter?: PoLoadFilter): Promise<{ rows: any[]; cm: Map<string,string>; nm: Map<string,string>; pm: Map<string,number>; jpm: Map<string,number>; ex: Map<string, ExtrasInfo> }> => {
+  const loadAllPoCost = useCallback(async (extraFilter?: PoLoadFilter, dropdownFilters?: { vendor?: string[]; barcode?: string[]; barcodeUnit?: string[]; gmBuyer?: string[]; headerBuyer?: string[]; buyer?: string[]; sku?: string[] }): Promise<{ rows: any[]; cm: Map<string,string>; nm: Map<string,string>; pm: Map<string,number>; jpm: Map<string,number>; ex: Map<string, ExtrasInfo> }> => {
     const fetchSize = 1000;
     const concurrency = 3;
     const mapCol = (c: string) => {
@@ -303,6 +437,15 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
         q = applyOneFilter(q, { column: f.column, operator: f.operator, value: f.value });
       }
       if (canPushPoFilter(extraFilter)) q = applyOneFilter(q, extraFilter!);
+      if (dropdownFilters) {
+        if (dropdownFilters.vendor && dropdownFilters.vendor.length) q = q.in("vendor_code", dropdownFilters.vendor);
+        if (dropdownFilters.barcode && dropdownFilters.barcode.length) q = q.in("main_barcode_pack", dropdownFilters.barcode);
+        if (dropdownFilters.barcodeUnit && dropdownFilters.barcodeUnit.length) q = q.in("main_barcode_unit", dropdownFilters.barcodeUnit);
+        if (dropdownFilters.gmBuyer && dropdownFilters.gmBuyer.length) q = q.in("gm_buyer_code", dropdownFilters.gmBuyer);
+        if (dropdownFilters.headerBuyer && dropdownFilters.headerBuyer.length) q = q.in("header_buyer_code", dropdownFilters.headerBuyer);
+        if (dropdownFilters.buyer && dropdownFilters.buyer.length) q = q.in("buyer_code", dropdownFilters.buyer);
+        if (dropdownFilters.sku && dropdownFilters.sku.length) q = q.in("item_id", dropdownFilters.sku);
+      }
       return q;
     };
     // 1) Get total count via HEAD (no rows transferred)
@@ -392,6 +535,51 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
     });
     return { rows: mapped, cm, nm, pm, jpm, ex };
   }, [filters]);
+  const parseSkuList = (s: string): string[] => s.split(/[\s,;\n\r\t]+/).map(x => x.trim()).filter(Boolean);
+  const buildPoDropdownFilters = useCallback(() => ({
+    vendor: poVendorFilter,
+    barcode: poBarcodeFilter,
+    barcodeUnit: poBarcodeUnitFilter,
+    gmBuyer: poGmBuyerFilter,
+    headerBuyer: poHeaderBuyerFilter,
+    buyer: poBuyerFilter,
+    sku: parseSkuList(poSkuFilter),
+  }), [poVendorFilter, poBarcodeFilter, poBarcodeUnitFilter, poGmBuyerFilter, poHeaderBuyerFilter, poBuyerFilter, poSkuFilter]);
+
+  const hasAnyPoFilter = (
+    poVendorFilter.length + poBarcodeFilter.length + poBarcodeUnitFilter.length +
+    poGmBuyerFilter.length + poHeaderBuyerFilter.length + poBuyerFilter.length +
+    parseSkuList(poSkuFilter).length
+  ) > 0 || marginOp !== "" || marginOp2 !== "";
+
+  const reloadPoFilterOptions = useCallback(() => {
+    setPoFilterOptionsLoaded(false);
+  }, []);
+
+  // Read 1 for po_cost — honors PO dropdown filters (vendor / barcode / buyer / sku).
+  // Without this, fetchData() reads base po_cost table and ignores the dropdowns → returns too many rows.
+  const handlePoCostRead1 = useCallback(async () => {
+    const dd = buildPoDropdownFilters();
+    const hasDropdown =
+      (dd.vendor?.length || 0) + (dd.barcode?.length || 0) + (dd.barcodeUnit?.length || 0) +
+      (dd.gmBuyer?.length || 0) + (dd.headerBuyer?.length || 0) + (dd.buyer?.length || 0) +
+      (dd.sku?.length || 0) > 0;
+    if (!hasDropdown) {
+      await fetchData();
+      return;
+    }
+    try {
+      const { rows } = await loadAllPoCost(undefined, dd);
+      setTotalCount(rows.length);
+      const start = page * pageSize;
+      setData(rows.slice(start, start + pageSize));
+    } catch (e: any) {
+      toast({ title: "Read Error", description: e.message, variant: "destructive" });
+    } finally {
+      setPoLoadProgress(null);
+    }
+  }, [buildPoDropdownFilters, fetchData, loadAllPoCost, page, pageSize, setData, setTotalCount, toast]);
+
 
 
   const computeWithMaps = (row: any, cm: Map<string,string>, pm: Map<string,number>, jpm?: Map<string,number>) => {
@@ -419,15 +607,23 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
   const handleShowMarginFilter = async () => {
     setMarginLoading(true);
     try {
-      const activePoFilter = marginOp !== "" ? { column: filterColPo, operator: marginOp, value: marginV1, value2: marginV2 } : undefined;
-      const { rows, cm, pm, jpm } = await loadAllPoCost(activePoFilter);
+      const hasF1 = marginOp !== "";
+      const hasF2 = marginOp2 !== "";
+      // Only push to DB if exactly one filter active (otherwise AND/OR combos need full data)
+      const pushFilter = hasF1 && !hasF2
+        ? { column: filterColPo, operator: marginOp, value: marginV1, value2: marginV2 }
+        : (!hasF1 && hasF2
+          ? { column: filterColPo2, operator: marginOp2, value: marginV12, value2: marginV22 }
+          : undefined);
+      const { rows, cm, pm, jpm } = await loadAllPoCost(pushFilter, buildPoDropdownFilters());
       let out = rows;
-      // Apply column filter only if op is set
-      if (marginOp !== "") {
+      if (hasF1 || hasF2) {
         out = rows.filter(row => {
           const m = computeWithMaps(row, cm, pm, jpm);
-          const v = resolveColValue(row, filterColPo, m);
-          return matchGeneric(v, marginOp, marginV1, marginV2);
+          const ok1 = hasF1 ? matchGeneric(resolveColValue(row, filterColPo, m), marginOp, marginV1, marginV2) : null;
+          const ok2 = hasF2 ? matchGeneric(resolveColValue(row, filterColPo2, m), marginOp2, marginV12, marginV22) : null;
+          if (hasF1 && hasF2) return filterLogic === "AND" ? (ok1 && ok2) : (ok1 || ok2);
+          return hasF1 ? !!ok1 : !!ok2;
         });
       }
       setMarginRows(out);
@@ -437,7 +633,11 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
     } finally { setMarginLoading(false); setPoLoadProgress(null); }
   };
 
-  const clearMarginFilter = () => { setMarginRows(null); setMarginOp(""); setMarginV1(""); setMarginV2(""); };
+  const clearMarginFilter = () => {
+    setMarginRows(null);
+    setMarginOp(""); setMarginV1(""); setMarginV2("");
+    setMarginOp2(""); setMarginV12(""); setMarginV22("");
+  };
 
   const handleShowReport = async () => {
     setReportLoading(true);
@@ -507,6 +707,27 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
     warnings: PoCostMarginWarning[];
   } | null>(null);
   const [marginSelected, setMarginSelected] = useState<Set<number>>(new Set());
+
+  // Vendor mismatch (imported vendor ≠ data_master vendor) confirmation
+  const [vendorMismatchPrompt, setVendorMismatchPrompt] = useState<{
+    mode: "insert" | "update";
+    toUpsert: PoCostResolved[];
+    skipped: PoCostSkipRow[];
+    warnings: PoCostMarginWarning[];
+    mismatches: PoCostVendorMismatch[];
+    moqPackingWarnings?: PoCostMoqPackingWarning[];
+  } | null>(null);
+  const [vendorMismatchSelected, setVendorMismatchSelected] = useState<Set<number>>(new Set());
+
+  // MOQ=1 vs Packing>1 confirmation
+  const [moqPackingPrompt, setMoqPackingPrompt] = useState<{
+    mode: "insert" | "update";
+    toUpsert: PoCostResolved[];
+    skipped: PoCostSkipRow[];
+    warnings: PoCostMarginWarning[];
+    moqPackingWarnings: PoCostMoqPackingWarning[];
+  } | null>(null);
+  const [moqPackingSelected, setMoqPackingSelected] = useState<Set<number>>(new Set());
 
   // When margin warning popup opens, ensure we have currency for every warning vendor.
   // Fallback fetch from vendor_master for vendors not already in vendorCurrencyMap.
@@ -898,13 +1119,7 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
 
   }, [activeTable, data, toast]);
 
-  // Auto-enrich whenever po_cost page data changes — ensures display + export always have full master columns
-  useEffect(() => {
-    if (activeTable === "po_cost" && data.length > 0) {
-      loadPoCostPhase2();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTable, data]);
+  // Auto-enrich removed — Phase2 now only runs when user clicks "Read 2" button (avoids slow auto-fetch).
 
 
   // Last updated timestamp (MAX(updated_at)) — refreshed on table switch & after fetchData
@@ -1041,14 +1256,26 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
       }
       const rThbNum = parseFloat(rateTHB);
       const rUsdNum = parseFloat(rateUSD);
-      const { toUpsert, skipped, marginWarnings } = await resolvePoCostImport(rows, (cur, total, phase) => {
+      const { toUpsert, skipped, marginWarnings, vendorMismatches, moqPackingWarnings } = await resolvePoCostImport(rows, (cur, total, phase) => {
         setPoCostImportProgress({ current: cur, total, phase });
       }, {
         rateTHB: Number.isFinite(rThbNum) && rThbNum > 0 ? rThbNum : null,
         rateUSD: Number.isFinite(rUsdNum) && rUsdNum > 0 ? rUsdNum : null,
       });
 
-      // If any rows have abnormal margin% → ask user to confirm
+      // 1) Vendor Code mismatch (imported ≠ data_master) → ask user first
+      if (vendorMismatches.length > 0) {
+        setVendorMismatchPrompt({ mode, toUpsert, skipped, warnings: marginWarnings, mismatches: vendorMismatches, moqPackingWarnings });
+        return;
+      }
+
+      // 2) MOQ=1 but Packing Size Qty > 1 → confirm
+      if (moqPackingWarnings.length > 0) {
+        setMoqPackingPrompt({ mode, toUpsert, skipped, warnings: marginWarnings, moqPackingWarnings });
+        return;
+      }
+
+      // 3) Abnormal Margin% → ask user to confirm
       if (marginWarnings.length > 0) {
         setMarginPrompt({ mode, toUpsert, skipped, warnings: marginWarnings });
         return;
@@ -1124,6 +1351,136 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
     }
   };
 
+  // Vendor mismatch actions — same selection rule as margin warnings.
+  // Selected = upsert with imported vendor; Unselected = move to skip list.
+  const continueAfterMoqPacking = async (
+    finalUpsert: PoCostResolved[],
+    finalSkip: PoCostSkipRow[],
+    warnings: PoCostMarginWarning[],
+    mode: "insert" | "update",
+  ) => {
+    const upsertKeys = new Set(finalUpsert.map(r => `${r.item_id}||${r.vendor}`));
+    const remainingWarn = warnings.filter(w => upsertKeys.has(`${w.resolved.item_id}||${w.resolved.vendor}`));
+    if (remainingWarn.length > 0) {
+      setMarginPrompt({ mode, toUpsert: finalUpsert, skipped: finalSkip, warnings: remainingWarn });
+      return;
+    }
+    await continuePoCostImport(mode, finalUpsert, finalSkip);
+  };
+  const continueAfterVendorMismatch = async (
+    finalUpsert: PoCostResolved[],
+    finalSkip: PoCostSkipRow[],
+    warnings: PoCostMarginWarning[],
+    mode: "insert" | "update",
+    moqPackingWarnings?: PoCostMoqPackingWarning[],
+  ) => {
+    const upsertKeys = new Set(finalUpsert.map(r => `${r.item_id}||${r.vendor}`));
+    // MOQ=1 vs Packing>1 prompt next
+    const remainingMoq = (moqPackingWarnings || []).filter(w => upsertKeys.has(`${w.resolved.item_id}||${w.resolved.vendor}`));
+    if (remainingMoq.length > 0) {
+      const remainingMargin = warnings.filter(w => upsertKeys.has(`${w.resolved.item_id}||${w.resolved.vendor}`));
+      setMoqPackingPrompt({ mode, toUpsert: finalUpsert, skipped: finalSkip, warnings: remainingMargin, moqPackingWarnings: remainingMoq });
+      return;
+    }
+    await continueAfterMoqPacking(finalUpsert, finalSkip, warnings, mode);
+  };
+  const confirmMoqPackingUpsert = async () => {
+    if (!moqPackingPrompt) return;
+    const { mode, toUpsert, skipped, warnings, moqPackingWarnings } = moqPackingPrompt;
+    let finalUpsert = toUpsert;
+    let finalSkip = skipped;
+    if (moqPackingSelected.size > 0) {
+      const selectedKeys = new Set(
+        moqPackingWarnings.filter((_, i) => moqPackingSelected.has(i))
+          .map(m => `${m.resolved.item_id}||${m.resolved.vendor}`)
+      );
+      const allKeys = new Set(moqPackingWarnings.map(m => `${m.resolved.item_id}||${m.resolved.vendor}`));
+      finalUpsert = toUpsert.filter(r => {
+        const k = `${r.item_id}||${r.vendor}`;
+        return !allKeys.has(k) || selectedKeys.has(k);
+      });
+      const unsel = moqPackingWarnings.filter((_, i) => !moqPackingSelected.has(i));
+      finalSkip = [...skipped, ...unsel.map(u => u.skip)];
+    }
+    setMoqPackingPrompt(null);
+    setMoqPackingSelected(new Set());
+    setPoCostImportLoading(true);
+    try {
+      await continueAfterMoqPacking(finalUpsert, finalSkip, warnings, mode);
+    } catch (err: any) {
+      toast({ title: "Import ผิดพลาด", description: err.message, variant: "destructive" });
+    } finally {
+      setPoCostImportLoading(false);
+      setPoCostImportProgress(null);
+    }
+  };
+  const confirmMoqPackingSkipAll = async () => {
+    if (!moqPackingPrompt) return;
+    const { mode, toUpsert, skipped, warnings, moqPackingWarnings } = moqPackingPrompt;
+    const allKeys = new Set(moqPackingWarnings.map(m => `${m.resolved.item_id}||${m.resolved.vendor}`));
+    const finalUpsert = toUpsert.filter(r => !allKeys.has(`${r.item_id}||${r.vendor}`));
+    const finalSkip = [...skipped, ...moqPackingWarnings.map(m => m.skip)];
+    setMoqPackingPrompt(null);
+    setMoqPackingSelected(new Set());
+    setPoCostImportLoading(true);
+    try {
+      await continueAfterMoqPacking(finalUpsert, finalSkip, warnings, mode);
+    } catch (err: any) {
+      toast({ title: "Import ผิดพลาด", description: err.message, variant: "destructive" });
+    } finally {
+      setPoCostImportLoading(false);
+      setPoCostImportProgress(null);
+    }
+  };
+  const confirmVendorMismatchUpsert = async () => {
+    if (!vendorMismatchPrompt) return;
+    const { mode, toUpsert, skipped, warnings, mismatches, moqPackingWarnings } = vendorMismatchPrompt;
+    let finalUpsert = toUpsert;
+    let finalSkip = skipped;
+    if (vendorMismatchSelected.size > 0) {
+      const selectedKeys = new Set(
+        mismatches.filter((_, i) => vendorMismatchSelected.has(i))
+          .map(m => `${m.resolved.item_id}||${m.resolved.vendor}`)
+      );
+      const allKeys = new Set(mismatches.map(m => `${m.resolved.item_id}||${m.resolved.vendor}`));
+      finalUpsert = toUpsert.filter(r => {
+        const k = `${r.item_id}||${r.vendor}`;
+        return !allKeys.has(k) || selectedKeys.has(k);
+      });
+      const unsel = mismatches.filter((_, i) => !vendorMismatchSelected.has(i));
+      finalSkip = [...skipped, ...unsel.map(u => u.skip)];
+    }
+    setVendorMismatchPrompt(null);
+    setVendorMismatchSelected(new Set());
+    setPoCostImportLoading(true);
+    try {
+      await continueAfterVendorMismatch(finalUpsert, finalSkip, warnings, mode, moqPackingWarnings);
+    } catch (err: any) {
+      toast({ title: "Import ผิดพลาด", description: err.message, variant: "destructive" });
+    } finally {
+      setPoCostImportLoading(false);
+      setPoCostImportProgress(null);
+    }
+  };
+  const confirmVendorMismatchSkipAll = async () => {
+    if (!vendorMismatchPrompt) return;
+    const { mode, toUpsert, skipped, warnings, mismatches, moqPackingWarnings } = vendorMismatchPrompt;
+    const allKeys = new Set(mismatches.map(m => `${m.resolved.item_id}||${m.resolved.vendor}`));
+    const finalUpsert = toUpsert.filter(r => !allKeys.has(`${r.item_id}||${r.vendor}`));
+    const finalSkip = [...skipped, ...mismatches.map(m => m.skip)];
+    setVendorMismatchPrompt(null);
+    setVendorMismatchSelected(new Set());
+    setPoCostImportLoading(true);
+    try {
+      await continueAfterVendorMismatch(finalUpsert, finalSkip, warnings, mode, moqPackingWarnings);
+    } catch (err: any) {
+      toast({ title: "Import ผิดพลาด", description: err.message, variant: "destructive" });
+    } finally {
+      setPoCostImportLoading(false);
+      setPoCostImportProgress(null);
+    }
+  };
+
   // Apply upsert + show summary/skip dialog
   const runApplyAndFinish = async (
     toUpsert: PoCostResolved[],
@@ -1150,6 +1507,32 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
     });
 
     await fetchData();
+    setPoFilterOptionsLoaded(false);
+
+    // Ask user if they want to view the imported rows
+    if (toUpsert.length > 0) {
+      const ids = Array.from(new Set(toUpsert.map(r => String(r.item_id || "")).filter(Boolean)));
+      if (ids.length > 0) setPostImportPrompt({ itemIds: ids, count: ids.length });
+    }
+  };
+
+  const handleShowImportedData = async () => {
+    if (!postImportPrompt) return;
+    const ids = postImportPrompt.itemIds;
+    setPostImportPrompt(null);
+    setPoVendorFilter([]); setPoBarcodeFilter([]); setPoBarcodeUnitFilter([]);
+    setPoGmBuyerFilter([]); setPoHeaderBuyerFilter([]); setPoBuyerFilter([]);
+    setPoSkuFilter(ids.join("\n"));
+    setMarginLoading(true);
+    try {
+      const { rows } = await loadAllPoCost(undefined, { sku: ids });
+      setMarginRows(rows);
+      toast({ title: `แสดง ${rows.length} แถว` });
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    } finally {
+      setMarginLoading(false);
+    }
   };
 
   // User chose: Insert missing rows (existing → update, missing → insert)
@@ -1563,38 +1946,43 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
                   }}>Edit</Button>
                 )}
               </div>
-              <Button size="sm" variant="outline" className="text-xs" onClick={downloadPoCostTemplate}>
-                <FileSpreadsheet className="w-3.5 h-3.5 mr-1" /> Template
-              </Button>
+              {canImport && (
+                <Button size="sm" variant="outline" className="text-xs" onClick={downloadPoCostTemplate}>
+                  <FileSpreadsheet className="w-3.5 h-3.5 mr-1" /> Template
+                </Button>
+              )}
             </>
           )}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button size="sm" variant="outline" className="text-xs" disabled={!!importProgress || poCostImportLoading}>
-                {(importProgress || poCostImportProgress) ? (
-                  <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
-                ) : (
-                  <Upload className="w-3.5 h-3.5 mr-1" />
+          {(canImport || canEdit) && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="outline" className="text-xs" disabled={!!importProgress || poCostImportLoading}>
+                  {(importProgress || poCostImportProgress) ? (
+                    <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                  ) : (
+                    <Upload className="w-3.5 h-3.5 mr-1" />
+                  )}
+                  {(() => {
+                    const p = poCostImportProgress || importProgress;
+                    if (!p) return "Import";
+                    return `${p.phase}${p.total ? ` · ${p.current.toLocaleString()}/${p.total.toLocaleString()} (${Math.floor((p.current / Math.max(p.total, 1)) * 100)}%)` : ""}`;
+                  })()}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                {canImport && activeTable !== "po_cost" && (
+                  <DropdownMenuItem onClick={() => { setImportMode("insert"); fileInputRef.current?.click(); }}>
+                    <Upload className="w-3.5 h-3.5 mr-2" /> Insert (เพิ่มข้อมูลใหม่)
+                  </DropdownMenuItem>
                 )}
-                {(() => {
-                  const p = poCostImportProgress || importProgress;
-                  if (!p) return "Import";
-                  return `${p.phase}${p.total ? ` · ${p.current.toLocaleString()}/${p.total.toLocaleString()} (${Math.floor((p.current / Math.max(p.total, 1)) * 100)}%)` : ""}`;
-                })()}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent>
-              {activeTable !== "po_cost" && (
-                <DropdownMenuItem onClick={() => { setImportMode("insert"); fileInputRef.current?.click(); }}>
-                  <Upload className="w-3.5 h-3.5 mr-2" /> Insert (เพิ่มข้อมูลใหม่)
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem onClick={() => { setImportMode("update"); fileInputRef.current?.click(); }}>
-                <RefreshCw className="w-3.5 h-3.5 mr-2" /> Update (อัปเดตข้อมูล)
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
+                {canEdit && (
+                  <DropdownMenuItem onClick={() => { setImportMode("update"); fileInputRef.current?.click(); }}>
+                    <RefreshCw className="w-3.5 h-3.5 mr-2" /> Update (อัปเดตข้อมูล)
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           {/* Column Visibility */}
           <Popover>
             <PopoverTrigger asChild>
@@ -1688,6 +2076,11 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
                 <DropdownMenuItem onClick={() => exportData()}>
                   <Download className="w-3.5 h-3.5 mr-2" /> Export ทั้งหมด
                 </DropdownMenuItem>
+                {(filters.length > 0 || searchValue) && (
+                  <DropdownMenuItem onClick={exportByFilters}>
+                    <Filter className="w-3.5 h-3.5 mr-2" /> Export ตาม Filter ({totalCount.toLocaleString()})
+                  </DropdownMenuItem>
+                )}
                 {selectedRows.size > 0 && (
                   <DropdownMenuItem onClick={() => exportData(Array.from(selectedRows))}>
                     <CheckSquare className="w-3.5 h-3.5 mr-2" /> Export ที่เลือก ({selectedRows.size})
@@ -1704,7 +2097,7 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
           </Button>
           {activeTable === "po_cost" ? (
             <>
-              <Button size="sm" variant="outline" onClick={fetchData} className="text-xs">
+              <Button size="sm" variant="outline" onClick={handlePoCostRead1} className="text-xs">
                 <RefreshCw className="w-3.5 h-3.5 mr-1" /> Read 1
               </Button>
               <Button size="sm" variant="outline" onClick={loadPoCostPhase2} disabled={phase2Loading || data.length === 0} className="text-xs">
@@ -1756,9 +2149,33 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
                 </Button>
               )}
               {canDelete && (
-                <Button size="sm" variant="destructive" onClick={deleteAll} className="text-xs">
-                  <Trash2 className="w-3.5 h-3.5 mr-1" /> Delete All
-                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="sm" variant="destructive" className="text-xs">
+                      <Trash2 className="w-3.5 h-3.5 mr-1" /> Delete
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent>
+                    {(filters.length > 0 || searchValue) && (
+                      <DropdownMenuItem
+                        onClick={() => {
+                          if (confirm(`ลบ ${totalCount.toLocaleString()} แถวตาม Filter ที่ใช้งานอยู่?`)) deleteByFilters();
+                        }}
+                        className="text-destructive"
+                      >
+                        <Filter className="w-3.5 h-3.5 mr-2" /> Delete ตาม Filter ({totalCount.toLocaleString()})
+                      </DropdownMenuItem>
+                    )}
+                    <DropdownMenuItem
+                      onClick={() => {
+                        if (confirm(`ลบข้อมูลทั้งหมดในตารางนี้?`)) deleteAll();
+                      }}
+                      className="text-destructive"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 mr-2" /> Delete All
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               )}
             </>
           )}
@@ -1792,64 +2209,202 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
             const isNum = NUMERIC_COLS.has(filterColPo);
             const colOptions = displayColumns; // all columns currently visible (DB + synthetic)
             return (
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-xs text-muted-foreground">Filter:</span>
-                <select className="h-7 text-xs border rounded px-2 bg-background max-w-[220px]"
-                  value={filterColPo} onChange={e => { setFilterColPo(e.target.value); setMarginOp(""); setMarginV1(""); setMarginV2(""); }}>
-                  {colOptions.map(c => (
-                    <option key={c} value={c}>
-                      {c.startsWith("__") ? SYNTHETIC_LABELS[c] : getColumnLabel(c, "po_cost")}
-                    </option>
-                  ))}
-                </select>
-                <select className="h-7 text-xs border rounded px-2 bg-background"
-                  value={marginOp} onChange={e => setMarginOp(e.target.value as MarginOp)}>
-                  <option value="">— เลือกเงื่อนไข —</option>
-                  {isNum ? (
+              <div className="flex flex-col gap-1.5">
+                {/* Dropdown filter row (server-side WHERE) */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs text-muted-foreground w-12">เลือก:</span>
+                  <MultiSelectFilter
+                    label="Vendor"
+                    options={poVendorOptions}
+                    selected={poVendorFilter}
+                    onChange={setPoVendorFilter}
+                    renderOption={(code) => poVendorLabelMap.get(code) || code}
+                    width="w-96"
+                    emptyHint={poFilterOptionsLoaded ? "ไม่มีข้อมูล" : "กำลังโหลด..."}
+                  />
+                  <MultiSelectFilter
+                    label="Main Barcode"
+                    options={poBarcodeOptions}
+                    selected={poBarcodeFilter}
+                    onChange={setPoBarcodeFilter}
+                    renderOption={(v) => poBarcodeLabelMap.get(v) || v}
+                    emptyHint={poFilterOptionsLoaded ? "ไม่มีข้อมูล" : "กำลังโหลด..."}
+                  />
+                  <MultiSelectFilter
+                    label="Main Barcode (Unit)"
+                    options={poBarcodeUnitOptions}
+                    selected={poBarcodeUnitFilter}
+                    onChange={setPoBarcodeUnitFilter}
+                    renderOption={(v) => poBarcodeUnitLabelMap.get(v) || v}
+                    emptyHint={poFilterOptionsLoaded ? "ไม่มีข้อมูล" : "กำลังโหลด..."}
+                  />
+                  <MultiSelectFilter
+                    label="GM Buyer"
+                    options={poGmBuyerOptions}
+                    selected={poGmBuyerFilter}
+                    onChange={setPoGmBuyerFilter}
+                    renderOption={(v) => poGmBuyerLabelMap.get(v) || v}
+                    width="w-56"
+                    emptyHint={poFilterOptionsLoaded ? "ไม่มีข้อมูล" : "กำลังโหลด..."}
+                  />
+                  <MultiSelectFilter
+                    label="Header Buyer"
+                    options={poHeaderBuyerOptions}
+                    selected={poHeaderBuyerFilter}
+                    onChange={setPoHeaderBuyerFilter}
+                    renderOption={(v) => poHeaderBuyerLabelMap.get(v) || v}
+                    width="w-56"
+                    emptyHint={poFilterOptionsLoaded ? "ไม่มีข้อมูล" : "กำลังโหลด..."}
+                  />
+                  <MultiSelectFilter
+                    label="Buyer"
+                    options={poBuyerOptions}
+                    selected={poBuyerFilter}
+                    onChange={setPoBuyerFilter}
+                    renderOption={(v) => poBuyerLabelMap.get(v) || v}
+                    width="w-56"
+                    emptyHint={poFilterOptionsLoaded ? "ไม่มีข้อมูล" : "กำลังโหลด..."}
+                  />
+                  <Input
+                    placeholder="SKU Code (comma/newline)"
+                    value={poSkuFilter}
+                    onChange={e => setPoSkuFilter(e.target.value)}
+                    className="h-7 text-xs w-56"
+                  />
+                  <Button size="sm" className="text-xs h-7" onClick={handleShowMarginFilter} disabled={marginLoading || !hasAnyPoFilter} title={!hasAnyPoFilter ? "กรุณาเลือก Filter ก่อน" : ""}>
+                    {marginLoading ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Filter className="w-3 h-3 mr-1" />}
+                    ดึงข้อมูล
+                  </Button>
+                  <Button size="sm" variant="outline" className="text-xs h-7" onClick={reloadPoFilterOptions} title="รีเฟรชรายการใน Dropdown">
+                    <RefreshCw className="w-3 h-3" />
+                  </Button>
+                  {(poVendorFilter.length + poBarcodeFilter.length + poBarcodeUnitFilter.length + poGmBuyerFilter.length + poHeaderBuyerFilter.length + poBuyerFilter.length + parseSkuList(poSkuFilter).length) > 0 && (
+                    <Button size="sm" variant="ghost" className="text-xs h-7" onClick={() => {
+                      setPoVendorFilter([]); setPoBarcodeFilter([]); setPoBarcodeUnitFilter([]);
+                      setPoGmBuyerFilter([]); setPoHeaderBuyerFilter([]); setPoBuyerFilter([]);
+                      setPoSkuFilter("");
+                    }}>
+                      <X className="w-3 h-3 mr-1" /> Clear ตัวกรอง
+                    </Button>
+                  )}
+                </div>
+                {/* Filter row 1 */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs text-muted-foreground w-12">Filter:</span>
+                  <select className="h-7 text-xs border rounded px-2 bg-background max-w-[220px]"
+                    value={filterColPo} onChange={e => { setFilterColPo(e.target.value); setMarginOp(""); setMarginV1(""); setMarginV2(""); }}>
+                    {colOptions.map(c => (
+                      <option key={c} value={c}>
+                        {c.startsWith("__") ? SYNTHETIC_LABELS[c] : getColumnLabel(c, "po_cost")}
+                      </option>
+                    ))}
+                  </select>
+                  <select className="h-7 text-xs border rounded px-2 bg-background"
+                    value={marginOp} onChange={e => setMarginOp(e.target.value as MarginOp)}>
+                    <option value="">— เลือกเงื่อนไข —</option>
+                    {isNum ? (
+                      <>
+                        <option value=">">{'มากกว่า (>)'}</option>
+                        <option value="<">{'น้อยกว่า (<)'}</option>
+                        <option value="=">เท่ากับ (=)</option>
+                        <option value=">=">{'>='}</option>
+                        <option value="<=">{'<='}</option>
+                        <option value="between">ระหว่าง</option>
+                      </>
+                    ) : (
+                      <>
+                        <option value="contains">contains</option>
+                        <option value="=">=</option>
+                        <option value="starts_with">starts with</option>
+                        <option value="ends_with">ends with</option>
+                      </>
+                    )}
+                    <option value="is_set">is set</option>
+                    <option value="is_not_set">is not set</option>
+                  </select>
+                  {!["is_set","is_not_set",""].includes(marginOp) && (
+                    <Input type={isNum ? "number" : "text"} step="any" placeholder={isNum ? "ค่า" : "ค้นหา..."} className="h-7 w-32 text-xs"
+                      value={marginV1} onChange={e => setMarginV1(e.target.value)} />
+                  )}
+                  {marginOp === "between" && (
                     <>
-                      <option value=">">{'มากกว่า (>)'}</option>
-                      <option value="<">{'น้อยกว่า (<)'}</option>
-                      <option value="=">เท่ากับ (=)</option>
-                      <option value=">=">{'>='}</option>
-                      <option value="<=">{'<='}</option>
-                      <option value="between">ระหว่าง</option>
-                    </>
-                  ) : (
-                    <>
-                      <option value="contains">contains</option>
-                      <option value="=">=</option>
-                      <option value="starts_with">starts with</option>
-                      <option value="ends_with">ends with</option>
+                      <span className="text-xs text-muted-foreground">ถึง</span>
+                      <Input type="number" step="any" placeholder="ค่า" className="h-7 w-24 text-xs"
+                        value={marginV2} onChange={e => setMarginV2(e.target.value)} />
                     </>
                   )}
-                  <option value="is_set">is set</option>
-                  <option value="is_not_set">is not set</option>
-                </select>
-                {!["is_set","is_not_set",""].includes(marginOp) && (
-                  <Input type={isNum ? "number" : "text"} step="any" placeholder={isNum ? "ค่า" : "ค้นหา..."} className="h-7 w-32 text-xs"
-                    value={marginV1} onChange={e => setMarginV1(e.target.value)} />
-                )}
-                {marginOp === "between" && (
-                  <>
-                    <span className="text-xs text-muted-foreground">ถึง</span>
-                    <Input type="number" step="any" placeholder="ค่า" className="h-7 w-24 text-xs"
-                      value={marginV2} onChange={e => setMarginV2(e.target.value)} />
-                  </>
-                )}
-                <Button size="sm" className="text-xs h-7" onClick={handleShowMarginFilter} disabled={marginLoading}>
-                  {marginLoading ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : null}
-                  {marginLoading && poLoadProgress
-                    ? `${poLoadProgress.phase}${poLoadProgress.total ? ` ${poLoadProgress.current.toLocaleString()}/${poLoadProgress.total.toLocaleString()}` : ""}`
-                    : "Show"}
-                </Button>
-                {marginRows !== null && (
-                  <>
-                    <Badge variant="secondary" className="text-xs">กรองแล้ว {marginRows.length} แถว</Badge>
-                    <Button size="sm" variant="ghost" className="text-xs h-7" onClick={clearMarginFilter}>
-                      <X className="w-3 h-3 mr-1" /> Clear filter
-                    </Button>
-                  </>
-                )}
+                </div>
+                {/* Logic + Filter row 2 */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <select className="h-7 text-xs border rounded px-2 bg-background w-12 font-semibold"
+                    value={filterLogic} onChange={e => setFilterLogic(e.target.value as "AND" | "OR")}>
+                    <option value="AND">AND</option>
+                    <option value="OR">OR</option>
+                  </select>
+                  {(() => {
+                    const isNum2 = NUMERIC_COLS.has(filterColPo2);
+                    return (
+                      <>
+                        <select className="h-7 text-xs border rounded px-2 bg-background max-w-[220px]"
+                          value={filterColPo2} onChange={e => { setFilterColPo2(e.target.value); setMarginOp2(""); setMarginV12(""); setMarginV22(""); }}>
+                          {colOptions.map(c => (
+                            <option key={c} value={c}>
+                              {c.startsWith("__") ? SYNTHETIC_LABELS[c] : getColumnLabel(c, "po_cost")}
+                            </option>
+                          ))}
+                        </select>
+                        <select className="h-7 text-xs border rounded px-2 bg-background"
+                          value={marginOp2} onChange={e => setMarginOp2(e.target.value as MarginOp)}>
+                          <option value="">— เลือกเงื่อนไข —</option>
+                          {isNum2 ? (
+                            <>
+                              <option value=">">{'มากกว่า (>)'}</option>
+                              <option value="<">{'น้อยกว่า (<)'}</option>
+                              <option value="=">เท่ากับ (=)</option>
+                              <option value=">=">{'>='}</option>
+                              <option value="<=">{'<='}</option>
+                              <option value="between">ระหว่าง</option>
+                            </>
+                          ) : (
+                            <>
+                              <option value="contains">contains</option>
+                              <option value="=">=</option>
+                              <option value="starts_with">starts with</option>
+                              <option value="ends_with">ends with</option>
+                            </>
+                          )}
+                          <option value="is_set">is set</option>
+                          <option value="is_not_set">is not set</option>
+                        </select>
+                        {!["is_set","is_not_set",""].includes(marginOp2) && (
+                          <Input type={isNum2 ? "number" : "text"} step="any" placeholder={isNum2 ? "ค่า" : "ค้นหา..."} className="h-7 w-32 text-xs"
+                            value={marginV12} onChange={e => setMarginV12(e.target.value)} />
+                        )}
+                        {marginOp2 === "between" && (
+                          <>
+                            <span className="text-xs text-muted-foreground">ถึง</span>
+                            <Input type="number" step="any" placeholder="ค่า" className="h-7 w-24 text-xs"
+                              value={marginV22} onChange={e => setMarginV22(e.target.value)} />
+                          </>
+                        )}
+                      </>
+                    );
+                  })()}
+                  <Button size="sm" className="text-xs h-7" onClick={handleShowMarginFilter} disabled={marginLoading || !hasAnyPoFilter} title={!hasAnyPoFilter ? "กรุณาเลือก Filter ก่อน" : ""}>
+                    {marginLoading ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : null}
+                    {marginLoading && poLoadProgress
+                      ? `${poLoadProgress.phase}${poLoadProgress.total ? ` ${poLoadProgress.current.toLocaleString()}/${poLoadProgress.total.toLocaleString()}` : ""}`
+                      : "Show"}
+                  </Button>
+                  {marginRows !== null && (
+                    <>
+                      <Badge variant="secondary" className="text-xs">กรองแล้ว {marginRows.length} แถว</Badge>
+                      <Button size="sm" variant="ghost" className="text-xs h-7" onClick={clearMarginFilter}>
+                        <X className="w-3 h-3 mr-1" /> Clear filter
+                      </Button>
+                    </>
+                  )}
+                </div>
               </div>
             );
           })()}
@@ -2106,11 +2661,24 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
             <Loader2 className="w-6 h-6 animate-spin text-primary" />
             <span className="ml-2 text-sm text-muted-foreground">กำลังโหลด...</span>
           </div>
-        ) : (activeTable === "po_cost" && marginRows ? marginRows.length === 0 : data.length === 0) ? (
+        ) : (() => {
+          const base = activeTable === "po_cost" ? (marginRows ?? []) : data;
+          const filtered = filterByDivision(base);
+          return filtered.length === 0;
+        })() ? (
           <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
             <Package className="w-12 h-12 mb-3 opacity-30" />
-            <p className="text-sm">ยังไม่มีข้อมูล</p>
-            <p className="text-xs mt-1">กด Import เพื่อนำเข้าข้อมูลจากไฟล์ Excel</p>
+            {activeTable === "po_cost" && marginRows === null ? (
+              <>
+                <p className="text-sm">กรุณาเลือก Filter แล้วกด ดึงข้อมูล</p>
+                <p className="text-xs mt-1">เลือก Vendor / Barcode / Buyer ฯลฯ ด้านบน แล้วกดปุ่ม "ดึงข้อมูล"</p>
+              </>
+            ) : (
+              <>
+                <p className="text-sm">ยังไม่มีข้อมูล</p>
+                <p className="text-xs mt-1">กด Import เพื่อนำเข้าข้อมูลจากไฟล์ Excel</p>
+              </>
+            )}
           </div>
         ) : (
           <table className="w-full border-collapse">
@@ -2120,7 +2688,9 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
                   <Checkbox checked={selectedRows.size === data.length && data.length > 0} onCheckedChange={toggleSelectAll} className="mx-auto" />
                 </th>
                 <th className="data-table-header bg-muted" style={{ width: 48, minWidth: 48 }}>#</th>
-                <th className="data-table-header bg-muted" style={{ width: 56, minWidth: 56 }}>Edit</th>
+                {activeTable !== "po_cost" && (
+                  <th className="data-table-header bg-muted" style={{ width: 56, minWidth: 56 }}>Edit</th>
+                )}
                 {displayColumns.map((col, colIdx) => {
                   const isSynthetic = col.startsWith("__");
                   const label = isSynthetic ? SYNTHETIC_LABELS[col] : getColumnLabel(col, activeTable);
@@ -2149,7 +2719,7 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
               </tr>
             </thead>
             <tbody>
-              {(activeTable === "po_cost" && marginRows ? marginRows : data).map((row, idx) => {
+              {filterByDivision(activeTable === "po_cost" && marginRows ? marginRows : data).map((row, idx) => {
                 const isSelected = selectedRows.has(row.id);
                 const isActiveRow = activeCell?.row === idx;
                 return (
@@ -2169,16 +2739,18 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
                       <Checkbox checked={isSelected} onCheckedChange={() => handleRowClick(idx, row.id, { shiftKey: false, ctrlKey: false, metaKey: false } as any)} />
                     </td>
                     <td className="data-table-cell text-muted-foreground text-center bg-inherit" style={{ width: 48, minWidth: 48 }}>{page * pageSize + idx + 1}</td>
-                    <td className="data-table-cell text-center bg-inherit" style={{ width: 56, minWidth: 56 }} onClick={e => e.stopPropagation()}>
-                      {editingRow === row.id ? (
-                        <div className="flex gap-1 justify-center">
-                          <button onClick={saveEditing} className="text-green-600 hover:text-green-800"><Check className="w-3.5 h-3.5" /></button>
-                          <button onClick={cancelEditing} className="text-red-500 hover:text-red-700"><X className="w-3.5 h-3.5" /></button>
-                        </div>
-                      ) : (
-                        <button onClick={() => startEditing(row.id)} className="text-muted-foreground hover:text-primary"><Pencil className="w-3.5 h-3.5" /></button>
-                      )}
-                    </td>
+                    {activeTable !== "po_cost" && (
+                      <td className="data-table-cell text-center bg-inherit" style={{ width: 56, minWidth: 56 }} onClick={e => e.stopPropagation()}>
+                        {editingRow === row.id ? (
+                          <div className="flex gap-1 justify-center">
+                            <button onClick={saveEditing} className="text-green-600 hover:text-green-800"><Check className="w-3.5 h-3.5" /></button>
+                            <button onClick={cancelEditing} className="text-red-500 hover:text-red-700"><X className="w-3.5 h-3.5" /></button>
+                          </div>
+                        ) : (canEdit && (!divisionEnforced || divisionAllowed(getRowDivision(row), "edit"))) ? (
+                          <button onClick={() => startEditing(row.id)} className="text-muted-foreground hover:text-primary"><Pencil className="w-3.5 h-3.5" /></button>
+                        ) : null}
+                      </td>
+                    )}
                     {displayColumns.map((col, colIdx) => {
                       const isCellActive = activeCell?.row === idx && activeCell?.col === colIdx;
                       const isSynthetic = col.startsWith("__");
@@ -2461,6 +3033,21 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
       </Dialog>
 
       {/* PO Cost Skip List Dialog */}
+      <Dialog open={!!postImportPrompt} onOpenChange={(o) => !o && setPostImportPrompt(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>นำเข้าสำเร็จ</DialogTitle>
+            <DialogDescription>
+              อัปเดต/เพิ่มข้อมูล {postImportPrompt?.count || 0} รายการแล้ว — ต้องการแสดงข้อมูลที่เพิ่งนำเข้าหรือไม่?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPostImportPrompt(null)}>ปิด</Button>
+            <Button onClick={handleShowImportedData}>แสดงข้อมูล</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={showPoCostSkipDialog} onOpenChange={setShowPoCostSkipDialog}>
         <DialogContent className="max-w-4xl max-h-[85vh] overflow-hidden flex flex-col">
           <DialogHeader>
@@ -2562,9 +3149,11 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
                   <th className="text-left px-2 py-1.5 border-b">Vendor</th>
                   <th className="text-left px-2 py-1.5 border-b">Product Name</th>
                   <th className="text-right px-2 py-1.5 border-b">MOQ</th>
-                  <th className="text-right px-2 py-1.5 border-b">PO Cost<div className="text-[10px] font-normal text-muted-foreground">(000,000,000)</div></th>
-                  <th className="text-right px-2 py-1.5 border-b">PO Cost Unit<div className="text-[10px] font-normal text-muted-foreground">(000,000,000)</div></th>
-                  <th className="text-right px-2 py-1.5 border-b">2KM Price<div className="text-[10px] font-normal text-muted-foreground">(000,000,000)</div></th>
+                  <th className="text-right px-2 py-1.5 border-b">PO Cost<div className="text-[10px] font-normal text-muted-foreground">(vendor ccy)</div></th>
+                  <th className="text-right px-2 py-1.5 border-b">PO Cost Unit<div className="text-[10px] font-normal text-muted-foreground">(vendor ccy)</div></th>
+                  <th className="text-right px-2 py-1.5 border-b bg-emerald-50 dark:bg-emerald-950/30">FX Rate<div className="text-[10px] font-normal text-muted-foreground">→ LAK</div></th>
+                  <th className="text-right px-2 py-1.5 border-b bg-emerald-50 dark:bg-emerald-950/30">PO Cost (LAK)<div className="text-[10px] font-normal text-muted-foreground">ใช้คำนวณ Margin</div></th>
+                  <th className="text-right px-2 py-1.5 border-b">2KM Price<div className="text-[10px] font-normal text-muted-foreground">(LAK)</div></th>
                   <th className="text-right px-2 py-1.5 border-b">2KM Margin%</th>
                   <th className="text-right px-2 py-1.5 border-b">Jmart Price<div className="text-[10px] font-normal text-muted-foreground">(000,000,000)</div></th>
                   <th className="text-right px-2 py-1.5 border-b">Jmart Margin%</th>
@@ -2600,6 +3189,8 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
                       <td className="px-2 py-1 text-right">{fmt(w.resolved.moq)}</td>
                       <td className="px-2 py-1 text-right">{fmt(w.resolved.po_cost)}</td>
                       <td className="px-2 py-1 text-right">{fmt(w.resolved.po_cost_unit, 4)}</td>
+                      <td className="px-2 py-1 text-right bg-emerald-50/40 dark:bg-emerald-950/20">{w.fxRate ? fmt(w.fxRate, 2) : "-"}</td>
+                      <td className="px-2 py-1 text-right bg-emerald-50/40 dark:bg-emerald-950/20 font-medium">{fmt(w.poCostUnitLak ?? null)}</td>
                       <td className="px-2 py-1 text-right">{fmt(w.list_price)}</td>
                       <td className={cn("px-2 py-1 text-right font-semibold", flag(w.marginPct2km) && "text-amber-600")}>
                         {w.marginPct2km !== null ? `${w.marginPct2km.toFixed(2)}%` : "-"}
@@ -2634,6 +3225,229 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
               {marginSelected.size > 0
                 ? `ยืนยัน Upsert เฉพาะที่เลือก (${marginSelected.size})`
                 : `ยืนยัน Upsert ทั้งหมด`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* PO Cost: MOQ=1 vs Packing Size Qty > 1 confirmation */}
+      <Dialog open={!!moqPackingPrompt} onOpenChange={(o) => { if (!o) { setMoqPackingPrompt(null); setMoqPackingSelected(new Set()); } }}>
+        <DialogContent className="max-w-4xl max-h-[85vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-500" />
+              พบ MOQ = 1 แต่ Data Master มี Packing Size Qty &gt; 1
+            </DialogTitle>
+            <DialogDescription>
+              {moqPackingPrompt && (
+                <span>
+                  พบ <strong className="text-amber-600">{moqPackingPrompt.moqPackingWarnings.length}</strong> รายการ
+                  จากทั้งหมด {moqPackingPrompt.toUpsert.length} ·
+                  เลือกแล้ว <strong>{moqPackingSelected.size}</strong> · (เลือก = ยืนยัน Upsert ตามไฟล์, ไม่เลือก = ข้าม)
+                </span>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 overflow-auto border rounded">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-muted">
+                <tr>
+                  <th className="px-2 py-1.5 border-b w-8 text-center">
+                    <input
+                      type="checkbox"
+                      aria-label="เลือกทั้งหมด"
+                      checked={!!moqPackingPrompt && moqPackingPrompt.moqPackingWarnings.length > 0 && moqPackingSelected.size === moqPackingPrompt.moqPackingWarnings.length}
+                      ref={(el) => {
+                        if (el && moqPackingPrompt) {
+                          el.indeterminate = moqPackingSelected.size > 0 && moqPackingSelected.size < moqPackingPrompt.moqPackingWarnings.length;
+                        }
+                      }}
+                      onChange={(e) => {
+                        if (!moqPackingPrompt) return;
+                        if (e.target.checked) {
+                          setMoqPackingSelected(new Set(moqPackingPrompt.moqPackingWarnings.map((_, i) => i)));
+                        } else {
+                          setMoqPackingSelected(new Set());
+                        }
+                      }}
+                    />
+                  </th>
+                  <th className="text-left px-2 py-1.5 border-b">ID (SKU)</th>
+                  <th className="text-left px-2 py-1.5 border-b">Product Name</th>
+                  <th className="text-left px-2 py-1.5 border-b">Vendor</th>
+                  <th className="text-right px-2 py-1.5 border-b bg-amber-50 dark:bg-amber-950/30">MOQ (ไฟล์)</th>
+                  <th className="text-left px-2 py-1.5 border-b bg-emerald-50 dark:bg-emerald-950/30">Packing Size Qty (Master &gt;1)</th>
+                  <th className="text-right px-2 py-1.5 border-b">PO Cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                {moqPackingPrompt?.moqPackingWarnings.slice(0, 500).map((mw, i) => {
+                  const checked = moqPackingSelected.has(i);
+                  const fmt = (v: number | null | undefined) =>
+                    v === null || v === undefined || !Number.isFinite(Number(v)) ? "-" : Number(v).toLocaleString();
+                  return (
+                    <tr key={i} className={cn("border-b hover:bg-muted/30", checked && "bg-primary/5")}>
+                      <td className="px-2 py-1 text-center">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            setMoqPackingSelected(prev => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.add(i); else next.delete(i);
+                              return next;
+                            });
+                          }}
+                        />
+                      </td>
+                      <td className="px-2 py-1 font-mono">{mw.resolved.item_id}</td>
+                      <td className="px-2 py-1">{mw.productName}</td>
+                      <td className="px-2 py-1 font-mono">{mw.resolved.vendor}</td>
+                      <td className="px-2 py-1 text-right font-medium bg-amber-50/40 dark:bg-amber-950/20">{fmt(mw.importedMoq)}</td>
+                      <td className="px-2 py-1 font-mono bg-emerald-50/40 dark:bg-emerald-950/20">{mw.packingSizes.join(", ")}</td>
+                      <td className="px-2 py-1 text-right">{fmt(mw.resolved.po_cost)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {(moqPackingPrompt?.moqPackingWarnings.length ?? 0) > 500 && (
+              <p className="text-xs text-muted-foreground p-2">แสดง 500 จาก {moqPackingPrompt!.moqPackingWarnings.length} (กด Download เพื่อดูทั้งหมด)</p>
+            )}
+          </div>
+          <DialogFooter className="gap-2 flex-wrap">
+            <Button variant="outline" onClick={() => { setMoqPackingPrompt(null); setMoqPackingSelected(new Set()); }}>ยกเลิก</Button>
+            <Button variant="outline" onClick={() => {
+              if (!moqPackingPrompt) return;
+              const target = moqPackingSelected.size > 0
+                ? moqPackingPrompt.moqPackingWarnings.filter((_, i) => moqPackingSelected.has(i))
+                : moqPackingPrompt.moqPackingWarnings;
+              if (target.length === 0) return;
+              downloadSkipList(target.map(m => m.skip));
+            }}>
+              <Download className="w-3.5 h-3.5 mr-1" />
+              Download Skip List {moqPackingSelected.size > 0 ? `(${moqPackingSelected.size})` : `(ทั้งหมด ${moqPackingPrompt?.moqPackingWarnings.length ?? 0})`}
+            </Button>
+            <Button variant="secondary" onClick={confirmMoqPackingSkipAll}>
+              ข้ามทั้งหมด + Upsert ที่เหลือ
+            </Button>
+            <Button onClick={confirmMoqPackingUpsert}>
+              {moqPackingSelected.size > 0
+                ? `ยืนยัน Upsert เฉพาะที่เลือก (${moqPackingSelected.size})`
+                : `ยืนยัน Upsert ทั้งหมดตามไฟล์`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* PO Cost: Vendor Code mismatch confirmation */}
+      <Dialog open={!!vendorMismatchPrompt} onOpenChange={(o) => { if (!o) { setVendorMismatchPrompt(null); setVendorMismatchSelected(new Set()); } }}>
+        <DialogContent className="max-w-4xl max-h-[85vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-500" />
+              พบ Vendor Code ที่ไม่ตรงกับ Data Master
+            </DialogTitle>
+            <DialogDescription>
+              {vendorMismatchPrompt && (
+                <span>
+                  Vendor Code ในไฟล์ ไม่ตรงกับ Vendor Code ของสินค้านี้ใน Data Master ·
+                  พบ <strong className="text-amber-600">{vendorMismatchPrompt.mismatches.length}</strong> รายการ
+                  จากทั้งหมด {vendorMismatchPrompt.toUpsert.length} ·
+                  เลือกแล้ว <strong>{vendorMismatchSelected.size}</strong> · (ไม่เลือก = Insert ทุกรายการตามไฟล์)
+                </span>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 overflow-auto border rounded">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-muted">
+                <tr>
+                  <th className="px-2 py-1.5 border-b w-8 text-center">
+                    <input
+                      type="checkbox"
+                      aria-label="เลือกทั้งหมด"
+                      checked={!!vendorMismatchPrompt && vendorMismatchPrompt.mismatches.length > 0 && vendorMismatchSelected.size === vendorMismatchPrompt.mismatches.length}
+                      ref={(el) => {
+                        if (el && vendorMismatchPrompt) {
+                          el.indeterminate = vendorMismatchSelected.size > 0 && vendorMismatchSelected.size < vendorMismatchPrompt.mismatches.length;
+                        }
+                      }}
+                      onChange={(e) => {
+                        if (!vendorMismatchPrompt) return;
+                        if (e.target.checked) {
+                          setVendorMismatchSelected(new Set(vendorMismatchPrompt.mismatches.map((_, i) => i)));
+                        } else {
+                          setVendorMismatchSelected(new Set());
+                        }
+                      }}
+                    />
+                  </th>
+                  <th className="text-left px-2 py-1.5 border-b">ID (SKU)</th>
+                  <th className="text-left px-2 py-1.5 border-b">Product Name</th>
+                  <th className="text-left px-2 py-1.5 border-b bg-amber-50 dark:bg-amber-950/30">Vendor (ไฟล์)</th>
+                  <th className="text-left px-2 py-1.5 border-b bg-emerald-50 dark:bg-emerald-950/30">Vendor (Data Master)</th>
+                  <th className="text-right px-2 py-1.5 border-b">MOQ</th>
+                  <th className="text-right px-2 py-1.5 border-b">PO Cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                {vendorMismatchPrompt?.mismatches.slice(0, 500).map((vm, i) => {
+                  const checked = vendorMismatchSelected.has(i);
+                  const fmt = (v: number | null | undefined) =>
+                    v === null || v === undefined || !Number.isFinite(Number(v))
+                      ? "-"
+                      : Number(v).toLocaleString();
+                  return (
+                    <tr key={i} className={cn("border-b hover:bg-muted/30", checked && "bg-primary/5")}>
+                      <td className="px-2 py-1 text-center">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            setVendorMismatchSelected(prev => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.add(i); else next.delete(i);
+                              return next;
+                            });
+                          }}
+                        />
+                      </td>
+                      <td className="px-2 py-1 font-mono">{vm.resolved.item_id}</td>
+                      <td className="px-2 py-1">{vm.productName}</td>
+                      <td className="px-2 py-1 font-mono bg-amber-50/40 dark:bg-amber-950/20 font-medium">{vm.importedVendor}</td>
+                      <td className="px-2 py-1 font-mono bg-emerald-50/40 dark:bg-emerald-950/20">{vm.masterVendors.join(", ")}</td>
+                      <td className="px-2 py-1 text-right">{fmt(vm.resolved.moq)}</td>
+                      <td className="px-2 py-1 text-right">{fmt(vm.resolved.po_cost)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {(vendorMismatchPrompt?.mismatches.length ?? 0) > 500 && (
+              <p className="text-xs text-muted-foreground p-2">แสดง 500 จาก {vendorMismatchPrompt!.mismatches.length} (กด Download เพื่อดูทั้งหมด)</p>
+            )}
+          </div>
+          <DialogFooter className="gap-2 flex-wrap">
+            <Button variant="outline" onClick={() => { setVendorMismatchPrompt(null); setVendorMismatchSelected(new Set()); }}>ยกเลิก</Button>
+            <Button variant="outline" onClick={() => {
+              if (!vendorMismatchPrompt) return;
+              const target = vendorMismatchSelected.size > 0
+                ? vendorMismatchPrompt.mismatches.filter((_, i) => vendorMismatchSelected.has(i))
+                : vendorMismatchPrompt.mismatches;
+              if (target.length === 0) return;
+              downloadSkipList(target.map(m => m.skip));
+            }}>
+              <Download className="w-3.5 h-3.5 mr-1" />
+              Download Skip List {vendorMismatchSelected.size > 0 ? `(${vendorMismatchSelected.size})` : `(ทั้งหมด ${vendorMismatchPrompt?.mismatches.length ?? 0})`}
+            </Button>
+            <Button variant="secondary" onClick={confirmVendorMismatchSkipAll}>
+              ข้ามทั้งหมด + Upsert ที่เหลือ
+            </Button>
+            <Button onClick={confirmVendorMismatchUpsert}>
+              {vendorMismatchSelected.size > 0
+                ? `ยืนยัน Upsert เฉพาะที่เลือก (${vendorMismatchSelected.size})`
+                : `ยืนยัน Upsert ทั้งหมดตามไฟล์`}
             </Button>
           </DialogFooter>
         </DialogContent>

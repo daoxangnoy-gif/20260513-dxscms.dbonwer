@@ -17,6 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 import * as XLSX from "xlsx";
+import { remapRowsByTemplate } from "@/lib/exportTemplate";
 
 // ============================================================
 // Constants
@@ -1510,19 +1511,24 @@ function SODocList({ docs, onChange, allDocs, onPreview }: {
     return { totalSOs, totalItems };
   }, [filteredEligible, selected, itemsPerSO, soMode]);
 
-  const exportSelected = () => {
+  const exportSelected = async () => {
     const list = filteredEligible.filter(d => selected.has(d.id));
     if (list.length === 0) { toast({ title: "กรุณาเลือกเอกสาร", variant: "destructive" }); return; }
     const all: any[] = [];
-    for (const d of list) all.push(...buildSORows(d));
+    for (const d of list) {
+      const rows = buildSORows(d);
+      const mapped = await remapRowsByTemplate(d.doc_type === "ro" ? "srr_special_ro" : "srr_special_so", rows);
+      all.push(...mapped);
+    }
     const ws = XLSX.utils.json_to_sheet(all);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "SO");
     XLSX.writeFile(wb, `${tsCompact()}-SO-Combined.xlsx`);
     toast({ title: "Export SO สำเร็จ", description: `${list.length} เอกสาร · ${splitInfo.totalSOs} SO` });
   };
-  const exportSingle = (d: SavedB2BDoc) => {
-    const ws = XLSX.utils.json_to_sheet(buildSORows(d));
+  const exportSingle = async (d: SavedB2BDoc) => {
+    const rows = await remapRowsByTemplate(d.doc_type === "ro" ? "srr_special_ro" : "srr_special_so", buildSORows(d));
+    const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "SO");
     XLSX.writeFile(wb, `${d.filename}-SO.xlsx`);
@@ -1807,7 +1813,7 @@ function PODocList({ docs, onChange, allDocs, onPreview }: {
     return out;
   };
 
-  const doRegenerate = () => {
+  const doRegenerate = async () => {
     if (selected.size === 0) { toast({ title: "กรุณาเลือกเอกสาร", variant: "destructive" }); return; }
     const list = eligible.filter(d => selected.has(d.id));
     // STEP 1: Merge all selected docs' detail rows into one pool BEFORE grouping
@@ -1821,7 +1827,8 @@ function PODocList({ docs, onChange, allDocs, onPreview }: {
       }
     }
     // STEP 2-4: sum + rebuild main rows + split by Items per PO
-    const all = buildPORowsMerged(allRows, descByVendor);
+    const built = buildPORowsMerged(allRows, descByVendor);
+    const all = await remapRowsByTemplate("srr_special_po", built);
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet(all);
     XLSX.utils.book_append_sheet(wb, ws, "PO");
@@ -1829,12 +1836,13 @@ function PODocList({ docs, onChange, allDocs, onPreview }: {
     toast({ title: "Regenerate สำเร็จ", description: `${list.length} เอกสาร · ${all.length} แถว` });
   };
 
-  const exportSelected = () => {
+  const exportSelected = async () => {
     if (selected.size === 0) { toast({ title: "กรุณาเลือกเอกสาร", variant: "destructive" }); return; }
-    doRegenerate();
+    await doRegenerate();
   };
-  const exportSingle = (d: SavedB2BDoc) => {
-    const ws = XLSX.utils.json_to_sheet(buildPORows(d));
+  const exportSingle = async (d: SavedB2BDoc) => {
+    const rows = await remapRowsByTemplate("srr_special_po", buildPORows(d));
+    const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "PO");
     XLSX.writeFile(wb, `${d.filename}-PO.xlsx`);

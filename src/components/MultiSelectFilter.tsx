@@ -1,4 +1,5 @@
 import { useState, ReactNode } from "react";
+import { Loader2 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,11 +15,23 @@ interface Props {
   width?: string;
   renderOption?: (opt: string) => ReactNode;
   emptyHint?: string;
+  counts?: Record<string, number>;
+  loading?: boolean;
 }
 
-export function MultiSelectFilter({ label, icon, options, selected, onChange, width = "w-72", renderOption, emptyHint }: Props) {
+function fmtCount(n: number) {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 10_000) return `${Math.round(n / 1000)}k`;
+  if (n >= 1_000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
+}
+
+export function MultiSelectFilter({ label, icon, options, selected, onChange, width = "w-72", renderOption, emptyHint, counts, loading }: Props) {
   const [q, setQ] = useState("");
-  const filtered = options.filter(o => o.toLowerCase().includes(q.toLowerCase()));
+  const filtered = (counts
+    ? [...options].sort((a, b) => (counts[b] || 0) - (counts[a] || 0))
+    : options
+  ).filter(o => o.toLowerCase().includes(q.toLowerCase()));
   const allFilteredSelected = filtered.length > 0 && filtered.every(o => selected.includes(o));
 
   const toggle = (o: string, c: boolean) =>
@@ -43,7 +56,12 @@ export function MultiSelectFilter({ label, icon, options, selected, onChange, wi
           <Input value={q} onChange={e => setQ(e.target.value)} placeholder="ค้นหา..." className="h-7 text-xs" />
           <Button size="sm" variant="ghost" className="h-6 text-[10px] px-1.5" onClick={() => onChange([])}>Clear</Button>
         </div>
-        {emptyHint && options.length === 0 && (
+        {loading && options.length === 0 && (
+          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground py-3 px-1 justify-center">
+            <Loader2 className="h-3 w-3 animate-spin" /> กำลังโหลด...
+          </div>
+        )}
+        {!loading && emptyHint && options.length === 0 && (
           <div className="text-[10px] text-muted-foreground py-2 px-1">{emptyHint}</div>
         )}
         {filtered.length > 0 && (
@@ -56,7 +74,12 @@ export function MultiSelectFilter({ label, icon, options, selected, onChange, wi
           {filtered.map(o => (
             <label key={o} className="flex items-center gap-2 cursor-pointer text-xs py-0.5 px-1 hover:bg-accent rounded">
               <Checkbox checked={selected.includes(o)} onCheckedChange={c => toggle(o, !!c)} />
-              <span className="flex-1">{renderOption ? renderOption(o) : o}</span>
+              <span className="flex-1 truncate">{renderOption ? renderOption(o) : o}</span>
+              {counts && (
+                <span className="text-[10px] text-muted-foreground tabular-nums">
+                  ({fmtCount(counts[o] || 0)})
+                </span>
+              )}
             </label>
           ))}
           {filtered.length === 0 && options.length > 0 && (

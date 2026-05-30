@@ -21,6 +21,8 @@ export interface ImportedItem {
   poCost?: number;
   /** Optional store name (Direct only) */
   storeName?: string;
+  /** Optional vendor code override — when present, swap the resolved SKU's vendor with this code */
+  overrideVendor?: string;
 }
 
 export interface ImportedVendor {
@@ -67,23 +69,85 @@ export function SrrImportFilter({
   const [vendorImportTab, setVendorImportTab] = useState("upload");
   const [pasteText, setPasteText] = useState("");
   const [vendorPasteText, setVendorPasteText] = useState("");
+  const overrideCols = showStoreNameInTemplate
+    ? ["key", "qty_uom", "qty_unit", "po_cost", "store", "vendor_code"]
+    : ["key", "qty_uom", "qty_unit", "po_cost", "vendor_code"];
+  const makeEmptyGrid = () => Array.from({ length: 5 }, () => Array(overrideCols.length).fill(""));
+  const [overrideGrid, setOverrideGrid] = useState<string[][]>(makeEmptyGrid());
   const { toast } = useToast();
 
-  const handlePasteImport = () => {
-    const lines = pasteText.split(/\n/).map(l => l.trim()).filter(Boolean);
+  const updateGridCell = (r: number, c: number, v: string) => {
+    setOverrideGrid(prev => {
+      const next = prev.map(row => [...row]);
+      while (next.length <= r) next.push(Array(overrideCols.length).fill(""));
+      next[r][c] = v;
+      return next;
+    });
+  };
+
+  const handleGridPaste = (e: React.ClipboardEvent<HTMLInputElement>, startR: number, startC: number) => {
+    const text = e.clipboardData.getData("text");
+    if (!text) return;
+    // Split rows; each row split by tab or comma
+    const rows = text.replace(/\r/g, "").split("\n").filter(l => l.length > 0);
+    if (rows.length === 0) return;
+    const matrix = rows.map(r => r.split(/\t|,/).map(s => s.trim()));
+    // If only one cell pasted, let default behavior happen
+    if (matrix.length === 1 && matrix[0].length === 1) return;
+    e.preventDefault();
+    setOverrideGrid(prev => {
+      const next = prev.map(row => [...row]);
+      for (let i = 0; i < matrix.length; i++) {
+        const r = startR + i;
+        while (next.length <= r) next.push(Array(overrideCols.length).fill(""));
+        for (let j = 0; j < matrix[i].length; j++) {
+          const c = startC + j;
+          if (c >= overrideCols.length) break;
+          next[r][c] = matrix[i][j];
+        }
+      }
+      // Ensure at least one trailing empty row
+      const last = next[next.length - 1];
+      if (last.some(v => v !== "")) next.push(Array(overrideCols.length).fill(""));
+      return next;
+    });
+  };
+
+  const handleGridImport = () => {
+    const lines = overrideGrid
+      .filter(row => row[0] && row[0].trim() !== "")
+      .map(row => row.map(v => (v ?? "").trim()).join(","));
     if (lines.length === 0) {
-      toast({ title: "กรุณากรอก barcode/SKU", variant: "destructive" });
+      toast({ title: "กรุณากรอกข้อมูลอย่างน้อย 1 แถว", variant: "destructive" });
       return;
     }
-    // Paste columns order: key, qtyUom, qtyUnit, po_cost[, store]
+    const { items, conflictCount } = parsePaste(lines.join("\n"), true);
+    if (conflictCount > 0) {
+      toast({ title: "พบข้อมูลขัดแย้ง", description: `${conflictCount} แถว กรอกทั้ง Qty Uom และ Qty Unit — กรุณากรอกแค่ช่องเดียว`, variant: "destructive" });
+      return;
+    }
+    if (items.length === 0) {
+      toast({ title: "ไม่มีข้อมูลที่ใช้ได้", variant: "destructive" });
+      return;
+    }
+    onImportedChange(items);
+    setOverrideGrid(makeEmptyGrid());
+    setImportOpen(false);
+    toast({ title: `Import แล้ว ${items.length} รายการ (Override Vendor)` });
+  };
+
+  const parsePaste = (text: string, withVendor: boolean): { items: ImportedItem[]; conflictCount: number } => {
+    const lines = text.split(/\n/).map(l => l.trim()).filter(Boolean);
     const items: ImportedItem[] = [];
     const seen = new Set<string>();
     let conflictCount = 0;
+    // Columns: key, qtyUom, qtyUnit, po_cost, store, [vendor]
     for (const line of lines) {
       const parts = line.split(/[\t,\s]+/).map(p => p.trim()).filter(Boolean);
       const key = parts[0];
       if (!key) continue;
       const store = parts[4] || "";
+      const vendor = withVendor ? (parts[5] || "") : "";
       const dedupKey = `${key}|${store}`;
       if (seen.has(dedupKey)) continue;
       seen.add(dedupKey);
@@ -97,14 +161,16 @@ export function SrrImportFilter({
         qtyUnit: !isNaN(qtyUnitNum) && qtyUnitNum > 0 ? qtyUnitNum : undefined,
         poCost: poCostNum != null && !isNaN(poCostNum) && poCostNum > 0 ? poCostNum : undefined,
         storeName: store || undefined,
+        overrideVendor: vendor || undefined,
       });
     }
+    return { items, conflictCount };
+  };
+
+  const handlePasteImport = (withVendor = false) => {
+    const { items, conflictCount } = parsePaste(pasteText, withVendor);
     if (conflictCount > 0) {
-      toast({
-        title: "พบข้อมูลขัดแย้ง",
-        description: `${conflictCount} แถว กรอกทั้ง Qty Uom และ Qty Unit — กรุณากรอกแค่ช่องเดียว`,
-        variant: "destructive",
-      });
+      toast({ title: "พบข้อมูลขัดแย้ง", description: `${conflictCount} แถว กรอกทั้ง Qty Uom และ Qty Unit — กรุณากรอกแค่ช่องเดียว`, variant: "destructive" });
       return;
     }
     if (items.length === 0) {
@@ -112,25 +178,28 @@ export function SrrImportFilter({
       return;
     }
     onImportedChange(items);
-    toast({ title: "Import สำเร็จ", description: `${items.length} รายการ พร้อม Prepare` });
+    const ov = items.filter(i => i.overrideVendor).length;
+    toast({ title: "Import สำเร็จ", description: `${items.length} รายการ${ov > 0 ? ` · ${ov} override vendor` : ""}` });
     setImportOpen(false);
     setPasteText("");
   };
 
-  const downloadTemplate = () => {
+  const downloadTemplate = (includeVendor = false) => {
     const headers = ["Barcode&SkuCode", "Qty Uom", "Qty Unit", "Po cost"];
     const sample: any[][] = [headers, ["8851234567890", 5, "", 12.50], ["SKU-00123", "", 25, ""], ["8851111122223", 12, "", 8.75]];
     if (showStoreNameInTemplate) {
       headers.push("Store name");
-      sample[0] = headers;
-      sample[1].push("Jmart-001");
-      sample[2].push("");
-      sample[3].push("Kokkok-002");
+      sample[1].push("Jmart-001"); sample[2].push(""); sample[3].push("Kokkok-002");
     }
+    if (includeVendor) {
+      headers.push("vendor_code");
+      sample[1].push("V001"); sample[2].push("V002"); sample[3].push("");
+    }
+    sample[0] = headers;
     const ws = XLSX.utils.aoa_to_sheet(sample);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Items");
-    XLSX.writeFile(wb, "srr_import_template.xlsx");
+    XLSX.writeFile(wb, includeVendor ? "srr_import_override_vendor_template.xlsx" : "srr_import_template.xlsx");
   };
 
   const handleFile = async (file: File) => {
@@ -177,9 +246,11 @@ export function SrrImportFilter({
         const qtyUnitRaw = lookupKey(r, ["Qty Unit", "qty unit", "QtyUnit", "qty_unit", "Qty unit"]) ?? "";
         const poCostRaw = lookupKey(r, ["Po cost", "PO Cost", "po_cost", "PoCost", "Cost"]) ?? "";
         const storeRaw = lookupKey(r, ["Store name", "store_name", "Store Name", "StoreName"]) ?? "";
+        const vendorRaw = lookupKey(r, ["vendor_code", "Vendor Code", "VendorCode", "vendor", "Vendor"]) ?? "";
         const key = String(keyRaw ?? "").trim();
         if (!key) continue;
         const storeName = storeRaw ? String(storeRaw).trim() : "";
+        const overrideVendor = vendorRaw ? String(vendorRaw).trim() : "";
         const dedupKey = `${key}|${storeName}`;
         if (seen.has(dedupKey)) continue;
         seen.add(dedupKey);
@@ -195,6 +266,7 @@ export function SrrImportFilter({
           qtyUnit: qtyUnitNum > 0 ? qtyUnitNum : undefined,
           poCost: poCostNum != null && poCostNum > 0 ? poCostNum : undefined,
           storeName: storeName || undefined,
+          overrideVendor: overrideVendor || undefined,
         });
       }
       if (conflictRows.length > 0) {
@@ -421,9 +493,10 @@ export function SrrImportFilter({
             </DialogTitle>
           </DialogHeader>
           <Tabs value={importTab} onValueChange={setImportTab}>
-            <TabsList className="grid grid-cols-2">
+            <TabsList className="grid grid-cols-3">
               <TabsTrigger value="upload" className="text-xs">Upload File</TabsTrigger>
               <TabsTrigger value="paste" className="text-xs">Paste</TabsTrigger>
+              <TabsTrigger value="override" className="text-xs">Override Vendor</TabsTrigger>
             </TabsList>
             <TabsContent value="upload" className="space-y-2 pt-2">
               <p className="text-xs text-muted-foreground">
@@ -438,7 +511,7 @@ export function SrrImportFilter({
                 onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
                 className="block w-full text-xs file:mr-2 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:bg-primary file:text-primary-foreground hover:file:bg-primary/90 cursor-pointer"
               />
-              <Button variant="ghost" size="sm" onClick={downloadTemplate} className="gap-1.5 text-xs">
+              <Button variant="ghost" size="sm" onClick={() => downloadTemplate(false)} className="gap-1.5 text-xs">
                 <Download className="w-3.5 h-3.5" /> ดาวน์โหลด Template
               </Button>
             </TabsContent>
@@ -454,10 +527,86 @@ export function SrrImportFilter({
                 placeholder={`8851111111111\nSKU-00123,5,,12.50${showStoreNameInTemplate ? ",Jmart-001" : ""}\n8851111111112,,25,8.75`}
               />
               <DialogFooter>
-                <Button onClick={handlePasteImport} size="sm" className="gap-1.5 text-xs">
+                <Button onClick={() => handlePasteImport(false)} size="sm" className="gap-1.5 text-xs">
                   <Upload className="w-3.5 h-3.5" /> Import
                 </Button>
               </DialogFooter>
+            </TabsContent>
+            <TabsContent value="override" className="space-y-2 pt-2">
+              <p className="text-xs text-muted-foreground">
+                เหมือน Import Barcode ปกติ — เพิ่มคอลัมน์ <code className="bg-muted px-1 rounded">vendor_code</code> ต่อท้าย — ระบบจะ <b>ทับ vendor ของ SKU ที่ match เท่านั้น</b> และคำนวณตาม leadtime/order_cycle ของ vendor ที่ทับเข้ามา
+              </p>
+              <input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
+                className="block w-full text-xs file:mr-2 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:bg-primary file:text-primary-foreground hover:file:bg-primary/90 cursor-pointer"
+              />
+              <Button variant="ghost" size="sm" onClick={() => downloadTemplate(true)} className="gap-1.5 text-xs">
+                <Download className="w-3.5 h-3.5" /> ดาวน์โหลด Template (มี vendor_code)
+              </Button>
+              <div className="pt-2 border-t mt-2">
+                <p className="text-xs text-muted-foreground mb-2">
+                  หรือกรอกข้อมูลแยกช่อง — สามารถ <b>Copy จาก Excel แล้ววางในช่องใดก็ได้</b> ระบบจะแยกข้อมูลลงแต่ละคอลัมน์ให้อัตโนมัติ (รองรับ Tab/comma)
+                </p>
+                <div className="border rounded-md overflow-auto max-h-64">
+                  <table className="w-full text-xs">
+                    <thead className="bg-muted sticky top-0">
+                      <tr>
+                        <th className="px-1 py-1 w-8 text-muted-foreground font-normal">#</th>
+                        {overrideCols.map(col => (
+                          <th key={col} className="px-1 py-1 text-left font-semibold border-l">
+                            {col}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {overrideGrid.map((row, ri) => (
+                        <tr key={ri} className="border-t">
+                          <td className="px-1 py-0.5 text-center text-muted-foreground">{ri + 1}</td>
+                          {overrideCols.map((_, ci) => (
+                            <td key={ci} className="border-l p-0">
+                              <input
+                                type="text"
+                                value={row[ci] ?? ""}
+                                onChange={(e) => updateGridCell(ri, ci, e.target.value)}
+                                onPaste={(e) => handleGridPaste(e, ri, ci)}
+                                className="w-full px-1.5 py-1 text-xs font-mono bg-transparent outline-none focus:bg-accent/30"
+                              />
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="flex items-center justify-between mt-2">
+                  <div className="flex gap-1.5">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="text-xs h-7"
+                      onClick={() => setOverrideGrid(prev => [...prev, Array(overrideCols.length).fill("")])}
+                    >
+                      + เพิ่มแถว
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="text-xs h-7"
+                      onClick={() => setOverrideGrid(makeEmptyGrid())}
+                    >
+                      ล้างข้อมูล
+                    </Button>
+                  </div>
+                  <Button onClick={handleGridImport} size="sm" className="gap-1.5 text-xs">
+                    <Upload className="w-3.5 h-3.5" /> Import Override Vendor
+                  </Button>
+                </div>
+              </div>
             </TabsContent>
           </Tabs>
         </DialogContent>
@@ -532,6 +681,7 @@ export function SrrImportFilter({
                   <th className="text-right px-3 py-2 w-24">Qty Unit</th>
                   <th className="text-right px-3 py-2 w-24">Po cost</th>
                   {showStoreNameInTemplate && <th className="text-left px-3 py-2 w-32">Store</th>}
+                  <th className="text-left px-3 py-2 w-28">Override Vendor</th>
                 </tr>
               </thead>
               <tbody>
@@ -543,6 +693,7 @@ export function SrrImportFilter({
                     <td className="px-3 py-1.5 text-right">{it.qtyUnit ?? "-"}</td>
                     <td className="px-3 py-1.5 text-right">{it.poCost ?? "-"}</td>
                     {showStoreNameInTemplate && <td className="px-3 py-1.5">{it.storeName || "-"}</td>}
+                    <td className="px-3 py-1.5 font-mono text-orange-600 dark:text-orange-400">{it.overrideVendor || "-"}</td>
                   </tr>
                 ))}
               </tbody>

@@ -50,6 +50,7 @@ import { SRRReport2Tab } from "@/components/SRRReport2Tab";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import * as XLSX from "xlsx";
+import { remapRowsByTemplate } from "@/lib/exportTemplate";
 import { buildSRRDirectFormulaRow, buildSheetWithFormulaRow } from "@/lib/srrExportFormulas";
 import {
   SrrImportFilter,
@@ -343,50 +344,38 @@ async function fetchD2SDataRPC(
   onProgress?: (loaded: number) => void,
   skuCodes?: string[] | null,
 ): Promise<any[]> {
-  const allRows: any[] = [];
-  const pageSize = 1000;
-  let offset = 0;
-  let hasMore = true;
-  let skipSkuParam = false;
-  while (hasMore) {
-    const baseParams: any = {
-      p_vendor_codes: vendorCodes,
-      p_spc_names: spcNames,
-      p_order_days: orderDays,
-      p_item_types: itemTypes,
-      p_division_groups: hierarchy?.divisionGroups ?? null,
-      p_divisions: hierarchy?.divisions ?? null,
-      p_departments: hierarchy?.departments ?? null,
-      p_sub_departments: hierarchy?.subDepartments ?? null,
-      p_classes: hierarchy?.classes ?? null,
-      p_sub_classes: hierarchy?.subClasses ?? null,
-    };
-    if (!skipSkuParam && skuCodes && skuCodes.length > 0) {
-      baseParams.p_sku_codes = skuCodes;
-    }
-    let { data, error } = await (supabase
-      .rpc("get_srr_d2s_data", baseParams) as any)
-      .abortSignal(AbortSignal.timeout(55000))
-      .range(offset, offset + pageSize - 1);
-    if (error && !skipSkuParam && /p_sku_codes|unknown|does not exist|argument/i.test(error.message || "")) {
-      console.warn("[fetchD2SDataRPC] p_sku_codes not supported, retrying without it:", error.message);
-      skipSkuParam = true;
-      delete baseParams.p_sku_codes;
-      ({ data, error } = await (supabase
-        .rpc("get_srr_d2s_data", baseParams) as any)
-        .abortSignal(AbortSignal.timeout(55000))
-        .range(offset, offset + pageSize - 1));
-    }
-    if (error) throw error;
-    if (!data || data.length === 0) {
-      hasMore = false;
-    } else {
-      allRows.push(...data);
-      offset += pageSize;
-      onProgress?.(allRows.length);
-      if (data.length < pageSize) hasMore = false;
-    }
+  const { hasActiveFilterTemplates } = await import("@/lib/filterTemplates");
+  const skipDefaults = await hasActiveFilterTemplates("srr_direct");
+  const baseParams: any = {
+    p_vendor_codes: vendorCodes,
+    p_spc_names: spcNames,
+    p_order_days: orderDays,
+    p_item_types: itemTypes,
+    p_division_groups: hierarchy?.divisionGroups ?? null,
+    p_divisions: hierarchy?.divisions ?? null,
+    p_departments: hierarchy?.departments ?? null,
+    p_sub_departments: hierarchy?.subDepartments ?? null,
+    p_classes: hierarchy?.classes ?? null,
+    p_sub_classes: hierarchy?.subClasses ?? null,
+    p_skip_default_filters: skipDefaults,
+  };
+  if (skuCodes && skuCodes.length > 0) {
+    baseParams.p_sku_codes = skuCodes;
   }
+  // JSON wrapper — returns one JSONB row containing all data, bypasses PostgREST 1000-row cap
+  let { data, error } = await (supabase
+    .rpc("get_srr_d2s_data_json" as any, baseParams) as any)
+    .abortSignal(AbortSignal.timeout(240000));
+  if (error && baseParams.p_sku_codes && /p_sku_codes|unknown|does not exist|argument/i.test(error.message || "")) {
+    console.warn("[fetchD2SDataRPC] p_sku_codes not supported, retrying without it:", error.message);
+    delete baseParams.p_sku_codes;
+    ({ data, error } = await (supabase
+      .rpc("get_srr_d2s_data_json" as any, baseParams) as any)
+      .abortSignal(AbortSignal.timeout(240000)));
+  }
+  if (error) throw error;
+  const allRows: any[] = Array.isArray(data) ? data : (data || []);
+  onProgress?.(allRows.length);
   return allRows;
 }
 
@@ -405,8 +394,8 @@ async function fetchD2SDataRPCFast(
   onProgress?: (loaded: number) => void,
   skuCodes?: string[] | null,
 ): Promise<any[]> {
-  const pageSize = 1000;
-  const parallelism = 4;
+  const { hasActiveFilterTemplates } = await import("@/lib/filterTemplates");
+  const skipDefaults = await hasActiveFilterTemplates("srr_direct");
   const params: any = {
     p_vendor_codes: vendorCodes,
     p_spc_names: spcNames,
@@ -419,40 +408,16 @@ async function fetchD2SDataRPCFast(
     p_classes: hierarchy?.classes ?? null,
     p_sub_classes: hierarchy?.subClasses ?? null,
     p_sku_codes: skuCodes && skuCodes.length > 0 ? skuCodes : null,
+    p_skip_default_filters: skipDefaults,
   };
 
-  const fetchPage = async (pageIdx: number): Promise<any[]> => {
-    const off = pageIdx * pageSize;
-    const { data, error } = await (supabase
-      .rpc("get_srr_d2s_data", params) as any)
-      .abortSignal(AbortSignal.timeout(55000))
-      .range(off, off + pageSize - 1);
-    if (error) throw error;
-    return data || [];
-  };
-
-  const allRows: any[] = [];
-  // First page
-  const first = await fetchPage(0);
-  allRows.push(...first);
+  // JSON wrapper — returns one JSONB row containing all data, bypasses PostgREST 1000-row cap
+  const { data, error } = await (supabase
+    .rpc("get_srr_d2s_data_json" as any, params) as any)
+    .abortSignal(AbortSignal.timeout(240000));
+  if (error) throw error;
+  const allRows: any[] = Array.isArray(data) ? data : (data || []);
   onProgress?.(allRows.length);
-  if (first.length < pageSize) return allRows;
-
-  // Parallel fan-out: fetch pages in waves of `parallelism`.
-  // Stop as soon as a wave returns a non-full page (no more data).
-  let nextPage = 1;
-  while (true) {
-    const wavePages = Array.from({ length: parallelism }, (_, k) => nextPage + k);
-    const results = await Promise.all(wavePages.map(p => fetchPage(p)));
-    let stop = false;
-    for (const pageRows of results) {
-      allRows.push(...pageRows);
-      if (pageRows.length < pageSize) stop = true;
-    }
-    onProgress?.(allRows.length);
-    if (stop) break;
-    nextPage += parallelism;
-  }
   return allRows;
 }
 
@@ -798,6 +763,18 @@ function MultiSelect({
 // ============================================================
 const d2sStateRef = { current: null as any };
 
+// Real-time elapsed seconds since `startedAt` (ms). Re-renders every 100ms.
+function ElapsedTimer({ startedAt }: { startedAt: number }) {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => force((x) => x + 1), 100);
+    return () => clearInterval(id);
+  }, [startedAt]);
+  const s = ((Date.now() - startedAt) / 1000).toFixed(1);
+  return <span className="text-[11px] font-mono tabular-nums text-primary font-semibold">⏱ {s}s</span>;
+}
+
+
 export default function SRRDirectPage() {
   const { user, canDo } = useAuth();
   const canDeleteDoc = canDo("direct_item", "delete");
@@ -810,12 +787,19 @@ export default function SRRDirectPage() {
   const [calcProgress, setCalcProgress] = useState(0);
   const [loadingPhase, setLoadingPhase] = useState("");
   const [loadingDetail, setLoadingDetail] = useState("");
+  const [calcStartedAt, setCalcStartedAt] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<string>(d2sStateRef.current?.activeTab || "read-cal");
   const [docsDialogOpen, setDocsDialogOpen] = useState(false);
   const [calConfirmOpen, setCalConfirmOpen] = useState(false);
   const cancelCalcRef = useRef(false);
   const [dataReady, setDataReady] = useState(false);
   const [dataLoadingMsg, setDataLoadingMsg] = useState("");
+  const [statusBanner, setStatusBanner] = useState<{ title: string; detail?: string } | null>(null);
+  useEffect(() => {
+    if (!statusBanner) return;
+    const t = setTimeout(() => setStatusBanner(null), 12000);
+    return () => clearTimeout(t);
+  }, [statusBanner]);
 
   // Snapshot date filter (mirrors DC)
   const [snapshotDates, setSnapshotDates] = useState<string[]>([]);
@@ -952,6 +936,8 @@ export default function SRRDirectPage() {
     if (!anyFilter) { setFilterVendorPool(null); return; }
     let cancelled = false;
     (async () => {
+      const { hasActiveFilterTemplates } = await import("@/lib/filterTemplates");
+      const skipDefaults = await hasActiveFilterTemplates("srr_direct");
       const { data, error } = await supabase.rpc("get_srr_effective_vendors" as any, {
         p_item_types:      itemTypeCal.length      ? itemTypeCal      : null,
         p_buying_statuses: buyingStatusCal.length  ? buyingStatusCal  : null,
@@ -962,6 +948,7 @@ export default function SRRDirectPage() {
         p_sub_departments: subDepartmentCal.length ? subDepartmentCal : null,
         p_classes:         classCal.length         ? classCal         : null,
         p_sub_classes:     subClassCal.length      ? subClassCal      : null,
+        p_skip_default_filters: skipDefaults,
       });
       if (cancelled) return;
       if (error) { console.error("get_srr_effective_vendors error:", error); setFilterVendorPool([]); return; }
@@ -1018,6 +1005,9 @@ export default function SRRDirectPage() {
   const [importSkipDialogOpen, setImportSkipDialogOpen] = useState(false);
   const [lastImportRanAt, setLastImportRanAt] = useState<number>(0);
   const [importedVendors, setImportedVendors] = useState<ImportedVendor[]>(d2sStateRef.current?.importedVendors || []);
+  const [importedOverrideVendorBySku, setImportedOverrideVendorBySku] = useState<Map<string, any>>(
+    new Map(d2sStateRef.current?.importedOverrideVendorBySkuArr || [])
+  );
 
   // Tab 1: tree (5-level: SPC > Date > Vendor > TypeStore > Store)
   const [docSearch, setDocSearch] = useState("");
@@ -1141,6 +1131,7 @@ export default function SRRDirectPage() {
   const [pickingType, setPickingType] = useState("");
   const [exportOpen, setExportOpen] = useState(false);
   const [exportDescription, setExportDescription] = useState("");
+  const [exportMaxPerPO, setExportMaxPerPO] = useState<string>("");
   const importFileRef = useRef<HTMLInputElement>(null);
   const [showImportSkipped, setShowImportSkipped] = useState<SkippedItem[]>([]);
 
@@ -1179,6 +1170,7 @@ export default function SRRDirectPage() {
         importedSkippedKeys,
         importedSkippedItems,
         importedVendors,
+        importedOverrideVendorBySkuArr: Array.from(importedOverrideVendorBySku.entries()),
       };
     };
   });
@@ -1217,9 +1209,12 @@ export default function SRRDirectPage() {
         });
       }
     });
-    supabase.rpc("get_srr_hierarchy_options" as any).then(({ data }) => {
+    (async () => {
+      const { hasActiveFilterTemplates } = await import("@/lib/filterTemplates");
+      const skipDefaults = await hasActiveFilterTemplates("srr_direct");
+      const { data } = await supabase.rpc("get_srr_hierarchy_options" as any, { p_skip_default_filters: skipDefaults });
       if (Array.isArray(data)) setHierarchyRows(data as any);
-    });
+    })();
     supabase
       .from("store_type")
       .select("ship_to, code, type_store, type_doc, store_name")
@@ -1540,9 +1535,9 @@ export default function SRRDirectPage() {
         setLastImportRanAt(Date.now());
         setDataReady(true);
         setDataLoadingMsg(""); setLoadingDetail("");
-        toast({
-          title: "เตรียมข้อมูลเสร็จ (Vendor)",
-          description: `Match ${foundCodes.size}/${vCodes.length} vendor · ${spcSet.size} SPC${skippedVendors.length ? ` · Skip ${skippedVendors.length}` : " · ไม่มี skip"}`,
+        setStatusBanner({
+          title: "✅ เตรียมข้อมูลเสร็จ (Vendor)",
+          detail: `Match ${foundCodes.size}/${vCodes.length} vendor · ${spcSet.size} SPC${skippedVendors.length ? ` · Skip ${skippedVendors.length}` : ""}`,
         });
         if (skippedItems.length > 0) setImportSkipDialogOpen(true);
       } catch (err: any) {
@@ -1607,6 +1602,7 @@ export default function SRRDirectPage() {
         let dbgNoSku = 0;
         const dbgSampleRaw: any[] = [];
         const qtyUnitByKey = new Map<string, number>();
+        const skuToOverrideVendor = new Map<string, string>();
         for (const it of importedItems) {
           if (dbgSampleRaw.length < 5) dbgSampleRaw.push({ key: it.key, qty: it.qty, qtyType: typeof it.qty, store: it.storeName });
           const sku = keyToSku.get(it.key);
@@ -1628,6 +1624,7 @@ export default function SRRDirectPage() {
             if (!storeBySku.has(sku)) storeBySku.set(sku, new Set());
             storeBySku.get(sku)!.add(store);
           }
+          if (it.overrideVendor && it.overrideVendor.trim()) skuToOverrideVendor.set(sku, it.overrideVendor.trim());
         }
         setImportedQtyUnitByKey(qtyUnitByKey);
         console.log(`[IMPORT PREPARE DBG] qtyOk=${dbgQtyOk} qtyZero=${dbgQtyZero} noSku=${dbgNoSku}`);
@@ -1665,24 +1662,63 @@ export default function SRRDirectPage() {
           return;
         }
 
-        const vendorCodes = [...new Set([...found.values()].map((v) => v.vendor_code).filter(Boolean))];
+        const baseVendorCodes = [...new Set([...found.values()].map((v) => v.vendor_code).filter(Boolean))];
+        const overrideVendorCodes = [...new Set([...skuToOverrideVendor.values()])];
+        const vendorCodes = [...new Set([...baseVendorCodes, ...overrideVendorCodes])];
         setDataLoadingMsg(`โหลด Vendor Master (${vendorCodes.length})...`);
-        const vms = await fetchAllRows<any>("vendor_master", "vendor_code, spc_name", (q) =>
-          q.in("vendor_code", vendorCodes),
+        const vms = await fetchAllRows<any>(
+          "vendor_master",
+          "vendor_code, vendor_name_en, vendor_name_la, spc_name, order_day, supplier_currency, leadtime, order_cycle",
+          (q) => q.in("vendor_code", vendorCodes),
         );
         const spcSet = new Set<string>();
-        for (const v of vms) if (v.spc_name) spcSet.add(v.spc_name);
+        const vmMap = new Map<string, any>();
+        for (const v of vms) {
+          if (!v.vendor_code) continue;
+          vmMap.set(v.vendor_code, v);
+          if (v.spc_name) spcSet.add(v.spc_name);
+        }
+
+        // Build override map: sku → vendor patch (vendor_code/spc/leadtime/oc/...). Only changes vendor identity + planning fields.
+        const overrideMap = new Map<string, any>();
+        for (const [sku, newVendor] of skuToOverrideVendor) {
+          const vm = vmMap.get(newVendor);
+          overrideMap.set(sku, {
+            vendor_code: newVendor,
+            vendor_display_name: vm?.vendor_name_la || vm?.vendor_name_en || newVendor,
+            spc_name: vm?.spc_name || "",
+            order_day: vm?.order_day || "",
+            supplier_currency: vm?.supplier_currency || "",
+            leadtime: Number(vm?.leadtime) || 0,
+            order_cycle: Number(vm?.order_cycle) || 0,
+          });
+        }
+        setImportedOverrideVendorBySku(overrideMap);
+        const missingOv = [...skuToOverrideVendor.values()].filter((vc) => !vmMap.has(vc));
+        if (missingOv.length > 0) {
+          toast({
+            title: "Override Vendor: บาง vendor ไม่พบใน Vendor Master",
+            description: `${missingOv.slice(0, 5).join(", ")}${missingOv.length > 5 ? ` ... +${missingOv.length - 5}` : ""} — แถวจะใช้ leadtime/oc = 0`,
+            variant: "destructive",
+          });
+        }
+
         setVendorOptionsForCal(
           [...found.values()]
-            .map((v) => ({ value: v.vendor_code, display: `${v.vendor_code} - ${v.vendor_display_name}` }))
+            .map((v) => {
+              const ovVendor = overrideMap.get(v.sku_code)?.vendor_code;
+              const finalVc = ovVendor || v.vendor_code;
+              return { value: finalVc, display: `${finalVc} - ${ovVendor ? finalVc : v.vendor_display_name}` };
+            })
+            .filter((x, i, a) => a.findIndex(y => y.value === x.value) === i)
             .sort((a, b) => a.value.localeCompare(b.value)),
         );
         setSelectedSpcForCal([...spcSet].sort());
         setDataReady(true);
         setDataLoadingMsg(""); setLoadingDetail("");
-        toast({
-          title: "เตรียมข้อมูลเสร็จ (Import)",
-          description: `Match ${matchedKeys.size}/${importedItems.length} · ${spcSet.size} SPC · ${vendorCodes.length} Vendor${skipped.length ? ` · Skip ${skipped.length}` : " · ไม่มี skip"}`,
+        setStatusBanner({
+          title: "✅ เตรียมข้อมูลเสร็จ (Import)",
+          detail: `Match ${matchedKeys.size}/${importedItems.length} · ${spcSet.size} SPC · ${vendorCodes.length} Vendor${skipped.length ? ` · Skip ${skipped.length}` : ""}`,
         });
         if (skipped.length) setImportSkipDialogOpen(true);
       } catch (err: any) {
@@ -1726,7 +1762,10 @@ export default function SRRDirectPage() {
       );
       setDataReady(true);
       setDataLoadingMsg(""); setLoadingDetail("");
-      toast({ title: "เตรียมข้อมูลเสร็จ", description: `${spcsToLoad.length} SPC · ${seen.size} Vendor` });
+      setStatusBanner({
+        title: "✅ เตรียมข้อมูลเสร็จ",
+        detail: `${seen.size.toLocaleString()} Vendor · ${spcsToLoad.length.toLocaleString()} SPC Name (รอ Cal)`,
+      });
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
       setDataLoadingMsg(""); setLoadingDetail("");
@@ -1755,8 +1794,9 @@ export default function SRRDirectPage() {
     }
     setLoading(true);
     cancelCalcRef.current = false;
-    setCalcProgress(0);
+    setCalcProgress(1);
     setLoadingDetail("");
+    setCalcStartedAt(Date.now());
     const t0 = performance.now();
     const dateKey = getDateKey();
     const now = new Date();
@@ -1830,6 +1870,53 @@ export default function SRRDirectPage() {
       if (cancelCalcRef.current) {
         toast({ title: "ยกเลิกการคำนวณ" });
         return;
+      }
+
+      // OVERRIDE VENDOR: patch raw rows in-place — swap vendor_code/spc/order_day/leadtime/oc for matched SKUs.
+      // Also re-lookup po_cost from (sku, override_vendor) because RPC joins po_cost by
+      // data_master.vendor_code (original vendor) — override vendors get no po_cost otherwise.
+      if (importMode === "import" && importedOverrideVendorBySku.size > 0) {
+        const ovPairs: { sku: string; vendor: string }[] = [];
+        for (const [sku, ov] of importedOverrideVendorBySku) {
+          if (sku && ov?.vendor_code) ovPairs.push({ sku, vendor: ov.vendor_code });
+        }
+        const pcMap = new Map<string, { moq: number | null; po_cost: number | null; po_cost_unit: number | null }>();
+        if (ovPairs.length > 0) {
+          const ovSkus = [...new Set(ovPairs.map(p => p.sku))];
+          const ovVendors = [...new Set(ovPairs.map(p => p.vendor))];
+          try {
+            const pcRows = await fetchAllRows<any>(
+              "po_cost",
+              "item_id, vendor, moq, po_cost, po_cost_unit, updated_at",
+              q => q.in("item_id", ovSkus).in("vendor", ovVendors).order("updated_at", { ascending: false })
+            );
+            for (const r of pcRows) {
+              const k = `${r.item_id}__${r.vendor}`;
+              if (!pcMap.has(k)) pcMap.set(k, { moq: r.moq, po_cost: r.po_cost, po_cost_unit: r.po_cost_unit });
+            }
+          } catch (e) {
+            console.warn("[SRR Direct] Override Vendor po_cost lookup failed:", e);
+          }
+        }
+        for (const r of allRawRows) {
+          const ov = importedOverrideVendorBySku.get(r.sku_code);
+          if (!ov) continue;
+          r.vendor_code = ov.vendor_code;
+          r.vendor_display_name = ov.vendor_display_name || ov.vendor_code;
+          r.spc_name = ov.spc_name || r.spc_name;
+          r.order_day = ov.order_day || r.order_day;
+          r.leadtime = ov.leadtime;
+          r.order_cycle = ov.order_cycle;
+          const pc = pcMap.get(`${r.sku_code}__${ov.vendor_code}`);
+          if (pc) {
+            r.moq = pc.moq ?? r.moq;
+            r.po_cost = pc.po_cost ?? null;
+            r.po_cost_unit = pc.po_cost_unit ?? (pc.po_cost != null && pc.moq ? Number(pc.po_cost) / Number(pc.moq) : null);
+          } else {
+            r.po_cost = null;
+            r.po_cost_unit = null;
+          }
+        }
       }
 
       // Group raw rows by SPC for per-SPC processing
@@ -2055,7 +2142,8 @@ export default function SRRDirectPage() {
           if (v !== 0) return v;
           return (a.store_name || "").localeCompare(b.store_name || "");
         });
-        setShowData(merged);
+        const _excluded = await (await import("@/lib/filterTemplates")).applyExcludeFilters(merged as any[], "srr_direct");
+        setShowData(_excluded as any);
         setSelectedRows(new Set());
         setActiveCell(null);
         setPage(0);
@@ -2159,16 +2247,26 @@ export default function SRRDirectPage() {
 
       const totalItems = newDocs.reduce((s, d) => s + d.item_count, 0);
       const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+      const uniqVendors = new Set(newDocs.map((d) => d.vendor_code)).size;
+      const uniqSpcs = new Set(newDocs.map((d) => d.spc_name)).size;
+      const uniqStores = new Set<string>();
+      const uniqSkus = new Set<string>();
+      for (const d of newDocs) {
+        for (const r of d.data as any[]) {
+          if (r?.sku_code) uniqSkus.add(r.sku_code);
+          if (r?.store_name) uniqStores.add(r.store_name);
+        }
+      }
       setLoadingDetail(`เสร็จสิ้น ${elapsed}s · ${totalItems.toLocaleString()} rows`);
-      toast({
-        title: `✅ Read & Cal สำเร็จ (${elapsed}s)`,
-        description: `${newDocs.length} Vendor Docs · ${totalItems.toLocaleString()} รายการ${savedNote}`,
+      setStatusBanner({
+        title: `✅ คำนวณเสร็จ (${elapsed}s)`,
+        detail: `${uniqVendors.toLocaleString()} Vendor · ${uniqSkus.size.toLocaleString()} SKU · ${uniqSpcs.toLocaleString()} SPC · ${uniqStores.size.toLocaleString()} Store · ${newDocs.length} Vendor×Store Docs${savedNote}`,
       });
       if (newDocs.length > 0) setDocsDialogOpen(true);
       // Show 100% briefly after save completes, then clear
       setCalcProgress(100);
       await new Promise((r) => requestAnimationFrame(r));
-      setTimeout(() => { setLoadingPhase(""); setLoadingDetail(""); setCalcProgress(0); }, 1500);
+      setTimeout(() => { setLoadingPhase(""); setLoadingDetail(""); setCalcProgress(0); setCalcStartedAt(null); }, 1500);
     } catch (err: any) {
       const msg = String(err?.message || "");
       if (/timeout|canceling/i.test(msg)) {
@@ -2179,6 +2277,7 @@ export default function SRRDirectPage() {
       setCalcProgress(0);
       setLoadingPhase("");
       setLoadingDetail("");
+      setCalcStartedAt(null);
     } finally {
       setLoading(false);
     }
@@ -2295,7 +2394,7 @@ export default function SRRDirectPage() {
   };
 
   // Show filtered (sort by Store Name > Vendor) — scoped to Tab 2's mode (filter / vendor / import)
-  const showFilteredData = () => {
+  const showFilteredData = async () => {
     if (docsForTab2.length === 0) {
       const modeLabel =
         tab2Mode === "filter" ? "Mode Filter" : tab2Mode === "vendor" ? "Import Vendor" : "Import Barcode";
@@ -2330,7 +2429,28 @@ export default function SRRDirectPage() {
       if (v !== 0) return v;
       return (a.store_name || "").localeCompare(b.store_name || "");
     });
-    setShowData(merged);
+
+    // Overlay Pack/Box (qty) from latest Range Store — fixes legacy docs saved without pack/box
+    try {
+      const pbMap = await getLatestRangeStorePackBox();
+      if (pbMap.size > 0) {
+        merged = merged.map((r) => {
+          if ((r as any).pack != null && (r as any).box != null) return r;
+          const pb = pbMap.get(r.sku_code);
+          if (!pb) return r;
+          return {
+            ...r,
+            pack: (r as any).pack != null ? (r as any).pack : pb.pack,
+            box: (r as any).box != null ? (r as any).box : pb.box,
+          };
+        });
+      }
+    } catch (e) {
+      console.warn("[SRR DIRECT Show] pack/box overlay failed:", e);
+    }
+
+    const _excluded2 = await (await import("@/lib/filterTemplates")).applyExcludeFilters(merged as any[], "srr_direct");
+    setShowData(_excluded2 as any);
     setPage(0);
     setSelectedRows(new Set());
     setActiveCell(null);
@@ -2839,28 +2959,40 @@ export default function SRRDirectPage() {
             const zeroRows = sortedRows.filter((r) => !(Number(r.po_cost_unit) > 0));
             for (const r of zeroRows) cost0VendorRows.push({ row: r, storeName });
             if (validRows.length === 0) continue;
-            const exportRows = validRows.map((r, idx) => {
-              const up = unitPackMap.get(r.sku_code);
-              const upBarcode = up?.barcode || r.main_barcode;
-              const upUom = up?.uom || r.unit_of_measure || "";
-              return {
-                partner_id: idx === 0 ? vc : "",
-                "Picking Type / Database ID": idx === 0 ? rowPickingId : "",
-                "Inter Transfer": idx === 0 ? "true" : "",
-                "PO Group": idx === 0 ? groupKey : "",
-                "Products to Purchase/barcode": upBarcode,
-                "Products to Purchase/Product": upBarcode,
-                "Product name": r.product_name_la,
-                "Store Name": r.store_name,
-                "Products to Purchase/UoM": upUom,
-                "Products to Purchase/Exclude In Package": "True",
-                "Products to Purchase/Quantity": r.final_order_qty,
-                "Products to Purchase/Unit Price": r.po_cost_unit,
-                assigned_to: idx === 0 ? spcManager : "",
-                description: idx === 0 ? exportDescription : "",
-              };
-            });
-            allExportRows.push(...exportRows);
+            const maxPerPO = Math.max(0, Math.floor(Number(exportMaxPerPO) || 0));
+            const chunks: D2SRow[][] = [];
+            if (maxPerPO > 0) {
+              for (let i = 0; i < validRows.length; i += maxPerPO) chunks.push(validRows.slice(i, i + maxPerPO));
+            } else {
+              chunks.push(validRows);
+            }
+            for (let ci = 0; ci < chunks.length; ci++) {
+              const chunkRows = chunks[ci];
+              const chunkGroupKey = chunks.length > 1 ? `${groupKey}-${ci + 1}` : groupKey;
+              const exportRows = chunkRows.map((r, idx) => {
+                const up = unitPackMap.get(r.sku_code);
+                const upBarcode = up?.barcode || r.main_barcode;
+                const upUom = up?.uom || r.unit_of_measure || "";
+                return {
+                  partner_id: idx === 0 ? vc : "",
+                  "Picking Type / Database ID": idx === 0 ? rowPickingId : "",
+                  "Inter Transfer": idx === 0 ? "true" : "",
+                  "PO Group": idx === 0 ? chunkGroupKey : "",
+                  "Products to Purchase/barcode": upBarcode,
+                  "Products to Purchase/Product": upBarcode,
+                  "Product name": r.product_name_la,
+                  "Store Name": r.store_name,
+                  "Products to Purchase/UoM": upUom,
+                  "Products to Purchase/Exclude In Package": "True",
+                  "Products to Purchase/Quantity": r.final_order_qty,
+                  "Products to Purchase/Unit Price": r.po_cost_unit,
+                  assigned_to: idx === 0 ? spcManager : "",
+                  description: idx === 0 ? exportDescription : "",
+                };
+              });
+              const mapped = await remapRowsByTemplate("srr_d2s_po", exportRows);
+              allExportRows.push(...mapped);
+            }
           }
         }
         if (cost0VendorRows.length > 0) {
@@ -3318,6 +3450,7 @@ export default function SRRDirectPage() {
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs text-muted-foreground font-medium truncate">{loadingPhase}</span>
             <div className="flex items-center gap-2 shrink-0">
+              {calcStartedAt != null && <ElapsedTimer startedAt={calcStartedAt} />}
               <span className="text-xs font-semibold tabular-nums">{calcProgress}%</span>
               <Button
                 size="sm"
@@ -3354,6 +3487,26 @@ export default function SRRDirectPage() {
           )}
         </div>
       )}
+
+      {/* Status banner — Prepare/Cal completion (replaces right-side toast) */}
+      {statusBanner && (
+        <div className="px-4 py-1.5 bg-emerald-500/10 border-b border-emerald-500/30 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 truncate">{statusBanner.title}</span>
+            {statusBanner.detail && (
+              <span className="text-[11px] text-emerald-700/80 dark:text-emerald-400/80 truncate">· {statusBanner.detail}</span>
+            )}
+          </div>
+          <button
+            onClick={() => setStatusBanner(null)}
+            className="text-emerald-700/70 hover:text-emerald-700 dark:text-emerald-400/70 shrink-0"
+            aria-label="ปิด"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col flex-1 min-h-0 overflow-hidden">
         {/* ============ LINE 1: All primary controls in single row ============ */}
@@ -3395,6 +3548,7 @@ export default function SRRDirectPage() {
                       setImportedQtyByKey(new Map());
                       setImportedPoCostBySku(new Map());
                       setImportedStoreBySku(new Map());
+                      setImportedOverrideVendorBySku(new Map());
                       setImportedSkippedKeys([]);
                     }
                     if (m !== "vendor") {
@@ -4215,6 +4369,20 @@ export default function SRRDirectPage() {
             <DialogTitle>Save PO (Direct to Store)</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
+            <div>
+              <label className="text-xs font-medium text-foreground mb-1 block">จำนวนรายการต่อ 1 PO (ตัดพีโอ)</label>
+              <Input
+                type="number"
+                min={0}
+                value={exportMaxPerPO}
+                onChange={(e) => setExportMaxPerPO(e.target.value)}
+                className="h-8 text-xs"
+                placeholder="ว่าง = ไม่ตัด (รวมทุกแถวเป็น PO เดียวต่อกลุ่ม)"
+              />
+              <p className="text-[10px] text-muted-foreground mt-1">
+                หากกำหนดตัวเลข N: ทุก N แถวจะถูกตัดเป็น PO ใหม่ (แถวแรกของแต่ละชุดจะเป็น header)
+              </p>
+            </div>
             <p className="text-xs text-muted-foreground">
               Picking Type จะถูก Mapping อัตโนมัติจาก Store Name → Store Type (ship_to)
             </p>

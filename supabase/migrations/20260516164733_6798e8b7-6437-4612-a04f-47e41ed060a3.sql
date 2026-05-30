@@ -1,0 +1,1 @@
+ALTER TABLE public.job_assignments ADD COLUMN IF NOT EXISTS assignee_phone text;

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -12,6 +12,7 @@ import {
 import {
   Loader2, Calculator, Upload, Save, Download, FileText, Trash2,
   RotateCcw, Search, Settings2, X, Store, Tag, Activity, Layers,
+  ChevronRight, ChevronDown as ChevronDownIcon, Eye, BarChart3, StopCircle,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { cn } from "@/lib/utils";
@@ -33,14 +34,22 @@ interface CalcRow {
   type_store: string;
   size_store: string;
   unit_pick: number;
+  unit_pick_edit?: number | null;
   avg_sale: number;
   rank_sale: string;
   rank_factor: number;
   min_cal: number;
   max_cal: number;
   is_default_min: boolean;
+  min_floored?: boolean; // true เมื่อ avg*rank > 0 แต่ < 3 → ปัดขึ้นเป็น 3 (highlight สีฟ้า)
   item_type: string;
   buying_status: string;
+  division: string;
+  department: string;
+  sub_department: string;
+  class: string;
+  pack_qty: number | null;
+  box_qty: number | null;
   min_edit?: number | null;
   max_edit?: number | null;
   // when row comes from previous Doc (filtered out of current calc), keep its final
@@ -62,6 +71,54 @@ interface DocRow {
 const PAGE_SIZE = 100;
 // PostgREST hard cap on this project = 1000. We loop until batch < 1000.
 const RPC_BATCH = 1000;
+// Self-hosted gateways often keep a 1 MB body limit + short proxy timeouts.
+// Keep Save Doc RPC requests small so each merge_minmax_doc call finishes fast.
+const SAVE_DOC_MAX_CHUNK_BYTES = 200 * 1024;
+const SAVE_DOC_MAX_CHUNK_ROWS = 200;
+// Retry transient network failures (TypeError: Failed to fetch) from gateway/proxy.
+const SAVE_DOC_MAX_RETRIES = 3;
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+async function rpcWithRetry(fn: () => Promise<{ data: any; error: any }>, label: string) {
+  let lastErr: any;
+  for (let attempt = 1; attempt <= SAVE_DOC_MAX_RETRIES; attempt++) {
+    try {
+      const res = await fn();
+      if (res.error) throw res.error;
+      return res;
+    } catch (e: any) {
+      lastErr = e;
+      const msg = String(e?.message || e);
+      const transient = msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("ETIMEDOUT") || msg.includes("502") || msg.includes("504");
+      if (!transient || attempt === SAVE_DOC_MAX_RETRIES) throw e;
+      console.warn(`[${label}] retry ${attempt}/${SAVE_DOC_MAX_RETRIES} after error:`, msg);
+      await sleep(800 * attempt);
+    }
+  }
+  throw lastErr;
+}
+
+const jsonByteSize = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
+
+function chunkByJsonSize<T>(items: T[], maxBytes = SAVE_DOC_MAX_CHUNK_BYTES, maxRows = SAVE_DOC_MAX_CHUNK_ROWS): T[][] {
+  const chunks: T[][] = [];
+  let current: T[] = [];
+  let currentBytes = 2; // []
+
+  for (const item of items) {
+    const itemBytes = jsonByteSize(item) + (current.length ? 1 : 0);
+    const shouldFlush = current.length > 0 && (current.length >= maxRows || currentBytes + itemBytes > maxBytes);
+    if (shouldFlush) {
+      chunks.push(current);
+      current = [];
+      currentBytes = 2;
+    }
+    current.push(item);
+    currentBytes += itemBytes;
+  }
+
+  if (current.length) chunks.push(current);
+  return chunks;
+}
 
 // Searchable columns for Odoo-style search
 const SEARCH_COLUMNS: { key: keyof CalcRow; label: string }[] = [
@@ -84,11 +141,12 @@ function fmtDocName() {
 
 // Fetch RPC in batches to bypass PostgREST 1000-row limit.
 // PostgREST hard caps each response at 1000 even when range asks for more.
-async function fetchAllCalc(params: any, onProgress?: (loaded: number, batches: number) => void): Promise<any[]> {
+async function fetchAllCalc(params: any, onProgress?: (loaded: number, batches: number) => void, isCancelled?: () => boolean): Promise<any[]> {
   const all: any[] = [];
   let offset = 0;
   let batches = 0;
   while (true) {
+    if (isCancelled?.()) throw new Error("__CANCELLED__");
     const { data, error } = await (supabase as any)
       .rpc("get_minmax_calc_all", params)
       .range(offset, offset + RPC_BATCH - 1);
@@ -104,8 +162,11 @@ async function fetchAllCalc(params: any, onProgress?: (loaded: number, batches: 
 }
 
 export default function MinmaxCalPage() {
-  const { user } = useAuth();
+  const { user, hasPermission } = useAuth();
   const { toast } = useToast();
+  const canDelete = hasPermission("delete_minmax");
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const [hasData, setHasData] = useState(false);
 
@@ -128,12 +189,22 @@ export default function MinmaxCalPage() {
   const [typeStoreFilter, setTypeStoreFilter] = useState<string[]>([]);
   const [itemTypeFilter, setItemTypeFilter] = useState<string[]>([]);
   const [buyingFilter, setBuyingFilter] = useState<string[]>([]);
+  const [divisionFilter, setDivisionFilter] = useState<string[]>([]);
+  const [departmentFilter, setDepartmentFilter] = useState<string[]>([]);
+  const [subDeptFilter, setSubDeptFilter] = useState<string[]>([]);
+  const [classFilter, setClassFilter] = useState<string[]>([]);
+  const [skuFilter, setSkuFilter] = useState<string[]>([]);
+  const [barcodeFilter, setBarcodeFilter] = useState<string[]>([]);
   const [filterOpts, setFilterOpts] = useState<{
     stores: { store_name: string; type_store: string }[];
     types: string[];
     itemTypes: string[];
     buyingStatuses: string[];
-  }>({ stores: [], types: [], itemTypes: [], buyingStatuses: [] });
+    divisions: string[];
+    departments: string[];
+    subDepartments: string[];
+    classes: string[];
+  }>({ stores: [], types: [], itemTypes: [], buyingStatuses: [], divisions: [], departments: [], subDepartments: [], classes: [] });
 
   // Odoo-style search
   const [searchValue, setSearchValue] = useState("");
@@ -141,18 +212,44 @@ export default function MinmaxCalPage() {
   const [showSearchDropdown, setShowSearchDropdown] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Doc state
-  const [docs, setDocs] = useState<DocRow[]>([]);
-  const [docsLoading, setDocsLoading] = useState(false);
-  const [viewingDoc, setViewingDoc] = useState<DocRow | null>(null);
+  // Report tab state (replaces old Doc tab)
+  const [reportRows, setReportRows] = useState<{ division: string; department: string; store_name: string; type_store: string; sku_count: number; sum_min: number; sum_max: number }[]>([]);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [exportingReport, setExportingReport] = useState(false);
+  const [exportProgress, setExportProgress] = useState<{ loaded: number; total: number; label: string }>({ loaded: 0, total: 0, label: "" });
+  const cancelExportRef = useRef(false);
+
+  // Tree expand/collapse state (Division → Department → Store)
+  const [expandedDiv, setExpandedDiv] = useState<Set<string>>(new Set());
+  const [expandedDept, setExpandedDept] = useState<Set<string>>(new Set());
 
   // dialogs
   const [setNOpen, setSetNOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveName, setSaveName] = useState("");
+  const [saveStatus, setSaveStatus] = useState<string>("");
+  const [savePct, setSavePct] = useState(0);
+  const [saveStep, setSaveStep] = useState<{ idx: number; total: number; label: string }>({ idx: 0, total: 5, label: "" });
+  const [saving, setSaving] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
-  const [tab, setTab] = useState<"calc" | "doc">("calc");
+  const [tab, setTab] = useState<"calc" | "report">("calc");
+
+  // Cancel flag for Calculate
+  const cancelCalcRef = useRef(false);
+
+  // View button loading (load filtered store rows from minmax)
+  const [viewLoading, setViewLoading] = useState(false);
+
+  // Report tab filters (affect Report + Export)
+  const [docStoreFilter, setDocStoreFilter] = useState<string[]>([]);
+  const [docTypeFilter, setDocTypeFilter] = useState<string[]>([]);
+  const [docItemTypeFilter, setDocItemTypeFilter] = useState<string[]>([]);
+  const [docBuyingFilter, setDocBuyingFilter] = useState<string[]>([]);
+  const [docDivisionFilter, setDocDivisionFilter] = useState<string[]>([]);
+  const [docDepartmentFilter, setDocDepartmentFilter] = useState<string[]>([]);
+  const [docSubDeptFilter, setDocSubDeptFilter] = useState<string[]>([]);
+  const [docClassFilter, setDocClassFilter] = useState<string[]>([]);
 
   // ====== load filter options ======
   const loadFilterOpts = useCallback(async () => {
@@ -166,6 +263,10 @@ export default function MinmaxCalPage() {
         types,
         itemTypes: data?.item_types || [],
         buyingStatuses: data?.buying_statuses || [],
+        divisions: data?.divisions || [],
+        departments: data?.departments || [],
+        subDepartments: data?.sub_departments || [],
+        classes: data?.classes || [],
       });
     } catch (err: any) {
       console.error("load filter opts", err);
@@ -174,14 +275,22 @@ export default function MinmaxCalPage() {
 
   useEffect(() => { loadFilterOpts(); }, [loadFilterOpts]);
 
-  // ====== Load latest Doc rows (for merging with filtered calc) ======
+  // ====== Load latest MinMax View rows (from minmax table, joined with data_master) ======
+  // ใช้ตอน Calc เพื่อ merge ค่าเดิมของ SKU/Store ที่ไม่อยู่ใน filter ปัจจุบัน
   const loadLatestDocRows = useCallback(async (): Promise<CalcRow[]> => {
-    const { data: latest } = await (supabase as any)
-      .from("minmax_cal_documents")
-      .select("data").order("created_at", { ascending: false })
-      .limit(1).maybeSingle();
-    if (!latest?.data || !Array.isArray(latest.data)) return [];
-    return (latest.data as any[]).map(r => ({
+    const all: any[] = [];
+    let offset = 0;
+    while (true) {
+      const { data, error } = await (supabase as any)
+        .rpc("get_minmax_view_for_calc")
+        .range(offset, offset + RPC_BATCH - 1);
+      if (error) throw error;
+      const batch = data || [];
+      all.push(...batch);
+      if (batch.length < RPC_BATCH) break;
+      offset += RPC_BATCH;
+    }
+    return all.map((r: any) => ({
       sku_code: r.sku_code,
       product_name_la: r.product_name_la,
       product_name_en: r.product_name_en,
@@ -189,29 +298,41 @@ export default function MinmaxCalPage() {
       unit_of_measure: r.unit_of_measure,
       store_name: r.store_name,
       type_store: r.type_store || "",
-      size_store: r.size_store || "",
+      size_store: "",
       unit_pick: Number(r.unit_pick) || 1,
-      avg_sale: Number(r.avg_sale) || 0,
-      rank_sale: r.rank_sale || "D",
-      rank_factor: Number(r.rank_factor) || 7,
-      min_cal: Number(r.min_cal) || 0,
-      max_cal: Number(r.max_cal) || 0,
-      is_default_min: !!r.is_default_min,
+      unit_pick_edit: null,
+      avg_sale: 0,
+      rank_sale: "D",
+      rank_factor: 7,
+      min_cal: Number(r.min_val) || 0,
+      max_cal: Number(r.max_val) || 0,
+      is_default_min: false,
       item_type: r.item_type || "",
       buying_status: r.buying_status || "",
-      min_edit: r.min_edit ?? null,
-      max_edit: r.max_edit ?? null,
+      division: r.division || "",
+      department: r.department || "",
+      sub_department: r.sub_department || "",
+      class: r.class || "",
+      pack_qty: r.pack_qty ?? null,
+      box_qty: r.box_qty ?? null,
+      min_edit: null,
+      max_edit: null,
       from_doc: true,
-      doc_min_final: r.min_final ?? null,
-      doc_max_final: r.max_final ?? null,
+      doc_min_final: r.min_val ?? null,
+      doc_max_final: r.max_val ?? null,
     }));
   }, []);
 
   const hasFilters = storeFilter.length > 0 || typeStoreFilter.length > 0
-    || itemTypeFilter.length > 0 || buyingFilter.length > 0;
+    || itemTypeFilter.length > 0 || buyingFilter.length > 0
+    || divisionFilter.length > 0 || departmentFilter.length > 0
+    || subDeptFilter.length > 0 || classFilter.length > 0
+    || skuFilter.length > 0 || barcodeFilter.length > 0;
 
   // ====== Calculate ======
   const calculate = useCallback(async (n: number) => {
+    cancelCalcRef.current = false;
+    const checkCancel = () => { if (cancelCalcRef.current) throw new Error("__CANCELLED__"); };
     setLoading(true);
     setPhaseTimes({});
     setPhaseLabel("กำลังคำนวณ Min/Max ใน DB...");
@@ -223,6 +344,12 @@ export default function MinmaxCalPage() {
       if (typeStoreFilter.length) params.p_type_stores = typeStoreFilter;
       if (itemTypeFilter.length) params.p_item_types = itemTypeFilter;
       if (buyingFilter.length) params.p_buying_statuses = buyingFilter;
+      if (divisionFilter.length) params.p_divisions = divisionFilter;
+      if (departmentFilter.length) params.p_departments = departmentFilter;
+      if (subDeptFilter.length) params.p_sub_departments = subDeptFilter;
+      if (classFilter.length) params.p_classes = classFilter;
+      if (skuFilter.length) params.p_sku_codes = skuFilter;
+      if (barcodeFilter.length) params.p_barcodes = barcodeFilter;
 
       // Fetch all calc rows in batches
       setPhasePct(15);
@@ -231,146 +358,269 @@ export default function MinmaxCalPage() {
         lastBatchCount = batches;
         setPhaseLabel(`อ่าน batch #${batches} · รวม ${loaded.toLocaleString()} แถว`);
         setPhasePct(Math.min(60, 15 + batches * 5));
-      });
+      }, () => cancelCalcRef.current);
       const fetchMs = Math.round(performance.now() - t0);
       setPhasePct(60);
       setPhaseLabel(`รับข้อมูล ${fetched.length.toLocaleString()} แถว · ${fetchMs}ms`);
+      checkCancel();
       await new Promise(r => setTimeout(r, 0));
+      checkCancel();
 
-      const calcRows: CalcRow[] = fetched.map((r: any) => ({
+      const calcRows: CalcRow[] = fetched.map((r: any) => {
+        // unit_pick ดึงจาก Data Cal (RPC get_minmax_calc_all → mm_up)
+        const up = Number(r.unit_pick) || 1;
+        const upEdit = up; // เริ่มต้นยังไม่มี edit → ใช้ค่า default
+        const avg = Number(r.avg_sale) || 0;
+        const rank = r.rank_sale || "D";
+        const rm = rank === "A" ? 21 : rank === "B" ? 14 : rank === "C" ? 10 : 7;
+
+        // ===== Min Cal (สูตรใหม่) =====
+        let minCal: number;
+        let isDefMin = false;
+        let floored = false;
+        if (avg === 0) {
+          minCal = 2;             // Case 1: default (ส้ม)
+          isDefMin = true;
+        } else {
+          const raw = Math.ceil(avg * rm);
+          if (raw > 0 && raw < 3) {
+            minCal = 3;            // Case 2: floored (ฟ้า)
+            floored = true;
+          } else {
+            minCal = raw;          // Case 3: ปกติ
+          }
+        }
+
+        // ===== Max Cal (สูตรใหม่) = Min + avg*N + UnitPickEdit =====
+        let maxRecalc = Math.ceil(minCal + avg * nFactor + upEdit);
+        if (avg === 0 && maxRecalc < 4) maxRecalc = 4;       // Case 1 floor
+        else if (floored && maxRecalc < 6) maxRecalc = 6;     // Case 2 floor
+        return {
+          sku_code: r.sku_code,
+          product_name_la: r.product_name_la,
+          product_name_en: r.product_name_en,
+          main_barcode: r.main_barcode,
+          unit_of_measure: r.unit_of_measure,
+          store_name: r.store_name,
+          type_store: r.type_store,
+          size_store: r.size_store,
+          unit_pick: up,
+          unit_pick_edit: null,
+          avg_sale: avg,
+          rank_sale: rank,
+          rank_factor: Number(r.rank_factor) || 7,
+          min_cal: minCal,
+          max_cal: maxRecalc,
+          is_default_min: isDefMin,
+          min_floored: floored,
+          item_type: r.item_type || "",
+          buying_status: r.buying_status || "",
+          division: r.division || "",
+          department: r.department || "",
+          sub_department: r.sub_department || "",
+          class: r.class || "",
+          pack_qty: r.pack_qty == null ? null : Number(r.pack_qty),
+          box_qty: r.box_qty == null ? null : Number(r.box_qty),
+          min_edit: null,
+          max_edit: null,
+        };
+      });
+
+      // Phase 2 (Doc merge) — removed: Cal returns ONLY computed rows.
+      // Save Doc upserts directly to `minmax`; the View button loads existing rows when needed.
+      const finalRows: CalcRow[] = calcRows;
+      const mergeMs = 0;
+      const mergedFromDoc = 0;
+
+      setPhaseTimes({ fetch: fetchMs, merge: mergeMs, rowCount: calcRows.length, docCount: mergedFromDoc, readBatches: lastBatchCount });
+
+      const _excluded = await (await import("@/lib/filterTemplates")).applyExcludeFilters(finalRows as any[], "minmax_cal");
+      setRows(_excluded as any);
+      setHasData(true);
+      setPage(0);
+      setPhasePct(100); setPhaseLabel("");
+      toast({
+        title: "คำนวณเสร็จสิ้น",
+        description: `Calc ${calcRows.length.toLocaleString()} แถว`,
+      });
+    } catch (err: any) {
+      if (err?.message === "__CANCELLED__") {
+        toast({ title: "ยกเลิกการคำนวณแล้ว", variant: "destructive" });
+      } else {
+        console.error(err);
+        toast({ title: "Error", description: err.message, variant: "destructive" });
+      }
+    } finally {
+      cancelCalcRef.current = false;
+      setPhasePct(0);
+      setPhaseLabel("");
+      setLoading(false);
+    }
+  }, [toast, storeFilter, typeStoreFilter, itemTypeFilter, buyingFilter, divisionFilter, departmentFilter, subDeptFilter, classFilter, skuFilter, barcodeFilter]);
+
+  // ====== load Report summary (per Division/Department/Store from `minmax` + data_master) ======
+  const buildReportParams = useCallback(() => {
+    const params: any = {};
+    if (docStoreFilter.length) params.p_stores = docStoreFilter;
+    if (docTypeFilter.length) params.p_type_stores = docTypeFilter;
+    if (docItemTypeFilter.length) params.p_item_types = docItemTypeFilter;
+    if (docBuyingFilter.length) params.p_buying_statuses = docBuyingFilter;
+    if (docDivisionFilter.length) params.p_divisions = docDivisionFilter;
+    if (docDepartmentFilter.length) params.p_departments = docDepartmentFilter;
+    if (docSubDeptFilter.length) params.p_sub_departments = docSubDeptFilter;
+    if (docClassFilter.length) params.p_classes = docClassFilter;
+    return params;
+  }, [docStoreFilter, docTypeFilter, docItemTypeFilter, docBuyingFilter, docDivisionFilter, docDepartmentFilter, docSubDeptFilter, docClassFilter]);
+
+  const loadReport = useCallback(async () => {
+    setReportLoading(true);
+    try {
+      const params = buildReportParams();
+      const all: any[] = [];
+      let offset = 0;
+      while (true) {
+        const { data, error } = await (supabase as any)
+          .rpc("get_minmax_report_grouped", params)
+          .range(offset, offset + RPC_BATCH - 1);
+        if (error) throw error;
+        const batch = data || [];
+        all.push(...batch);
+        if (batch.length < RPC_BATCH) break;
+        offset += RPC_BATCH;
+      }
+      setReportRows(all.map((r: any) => ({
+        division: r.division || "(No Division)",
+        department: r.department || "(No Department)",
+        store_name: r.store_name || "",
+        type_store: r.type_store || "",
+        sku_count: Number(r.sku_count) || 0,
+        sum_min: Number(r.sum_min) || 0,
+        sum_max: Number(r.sum_max) || 0,
+      })));
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setReportLoading(false);
+    }
+  }, [toast, buildReportParams]);
+
+  useEffect(() => { loadReport(); }, [loadReport]);
+
+  // ====== Report: Delete filtered minmax rows ======
+  const hasReportFilter = (docStoreFilter.length + docTypeFilter.length + docItemTypeFilter.length + docBuyingFilter.length + docDivisionFilter.length + docDepartmentFilter.length + docSubDeptFilter.length + docClassFilter.length) > 0;
+
+  const handleDeleteFiltered = useCallback(async () => {
+    if (!hasReportFilter) return;
+    setDeleting(true);
+    try {
+      const params = buildReportParams();
+      const { data, error } = await (supabase as any).rpc("delete_minmax_by_filter", params);
+      if (error) throw error;
+      const n = Number(data) || 0;
+      toast({ title: "Deleted", description: `ลบ Min/Max ${n.toLocaleString()} แถวเรียบร้อย` });
+      setDeleteOpen(false);
+      await loadReport();
+    } catch (err: any) {
+      toast({ title: "ลบไม่สำเร็จ", description: err.message, variant: "destructive" });
+    } finally {
+      setDeleting(false);
+    }
+  }, [hasReportFilter, buildReportParams, toast, loadReport]);
+
+
+  // ====== View button: load filtered store rows from `minmax` ======
+  const handleView = useCallback(async () => {
+    const hasAny = storeFilter.length || typeStoreFilter.length || itemTypeFilter.length || buyingFilter.length
+      || divisionFilter.length || departmentFilter.length || subDeptFilter.length || classFilter.length
+      || skuFilter.length || barcodeFilter.length;
+    if (!hasAny) {
+      toast({ title: "ใส่ Filter ก่อน", description: "เลือก Store หรือกรอก SKU/Barcode หรือเลือก filter อื่นก่อนกด View", variant: "destructive" });
+      return;
+    }
+    setViewLoading(true);
+    setPhaseTimes({});
+    setPhaseLabel("กำลังดึงข้อมูล Min/Max จาก View...");
+    setPhasePct(20);
+    try {
+      const t0 = performance.now();
+      const params: Record<string, any> = {};
+      if (storeFilter.length) params.p_stores = storeFilter;
+      if (typeStoreFilter.length) params.p_type_stores = typeStoreFilter;
+      if (itemTypeFilter.length) params.p_item_types = itemTypeFilter;
+      if (buyingFilter.length) params.p_buying_statuses = buyingFilter;
+      if (divisionFilter.length) params.p_divisions = divisionFilter;
+      if (departmentFilter.length) params.p_departments = departmentFilter;
+      if (subDeptFilter.length) params.p_sub_departments = subDeptFilter;
+      if (classFilter.length) params.p_classes = classFilter;
+      if (skuFilter.length) params.p_skus = skuFilter;
+      if (barcodeFilter.length) params.p_barcodes = barcodeFilter;
+      // ดึงแบบ pagination — PostgREST จำกัด db-max-rows = 1000 ต่อ request
+      // ต้อง loop หลายรอบจนกว่าจะหมด (เหมือน loadLatestDocRows)
+      setPhasePct(30);
+      const all: any[] = [];
+      let offset = 0;
+      const BATCH = RPC_BATCH; // 5000 (ภายในยังถูก clamp โดย postgrest แต่ขอเผื่อ)
+      while (true) {
+        const { data: viewData, error: viewErr } = await (supabase as any)
+          .rpc("get_minmax_view_by_stores", params)
+          .range(offset, offset + BATCH - 1);
+        if (viewErr) throw viewErr;
+        const batch = viewData || [];
+        all.push(...batch);
+        // อัปเดต progress (โดยประมาณ)
+        setPhaseLabel(`กำลังดึงข้อมูล Min/Max จาก View... (${all.length.toLocaleString()} แถว)`);
+        if (batch.length < BATCH) break;
+        offset += BATCH;
+      }
+      setPhasePct(80);
+      const ms = Math.round(performance.now() - t0);
+      // Map to CalcRow shape (read-only from minmax — flag as from_doc to keep edit-disabled UI)
+      const mapped: CalcRow[] = all.map((r: any) => ({
         sku_code: r.sku_code,
         product_name_la: r.product_name_la,
         product_name_en: r.product_name_en,
         main_barcode: r.main_barcode,
         unit_of_measure: r.unit_of_measure,
         store_name: r.store_name,
-        type_store: r.type_store,
-        size_store: r.size_store,
-        unit_pick: Number(r.unit_pick) || 1,
-        avg_sale: Number(r.avg_sale) || 0,
-        rank_sale: r.rank_sale || "D",
-        rank_factor: Number(r.rank_factor) || 7,
-        min_cal: Number(r.min_cal) || 0,
-        max_cal: Number(r.max_cal) || 0,
-        is_default_min: !!r.is_default_min,
+        type_store: r.type_store || "",
+        size_store: "",
+        unit_pick: r.unit_pick == null || r.unit_pick === "" ? 1 : Number(r.unit_pick),
+        unit_pick_edit: null,
+        avg_sale: 0,
+        rank_sale: "D",
+        rank_factor: 7,
+        min_cal: Number(r.min_val) || 0,
+        max_cal: Number(r.max_val) || 0,
+        is_default_min: false,
         item_type: r.item_type || "",
         buying_status: r.buying_status || "",
+        division: r.division || "",
+        department: r.department || "",
+        sub_department: r.sub_department || "",
+        class: r.class || "",
+        pack_qty: r.pack_qty ?? null,
+        box_qty: r.box_qty ?? null,
         min_edit: null,
         max_edit: null,
+        from_doc: true,
+        doc_min_final: r.min_val ?? null,
+        doc_max_final: r.max_val ?? null,
       }));
-
-      // Phase 2: merge edits/from-doc
-      setPhasePct(75);
-      setPhaseLabel("รวมข้อมูลกับ Doc ล่าสุด...");
-      const tMerge = performance.now();
-      const docRows = await loadLatestDocRows();
-      const docMap = new Map<string, CalcRow>();
-      for (const d of docRows) docMap.set(`${d.sku_code}|${d.store_name}`, d);
-
-      // Apply edits from doc onto current calc rows
-      for (const r of calcRows) {
-        const e = docMap.get(`${r.sku_code}|${r.store_name}`);
-        if (e) {
-          r.min_edit = e.min_edit ?? null;
-          r.max_edit = e.max_edit ?? null;
-        }
-      }
-
-      let mergedFromDoc = 0;
-      let finalRows: CalcRow[] = calcRows;
-      if (hasFilters && docRows.length > 0) {
-        // Build set of keys present in current calc
-        const calcKeys = new Set(calcRows.map(r => `${r.sku_code}|${r.store_name}`));
-        // Add doc rows that are NOT in current filter (so unselected stores/items keep their values)
-        const extra: CalcRow[] = [];
-        for (const d of docRows) {
-          const k = `${d.sku_code}|${d.store_name}`;
-          if (!calcKeys.has(k)) extra.push(d);
-        }
-
-        // Backfill item_type/buying_status for old Doc rows that don't have them
-        const needBackfill = extra.filter(r => !r.item_type || !r.buying_status);
-        if (needBackfill.length > 0) {
-          const skus = Array.from(new Set(needBackfill.map(r => r.sku_code))).filter(Boolean);
-          if (skus.length > 0) {
-            const skuMeta = new Map<string, { item_type: string; buying_status: string }>();
-            // batch by 1000 to avoid URL length issues
-            for (let i = 0; i < skus.length; i += 500) {
-              const slice = skus.slice(i, i + 500);
-              const { data: meta } = await (supabase as any)
-                .from("data_master")
-                .select("sku_code,item_type,buying_status")
-                .in("sku_code", slice);
-              for (const m of (meta || [])) {
-                skuMeta.set(m.sku_code, { item_type: m.item_type || "", buying_status: m.buying_status || "" });
-              }
-            }
-            for (const r of extra) {
-              if (!r.item_type || !r.buying_status) {
-                const m = skuMeta.get(r.sku_code);
-                if (m) {
-                  if (!r.item_type) r.item_type = m.item_type;
-                  if (!r.buying_status) r.buying_status = m.buying_status;
-                }
-              }
-            }
-          }
-        }
-
-        // Apply same filters to Doc rows so they obey Store/Type/Item Type/Buying Status
-        const storeSet = storeFilter.length ? new Set(storeFilter) : null;
-        const typeSet = typeStoreFilter.length ? new Set(typeStoreFilter) : null;
-        const itemSet = itemTypeFilter.length ? new Set(itemTypeFilter) : null;
-        const buySet = buyingFilter.length ? new Set(buyingFilter) : null;
-        const filteredExtra = extra.filter(r => {
-          if (storeSet && !storeSet.has(r.store_name)) return false;
-          if (typeSet && !typeSet.has(r.type_store)) return false;
-          if (itemSet && !itemSet.has(r.item_type)) return false;
-          if (buySet && !buySet.has(r.buying_status)) return false;
-          return true;
-        });
-
-        mergedFromDoc = filteredExtra.length;
-        finalRows = [...calcRows, ...filteredExtra];
-      }
-
-      const mergeMs = Math.round(performance.now() - tMerge);
-      setPhaseTimes({ fetch: fetchMs, merge: mergeMs, rowCount: calcRows.length, docCount: mergedFromDoc, readBatches: lastBatchCount });
-
-      setRows(finalRows);
+      setRows(mapped);
       setHasData(true);
       setPage(0);
+      setPhaseTimes({ fetch: ms, rowCount: mapped.length });
       setPhasePct(100); setPhaseLabel("");
-      toast({
-        title: "คำนวณเสร็จสิ้น",
-        description: `Calc ${calcRows.length.toLocaleString()} แถว${mergedFromDoc > 0 ? ` + ${mergedFromDoc.toLocaleString()} จาก Doc` : ""}`,
-      });
-    } catch (err: any) {
-      console.error(err);
-      toast({ title: "Error", description: err.message, variant: "destructive" });
-    } finally {
-      setLoading(false);
-    }
-  }, [toast, storeFilter, typeStoreFilter, itemTypeFilter, buyingFilter, hasFilters, loadLatestDocRows]);
-
-  // ====== load docs list ======
-  const loadDocs = useCallback(async () => {
-    setDocsLoading(true);
-    try {
-      const { data, error } = await (supabase as any)
-        .from("minmax_cal_documents")
-        .select("*")
-        .order("created_at", { ascending: false });
-      if (error) throw error;
-      setDocs((data || []) as DocRow[]);
+      toast({ title: "ดึงข้อมูลสำเร็จ", description: `${mapped.length.toLocaleString()} แถว (${ms}ms)` });
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
     } finally {
-      setDocsLoading(false);
+      setViewLoading(false);
+      setPhasePct(0);
+      setPhaseLabel("");
     }
-  }, [toast]);
+  }, [storeFilter, typeStoreFilter, itemTypeFilter, buyingFilter, divisionFilter, departmentFilter, subDeptFilter, classFilter, skuFilter, barcodeFilter, toast]);
 
-  useEffect(() => { loadDocs(); }, [loadDocs]);
 
   // ====== finals (Min / Max) ======
   const getFinal = (r: CalcRow): { min: number; max: number; minSrc: "edit" | "cal" | "doc"; maxSrc: "edit" | "cal" | "doc" } => {
@@ -441,33 +691,104 @@ export default function MinmaxCalPage() {
       for (const k of Object.keys(sample)) {
         const n = norm(k);
         if (n === "skucode" || n === "sku") keyMap[k] = "sku_code";
+        else if (n === "barcode" || n === "mainbarcode" || n === "barcodeunit" || n === "barcodeskucode" || n === "skucodebarcode") keyMap[k] = "barcode";
         else if (n === "minqty" || n === "min" || n === "minval") keyMap[k] = "min_qty";
         else if (n === "maxqty" || n === "max" || n === "maxval") keyMap[k] = "max_qty";
         else if (n === "storename" || n === "store") keyMap[k] = "store_name";
+        else if (n === "unitpick" || n === "unitpicking") keyMap[k] = "unit_pick";
       }
-      const editMap = new Map<string, { min?: number; max?: number; storeFilter?: string }>();
+      const skuColKey = Object.keys(keyMap).find(k => keyMap[k] === "sku_code");
+      const bcColKey = Object.keys(keyMap).find(k => keyMap[k] === "barcode");
+      const minColKey = Object.keys(keyMap).find(k => keyMap[k] === "min_qty");
+      const maxColKey = Object.keys(keyMap).find(k => keyMap[k] === "max_qty");
+      const upColKey = Object.keys(keyMap).find(k => keyMap[k] === "unit_pick");
+      const storeColKey = Object.keys(keyMap).find(k => keyMap[k] === "store_name");
+
+      // editMap key = "<lookupKey>|<store>" where lookupKey is sku OR barcode (whichever provided)
+      const editMap = new Map<string, { min?: number; max?: number; unitPick?: number; storeFilter?: string }>();
+      const barcodeKeys = new Set<string>();
       for (const row of json) {
-        const sku = String(row[Object.keys(keyMap).find(k => keyMap[k] === "sku_code") || ""] ?? "").trim();
-        if (!sku) continue;
-        const minRaw = row[Object.keys(keyMap).find(k => keyMap[k] === "min_qty") || ""];
-        const maxRaw = row[Object.keys(keyMap).find(k => keyMap[k] === "max_qty") || ""];
-        const storeRaw = row[Object.keys(keyMap).find(k => keyMap[k] === "store_name") || ""];
+        const sku = skuColKey ? String(row[skuColKey] ?? "").trim() : "";
+        const bc = bcColKey ? String(row[bcColKey] ?? "").trim() : "";
+        const lookupKey = sku || bc;
+        if (!lookupKey) continue;
+        if (!sku && bc) barcodeKeys.add(bc);
+        const minRaw = minColKey ? row[minColKey] : undefined;
+        const maxRaw = maxColKey ? row[maxColKey] : undefined;
+        const upRaw = upColKey ? row[upColKey] : undefined;
+        const storeRaw = storeColKey ? row[storeColKey] : undefined;
         const min = minRaw === undefined || minRaw === "" ? undefined : Number(minRaw);
         const max = maxRaw === undefined || maxRaw === "" ? undefined : Number(maxRaw);
+        const unitPick = upRaw === undefined || upRaw === "" ? undefined : Number(upRaw);
         const storeFilter = storeRaw ? String(storeRaw).trim() : undefined;
-        editMap.set(sku + "|" + (storeFilter || ""), { min, max, storeFilter });
+        editMap.set(lookupKey + "|" + (storeFilter || ""), { min, max, unitPick, storeFilter });
       }
+
+      // Resolve barcodes → sku_code via data_master (main_barcode, barcode)
+      const barcodeToSku = new Map<string, string>();
+      if (barcodeKeys.size > 0) {
+        const all = Array.from(barcodeKeys);
+        const chunkSize = 500;
+        for (let i = 0; i < all.length; i += chunkSize) {
+          const slice = all.slice(i, i + chunkSize);
+          const inExpr = slice.map(s => `"${String(s).replace(/"/g, '""')}"`).join(",");
+          const { data, error } = await supabase
+            .from("data_master")
+            .select("sku_code, main_barcode, barcode")
+            .or(`main_barcode.in.(${inExpr}),barcode.in.(${inExpr})`);
+          if (error) throw error;
+          for (const m of data || []) {
+            if (!m.sku_code) continue;
+            if (m.main_barcode && slice.includes(m.main_barcode)) barcodeToSku.set(m.main_barcode, m.sku_code);
+            if (m.barcode && slice.includes(m.barcode)) barcodeToSku.set(m.barcode, m.sku_code);
+          }
+        }
+      }
+
       let updated = 0;
       const next = rows.map(r => {
-        const tryKeys = [`${r.sku_code}|${r.store_name}`, `${r.sku_code}|`];
+        const tryKeys: string[] = [
+          `${r.sku_code}|${r.store_name}`,
+          `${r.sku_code}|`,
+        ];
+        if (r.main_barcode) {
+          tryKeys.push(`${r.main_barcode}|${r.store_name}`, `${r.main_barcode}|`);
+        }
+        // also try barcodes that resolved to this sku
+        for (const [bc, sku] of barcodeToSku.entries()) {
+          if (sku === r.sku_code) {
+            tryKeys.push(`${bc}|${r.store_name}`, `${bc}|`);
+          }
+        }
         for (const k of tryKeys) {
           const e = editMap.get(k);
           if (e) {
             updated++;
-            return { ...r, min_edit: e.min ?? r.min_edit, max_edit: e.max ?? r.max_edit };
+            const newUnitPickEdit = e.unitPick ?? r.unit_pick_edit;
+            const newMinEdit = e.min ?? r.min_edit;
+            const merged = {
+              ...r,
+              min_edit: newMinEdit,
+              max_edit: e.max ?? r.max_edit,
+              unit_pick_edit: newUnitPickEdit,
+            };
+            // Recompute max_cal when unit_pick_edit changed (skip Doc rows)
+            if (!r.from_doc && e.unitPick != null) {
+              const upEdit = (newUnitPickEdit != null && Number(newUnitPickEdit) > 0)
+                ? Number(newUnitPickEdit)
+                : (Number(r.unit_pick) || 1);
+              const avg = Number(r.avg_sale) || 0;
+              const minCal = Number(r.min_cal) || 0;
+              let newMax = Math.ceil(minCal + avg * nFactor + upEdit);
+              if (avg === 0 && newMax < 4) newMax = 4;
+              else if ((r as any).min_floored && newMax < 6) newMax = 6;
+              merged.max_cal = newMax;
+            }
+            return merged;
           }
         }
         return r;
+
       });
       setRows(next);
       setForceCal({});
@@ -478,138 +799,223 @@ export default function MinmaxCalPage() {
     }
   };
 
-  // ====== Save as document ======
+  // ====== Save to MinMax View (UPSERT into minmax table) ======
   const saveDoc = async () => {
     if (!user) { toast({ title: "ต้องเข้าสู่ระบบ", variant: "destructive" }); return; }
     if (rows.length === 0) { toast({ title: "ยังไม่มีข้อมูลให้บันทึก", variant: "destructive" }); return; }
-    const name = saveName.trim() || fmtDocName();
+    setSaving(true);
+    const TOTAL_STEPS = 3;
+    const step = (i: number, label: string, basePct: number) => {
+      setSaveStep({ idx: i, total: TOTAL_STEPS, label });
+      setSaveStatus(label);
+      setSavePct(basePct);
+    };
     try {
+      // STEP 1/3 — เตรียม Payload
+      step(1, `เตรียม Payload จาก ${rows.length.toLocaleString()} แถว`, 5);
+      await new Promise(r => setTimeout(r, 0));
       const payload = rows.map(r => {
         const f = getFinal(r);
         return {
           sku_code: r.sku_code,
-          product_name_la: r.product_name_la,
-          product_name_en: r.product_name_en,
-          main_barcode: r.main_barcode,
-          unit_of_measure: r.unit_of_measure,
           store_name: r.store_name,
-          type_store: r.type_store,
-          size_store: r.size_store,
-          unit_pick: r.unit_pick,
-          avg_sale: r.avg_sale,
-          rank_sale: r.rank_sale,
-          rank_factor: r.rank_factor,
-          item_type: r.item_type,
-          buying_status: r.buying_status,
-          min_cal: r.min_cal,
-          max_cal: r.max_cal,
-          min_edit: r.min_edit ?? null,
-          max_edit: r.max_edit ?? null,
+          type_store: r.type_store || null,
+          unit_pick: String(r.unit_pick_edit ?? r.unit_pick ?? 1),
           min_final: f.min,
           max_final: f.max,
         };
       });
-      const { error } = await (supabase as any).from("minmax_cal_documents").insert({
-        doc_name: name,
-        user_id: user.id,
-        n_factor: nFactor,
-        item_count: payload.length,
-        data: payload,
+      setSavePct(10);
+
+      // STEP 1.5 — ลบค่าเก่าของสาขาที่กำลังบันทึก ป้องกัน SKU ค้างจากรอบก่อน
+      const storeSet = Array.from(new Set(payload.map(p => p.store_name).filter(Boolean))) as string[];
+      if (storeSet.length > 0) {
+        step(2, `ลบค่าเก่าของ ${storeSet.length.toLocaleString()} สาขาก่อนบันทึก`, 12);
+        const { data: delCnt, error: delErr } = await (supabase as any)
+          .rpc("delete_minmax_by_stores", { p_store_names: storeSet });
+        if (delErr) throw delErr;
+        console.log(`[saveDoc] deleted ${delCnt} stale rows from ${storeSet.length} stores`);
+      }
+
+      // STEP 2/3 — UPSERT เข้าตาราง minmax แบบ chunk
+      step(2, `กำลังบันทึก ${payload.length.toLocaleString()} แถว → ตาราง Min/Max`, 15);
+      const chunks = chunkByJsonSize(payload);
+      const totalChunks = Math.max(1, chunks.length);
+      const t0 = performance.now();
+      let sentRows = 0;
+      let upsertTotal = 0;
+      for (let chunkIdx = 1; chunkIdx <= chunks.length; chunkIdx++) {
+        const slice = chunks[chunkIdx - 1];
+        const sizeKb = Math.round(jsonByteSize(slice) / 1024);
+        const sec = ((performance.now() - t0) / 1000).toFixed(1);
+        step(2, `บันทึก batch ${chunkIdx}/${totalChunks} · ${slice.length.toLocaleString()} แถว · ${sizeKb.toLocaleString()} KB · ${sec}s`, 15 + Math.round((sentRows / Math.max(1, payload.length)) * 75));
+        const { data: cnt } = await rpcWithRetry(
+          () => (supabase as any).rpc("upsert_minmax_view", { p_rows: slice }),
+          `upsert_minmax_view chunk ${chunkIdx}/${totalChunks}`,
+        );
+        upsertTotal += Number(cnt) || 0;
+        sentRows += slice.length;
+      }
+      const totalSec = ((performance.now() - t0) / 1000).toFixed(1);
+
+      // STEP 3/3 — เสร็จ
+      step(3, `บันทึกสำเร็จ · ${payload.length.toLocaleString()} แถว (${totalSec}s)`, 95);
+      toast({
+        title: "บันทึก Min/Max View สำเร็จ",
+        description: `${payload.length.toLocaleString()} แถว → ตาราง minmax (${totalSec}s)`,
       });
-      if (error) throw error;
-      toast({ title: "บันทึก Doc สำเร็จ", description: `${name} (${payload.length.toLocaleString()} แถว)` });
+
+      setSavePct(100);
+      setSaveStatus(`เสร็จสิ้น · ${payload.length.toLocaleString()} แถวอัปเดตในตาราง Min/Max`);
+      await new Promise(r => setTimeout(r, 400));
       setSaveOpen(false);
       setSaveName("");
-      loadDocs();
+      loadReport();
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+      setSaveStatus("");
+      setSavePct(0);
+      setSaveStep({ idx: 0, total: 3, label: "" });
     }
   };
 
-  // ====== Doc actions ======
-  const deleteDoc = async (id: string) => {
-    if (!confirm("ลบ Doc นี้?")) return;
-    const { error } = await (supabase as any).from("minmax_cal_documents").delete().eq("id", id);
-    if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
-    toast({ title: "ลบสำเร็จ" });
-    loadDocs();
-  };
-
-  const exportDoc = async (doc: DocRow) => {
-    const data = (doc.data || []) as any[];
-    // Collect unique sku_codes to fetch master enrichment
-    const skuSet = [...new Set(data.map(r => String(r.sku_code || "")).filter(Boolean))];
-    const masterMap = new Map<string, any>();
-    // Batch fetch data_master in chunks of 500 to avoid URL limit
+  // ====== Report: Export full Min/Max View to Excel ======
+  // Pulls all rows from `minmax` (filtered by docStoreFilter/docTypeFilter if set)
+  // using get_minmax_view_by_stores (already joins data_master deduped).
+  const exportReportExcel = async () => {
+    cancelExportRef.current = false;
+    setExportingReport(true);
+    setExportProgress({ loaded: 0, total: 0, label: "เตรียมข้อมูล..." });
     try {
-      for (let i = 0; i < skuSet.length; i += 500) {
-        const chunk = skuSet.slice(i, i + 500);
-        const { data: rows } = await supabase
-          .from("data_master")
-          .select("sku_code,division_group,division,department,sub_department,class,sub_class,vendor_code,vendor_display_name")
-          .in("sku_code", chunk);
-        (rows || []).forEach((m: any) => masterMap.set(String(m.sku_code), m));
+      const t0 = performance.now();
+      const all: any[] = [];
+      let offset = 0;
+      const params = buildReportParams();
+      while (true) {
+        if (cancelExportRef.current) throw new Error("__CANCELLED__");
+        const { data, error } = await (supabase as any)
+          .rpc("get_minmax_view_by_stores", params)
+          .range(offset, offset + RPC_BATCH - 1);
+        if (error) throw error;
+        const batch = data || [];
+        all.push(...batch);
+        setExportProgress({ loaded: all.length, total: all.length, label: `ดึงข้อมูล... ${all.length.toLocaleString()} แถว` });
+        if (batch.length < RPC_BATCH) break;
+        offset += RPC_BATCH;
       }
-    } catch (e) {
-      console.warn("exportDoc: master fetch failed", e);
-    }
-    const sheet = data.map(r => {
-      const m = masterMap.get(String(r.sku_code)) || {};
-      return {
-        "SKU Code": r.sku_code,
-        "Product Name (LA)": r.product_name_la,
-        "Product Name (EN)": r.product_name_en,
-        "Barcode": r.main_barcode,
-        "UoM": r.unit_of_measure,
-        "Division Group": m.division_group ?? "",
-        "Division": m.division ?? "",
-        "Department": m.department ?? "",
-        "Sub-Department": m.sub_department ?? "",
-        "Class": m.class ?? "",
-        "Sub-Class": m.sub_class ?? "",
-        "seller_ids/vendor_code": m.vendor_code ?? "",
-        "seller_ids/display_name": m.vendor_display_name ?? "",
-        "Store Name": r.store_name,
-        "Type Store": r.type_store,
-        "Size Store": r.size_store,
-        "Item Type": r.item_type,
-        "Buying Status": r.buying_status,
-        "Unit Pick": r.unit_pick,
-        "Avg Sale": r.avg_sale,
-        "Rank": r.rank_sale,
-        "Min Cal": r.min_cal,
-        "Max Cal": r.max_cal,
-        "Min Edit": r.min_edit,
-        "Max Edit": r.max_edit,
-        "Min": r.min_final,
-        "Max": r.max_final,
-      };
-    });
-    const ws = XLSX.utils.json_to_sheet(sheet);
-    // Force "SKU Code" + "Barcode" columns to text to preserve leading zeros
-    const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
-    const header = sheet[0] ? Object.keys(sheet[0]) : [];
-    const textCols = ["SKU Code", "Barcode", "seller_ids/vendor_code"];
-    textCols.forEach(name => {
-      const colIdx = header.indexOf(name);
-      if (colIdx < 0) return;
-      for (let R = 1; R <= range.e.r; R++) {
-        const addr = XLSX.utils.encode_cell({ r: R, c: colIdx });
-        const cell = ws[addr];
-        if (cell && cell.v != null && cell.v !== "") {
-          cell.t = "s";
-          cell.v = String(cell.v);
-          cell.z = "@";
+      // RPC already applied all filters; cancel check
+      if (cancelExportRef.current) throw new Error("__CANCELLED__");
+      const data = all;
+      if (data.length === 0) {
+        toast({ title: "ไม่มีข้อมูลตาม Filter", variant: "destructive" });
+        return;
+      }
+
+      setExportProgress({ loaded: 0, total: data.length, label: "สร้างไฟล์ Excel..." });
+      const sheet: any[] = [];
+      const CHUNK = 2000;
+      for (let i = 0; i < data.length; i += CHUNK) {
+        if (cancelExportRef.current) throw new Error("__CANCELLED__");
+        const slice = data.slice(i, i + CHUNK);
+        for (const r of slice) {
+          sheet.push({
+            "SKU Code": r.sku_code,
+            "Product Name (LA)": r.product_name_la,
+            "Product Name (EN)": r.product_name_en,
+            "Barcode": r.main_barcode,
+            "UoM": r.unit_of_measure,
+            "Division": r.division ?? "",
+            "Department": r.department ?? "",
+            "Sub-Department": r.sub_department ?? "",
+            "Class": r.class ?? "",
+            "Store Name": r.store_name,
+            "Type Store": r.type_store,
+            "Item Type": r.item_type,
+            "Buying Status": r.buying_status,
+            "Unit Pick": r.unit_pick,
+            "Pack": r.pack_qty ?? null,
+            "Box": r.box_qty ?? null,
+            "Min": r.min_val,
+            "Max": r.max_val,
+          });
         }
+        setExportProgress({
+          loaded: Math.min(data.length, i + slice.length),
+          total: data.length,
+          label: `เตรียมแถว ${Math.min(data.length, i + slice.length).toLocaleString()}/${data.length.toLocaleString()}`,
+        });
+        await new Promise(r => setTimeout(r, 0));
       }
-    });
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "MinMax");
-    XLSX.writeFile(wb, `${doc.doc_name}.xlsx`);
+
+      setExportProgress({ loaded: data.length, total: data.length, label: "เขียนไฟล์..." });
+      await new Promise(r => setTimeout(r, 0));
+
+      const ws = XLSX.utils.json_to_sheet(sheet);
+      const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
+      const header = sheet[0] ? Object.keys(sheet[0]) : [];
+      const textCols = ["SKU Code", "Barcode"];
+      textCols.forEach(name => {
+        const colIdx = header.indexOf(name);
+        if (colIdx < 0) return;
+        for (let R = 1; R <= range.e.r; R++) {
+          const addr = XLSX.utils.encode_cell({ r: R, c: colIdx });
+          const cell = ws[addr];
+          if (cell && cell.v != null && cell.v !== "") {
+            cell.t = "s";
+            cell.v = String(cell.v);
+            cell.z = "@";
+          }
+        }
+      });
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "MinMax_View");
+
+      // Also add a Summary sheet (per-store)
+      const sumMap = new Map<string, { sku: number; minTot: number; maxTot: number; type: string }>();
+      for (const r of data) {
+        const k = String(r.store_name || "");
+        const cur = sumMap.get(k) || { sku: 0, minTot: 0, maxTot: 0, type: String(r.type_store || "") };
+        cur.sku += 1;
+        cur.minTot += Number(r.min_val) || 0;
+        cur.maxTot += Number(r.max_val) || 0;
+        sumMap.set(k, cur);
+      }
+      const summarySheet = [...sumMap.entries()]
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([store, s]) => ({
+          "Store Name": store,
+          "Type Store": s.type,
+          "SKU Count": s.sku,
+          "Sum Min": s.minTot,
+          "Sum Max (Qty)": s.maxTot,
+        }));
+      const ws2 = XLSX.utils.json_to_sheet(summarySheet);
+      XLSX.utils.book_append_sheet(wb, ws2, "Summary");
+
+      const ms = ((performance.now() - t0) / 1000).toFixed(1);
+      const ts = fmtDocName().replace("-minmaxcal", "");
+      const hasFilter = Object.keys(params).length > 0;
+      const filterSuffix = hasFilter ? `_filtered_${data.length}` : `_${data.length}`;
+      XLSX.writeFile(wb, `minmax_view_${ts}${filterSuffix}.xlsx`);
+      toast({ title: "Export สำเร็จ", description: `${data.length.toLocaleString()} แถว (${ms}s)` });
+    } catch (err: any) {
+      if (err?.message === "__CANCELLED__") {
+        toast({ title: "ยกเลิก Export แล้ว", variant: "destructive" });
+      } else {
+        toast({ title: "Error", description: err.message, variant: "destructive" });
+      }
+    } finally {
+      setExportingReport(false);
+      setExportProgress({ loaded: 0, total: 0, label: "" });
+    }
   };
+
+
 
   const exportTemplate = () => {
-    const ws = XLSX.utils.json_to_sheet([{ sku_code: "", store_name: "", min_qty: "", max_qty: "" }]);
+    const ws = XLSX.utils.json_to_sheet([{ sku_code: "", barcode: "", store_name: "", min_qty: "", max_qty: "", unit_pick: "" }]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "MinMax_Import");
     XLSX.writeFile(wb, "minmax_import_template.xlsx");
@@ -640,6 +1046,8 @@ export default function MinmaxCalPage() {
         "Item Type": r.item_type,
         "Buying Status": r.buying_status,
         "Unit Pick": r.unit_pick,
+        "Pack": r.pack_qty ?? null,
+        "Box": r.box_qty ?? null,
         "Avg Sale": r.avg_sale,
         "Rank": r.rank_sale,
         "Rank Factor": r.rank_factor,
@@ -677,6 +1085,41 @@ export default function MinmaxCalPage() {
     });
   };
 
+  const setUnitPickEdit = (r: CalcRow, value: string) => {
+    const v = value === "" ? null : Number(value);
+    const cleaned = Number.isNaN(v as any) ? null : v;
+    setRows(prev => prev.map(x => {
+      if (!(x.sku_code === r.sku_code && x.store_name === r.store_name)) return x;
+      // Recompute max_cal client-side ตามสูตรใหม่ (Min ไม่ขึ้นกับ unit_pick)
+      // ห้ามแตะ from_doc rows (อ่านอย่างเดียว)
+      if (x.from_doc) return { ...x, unit_pick_edit: cleaned };
+      const upEdit = (cleaned != null && cleaned > 0) ? cleaned : (Number(x.unit_pick) || 1);
+      const avg = Number(x.avg_sale) || 0;
+      const minCal = Number(x.min_cal) || 0;
+      let newMax = Math.ceil(minCal + avg * nFactor + upEdit);
+      if (avg === 0 && newMax < 4) newMax = 4;
+      else if (x.min_floored && newMax < 6) newMax = 6;
+      return { ...x, unit_pick_edit: cleaned, max_cal: newMax };
+    }));
+  };
+
+  // Keyboard nav: Enter/Arrow keys to move between editable cells
+  const NAV_COLS = ["min_edit", "max_edit", "unit_pick_edit"] as const;
+  const handleEditKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, rowIdx: number, col: typeof NAV_COLS[number]) => {
+    const k = e.key;
+    if (!["Enter", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight"].includes(k)) return;
+    e.preventDefault();
+    let nextRow = rowIdx;
+    let nextColIdx = NAV_COLS.indexOf(col);
+    if (k === "Enter" || k === "ArrowDown") nextRow = Math.min(pageRows.length - 1, rowIdx + 1);
+    else if (k === "ArrowUp") nextRow = Math.max(0, rowIdx - 1);
+    else if (k === "ArrowLeft") nextColIdx = Math.max(0, nextColIdx - 1);
+    else if (k === "ArrowRight") nextColIdx = Math.min(NAV_COLS.length - 1, nextColIdx + 1);
+    const sel = `input[data-nav="r${nextRow}-c${NAV_COLS[nextColIdx]}"]`;
+    const el = document.querySelector<HTMLInputElement>(sel);
+    if (el) { el.focus(); el.select(); }
+  };
+
   const toggleSrc = (r: CalcRow, which: "min" | "max") => {
     if (r.from_doc) return;
     const k = `${r.sku_code}|${r.store_name}`;
@@ -711,14 +1154,45 @@ export default function MinmaxCalPage() {
         <div className="flex items-center gap-2 flex-wrap">
           <Button
             size="sm"
-            variant="default"
-            onClick={() => calculate(nFactor)}
-            disabled={loading}
+            variant={loading ? "destructive" : "default"}
+            onClick={() => {
+              if (loading) {
+                cancelCalcRef.current = true;
+              } else {
+                calculate(nFactor);
+              }
+            }}
             className="text-xs"
           >
-            {loading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Calculator className="w-3.5 h-3.5 mr-1" />}
-            Calculate
+            {loading ? (
+              <>
+                <X className="w-3.5 h-3.5 mr-1" /> Stop
+              </>
+            ) : (
+              <>
+                <Calculator className="w-3.5 h-3.5 mr-1" /> Calculate
+              </>
+            )}
           </Button>
+          {(() => {
+            const viewCount = storeFilter.length + skuFilter.length + barcodeFilter.length;
+            const hasAnyFilter = viewCount > 0 || typeStoreFilter.length > 0 || itemTypeFilter.length > 0
+              || buyingFilter.length > 0 || divisionFilter.length > 0 || departmentFilter.length > 0
+              || subDeptFilter.length > 0 || classFilter.length > 0;
+            return (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleView}
+                disabled={viewLoading || loading || !hasAnyFilter}
+                className="text-xs"
+                title={!hasAnyFilter ? "ใส่ Filter ก่อน (Store, SKU, Barcode ฯลฯ)" : "ดึงข้อมูล Min/Max ที่บันทึกไว้ตาม Filter"}
+              >
+                {viewLoading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Eye className="w-3.5 h-3.5 mr-1" />}
+                View ({viewCount})
+              </Button>
+            );
+          })()}
           <Button size="sm" variant="outline" onClick={() => { setNInput(String(nFactor)); setSetNOpen(true); }} className="text-xs">
             <Settings2 className="w-3.5 h-3.5 mr-1" /> Set N ({nFactor})
           </Button>
@@ -752,12 +1226,12 @@ export default function MinmaxCalPage() {
       </div>
 
       {/* Phase Progress */}
-      {(loading || phaseTimes.fetch != null) && (
+      {(loading || viewLoading || phaseTimes.fetch != null) && (
         <div className="px-6 py-2 bg-muted/30 border-b border-border space-y-1">
-          {loading && (
+          {(loading || viewLoading) && (
             <>
               <div className="flex items-center justify-between text-xs">
-                <span className="font-medium">{phaseLabel || "พร้อม"}</span>
+                <span className="font-medium">{phaseLabel || (viewLoading ? "กำลังโหลด View..." : "พร้อม")}</span>
                 <span className="text-muted-foreground tabular-nums">{phasePct}%</span>
               </div>
               <Progress value={phasePct} className="h-1.5" />
@@ -786,13 +1260,13 @@ export default function MinmaxCalPage() {
       <Tabs value={tab} onValueChange={(v) => setTab(v as any)} className="flex-1 flex flex-col overflow-hidden">
         <TabsList className="mx-6 mt-3 self-start">
           <TabsTrigger value="calc" className="text-xs">Calc</TabsTrigger>
-          <TabsTrigger value="doc" className="text-xs">
-            <FileText className="w-3 h-3 mr-1" /> Doc ({docs.length})
+          <TabsTrigger value="report" className="text-xs">
+            <BarChart3 className="w-3 h-3 mr-1" /> Report ({reportRows.length})
           </TabsTrigger>
         </TabsList>
 
         {/* ============== Calc TAB ============== */}
-        <TabsContent value="calc" className="flex-1 flex flex-col overflow-hidden mt-2">
+        <TabsContent value="calc" className="flex-1 flex flex-col overflow-hidden mt-2 data-[state=inactive]:hidden">
           {/* Filter Row */}
           <div className="px-6 pb-2 flex items-center gap-2 flex-wrap">
             <span className="text-xs font-medium text-muted-foreground">Filter:</span>
@@ -828,9 +1302,59 @@ export default function MinmaxCalPage() {
               onChange={setBuyingFilter}
               width="w-56"
             />
+            <MultiSelectFilter
+              label="Division"
+              options={filterOpts.divisions}
+              selected={divisionFilter}
+              onChange={setDivisionFilter}
+              width="w-56"
+            />
+            <MultiSelectFilter
+              label="Department"
+              options={filterOpts.departments}
+              selected={departmentFilter}
+              onChange={setDepartmentFilter}
+              width="w-56"
+            />
+            <MultiSelectFilter
+              label="Sub-Department"
+              options={filterOpts.subDepartments}
+              selected={subDeptFilter}
+              onChange={setSubDeptFilter}
+              width="w-56"
+            />
+            <MultiSelectFilter
+              label="Class"
+              options={filterOpts.classes}
+              selected={classFilter}
+              onChange={setClassFilter}
+              width="w-56"
+            />
+            <Input
+              placeholder="SKU Code (คั่นด้วย ,)"
+              className="h-7 text-xs w-48"
+              defaultValue={skuFilter.join(",")}
+              onBlur={(e) => {
+                const arr = e.target.value.split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
+                setSkuFilter(arr);
+              }}
+            />
+            <Input
+              placeholder="Barcode (คั่นด้วย ,)"
+              className="h-7 text-xs w-48"
+              defaultValue={barcodeFilter.join(",")}
+              onBlur={(e) => {
+                const arr = e.target.value.split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
+                setBarcodeFilter(arr);
+              }}
+            />
             {hasFilters && (
               <Button size="sm" variant="ghost" className="h-7 text-xs"
-                onClick={() => { setStoreFilter([]); setTypeStoreFilter([]); setItemTypeFilter([]); setBuyingFilter([]); }}>
+                onClick={() => {
+                  setStoreFilter([]); setTypeStoreFilter([]); setItemTypeFilter([]); setBuyingFilter([]);
+                  setDivisionFilter([]); setDepartmentFilter([]); setSubDeptFilter([]); setClassFilter([]);
+                  setSkuFilter([]); setBarcodeFilter([]);
+                }}>
                 <X className="w-3 h-3 mr-1" /> Clear Filters
               </Button>
             )}
@@ -922,8 +1446,9 @@ export default function MinmaxCalPage() {
                         />
                       </th>
                       {[
-                        "SKU Code", "Product Name", "Store", "Type", "Size", "Item Type", "Buying", "Unit Pick",
-                        "Avg Sale", "Rank", "Min Cal", "Max Cal", "Min Edit", "Max Edit", "Min", "Max", "Source",
+                        "SKU Code", "Product Name", "Store", "Type", "Size", "Item Type", "Buying",
+                        "Pack", "Box", "Unit Pick", "Unit Pick Edit",
+                        "Avg Sale", "Rank", "Min Cal", "Max Cal", "Min Edit", "Max Edit", "Min", "Max", "DOH Min", "DOH Max", "Source",
                       ].map(h => (
                         <th key={h} className="px-2 py-1.5 text-left font-medium border-b border-border whitespace-nowrap bg-muted">
                           {h}
@@ -963,7 +1488,19 @@ export default function MinmaxCalPage() {
                           <td className="px-2 py-1">{r.size_store}</td>
                           <td className="px-2 py-1 text-[10px]">{r.item_type}</td>
                           <td className="px-2 py-1 text-[10px]">{r.buying_status}</td>
+                          <td className="px-2 py-1 text-right tabular-nums">{r.pack_qty ?? "-"}</td>
+                          <td className="px-2 py-1 text-right tabular-nums">{r.box_qty ?? "-"}</td>
                           <td className="px-2 py-1 text-right">{r.unit_pick}</td>
+                          <td className="px-2 py-1 w-20">
+                            <Input
+                              type="number" value={r.unit_pick_edit ?? ""}
+                              disabled={r.from_doc}
+                              data-nav={`r${i}-cunit_pick_edit`}
+                              onChange={(e) => setUnitPickEdit(r, e.target.value)}
+                              onKeyDown={(e) => handleEditKeyDown(e, i, "unit_pick_edit")}
+                              className="h-6 text-xs px-1 text-right"
+                            />
+                          </td>
                           <td className="px-2 py-1 text-right">{r.avg_sale.toFixed(2)}</td>
                           <td className="px-2 py-1">
                             <Badge variant="outline" className="text-[10px] px-1 py-0 h-4">
@@ -971,7 +1508,9 @@ export default function MinmaxCalPage() {
                             </Badge>
                           </td>
                           <td className={cn("px-2 py-1 text-right tabular-nums",
-                            r.is_default_min && "text-warning")}>
+                            r.is_default_min && "text-warning",
+                            r.min_floored && "text-sky-600 dark:text-sky-400 font-semibold")}
+                            title={r.min_floored ? "ปัดขึ้นเป็น 3 (avg×rank < 3)" : undefined}>
                             {r.min_cal}
                           </td>
                           <td className="px-2 py-1 text-right tabular-nums">{r.max_cal}</td>
@@ -979,7 +1518,9 @@ export default function MinmaxCalPage() {
                             <Input
                               type="number" value={r.min_edit ?? ""}
                               disabled={r.from_doc}
+                              data-nav={`r${i}-cmin_edit`}
                               onChange={(e) => setEdit(r, "min_edit", e.target.value)}
+                              onKeyDown={(e) => handleEditKeyDown(e, i, "min_edit")}
                               className="h-6 text-xs px-1 text-right"
                             />
                           </td>
@@ -987,7 +1528,9 @@ export default function MinmaxCalPage() {
                             <Input
                               type="number" value={r.max_edit ?? ""}
                               disabled={r.from_doc}
+                              data-nav={`r${i}-cmax_edit`}
                               onChange={(e) => setEdit(r, "max_edit", e.target.value)}
+                              onKeyDown={(e) => handleEditKeyDown(e, i, "max_edit")}
                               className="h-6 text-xs px-1 text-right"
                             />
                           </td>
@@ -1011,6 +1554,23 @@ export default function MinmaxCalPage() {
                               {f.max}
                             </button>
                           </td>
+                          {(() => {
+                            const avg = Number(r.avg_sale) || 0;
+                            const dohMin = avg > 0 ? f.min / avg : 0;
+                            const dohMax = avg > 0 ? f.max / avg : 0;
+                            const cellCls = "px-2 py-1 text-right tabular-nums";
+                            const noSale = "text-muted-foreground italic text-[10px]";
+                            return (
+                              <>
+                                <td className={cn(cellCls, dohMin === 0 && noSale)}>
+                                  {dohMin === 0 ? "No Sales" : dohMin.toFixed(1)}
+                                </td>
+                                <td className={cn(cellCls, dohMax === 0 && noSale)}>
+                                  {dohMax === 0 ? "No Sales" : dohMax.toFixed(1)}
+                                </td>
+                              </>
+                            );
+                          })()}
                           <td className="px-2 py-1 text-[10px]">
                             {r.from_doc ? (
                               <Badge variant="outline" className="text-[10px] h-4 px-1 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 border-amber-300">Doc</Badge>
@@ -1038,61 +1598,174 @@ export default function MinmaxCalPage() {
           )}
         </TabsContent>
 
-        {/* ============== DOC TAB ============== */}
-        <TabsContent value="doc" className="flex-1 overflow-auto px-6 mt-2">
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-xs text-muted-foreground">รายการ Document ที่บันทึก (Doc ล่าสุดจะถูกใช้โดย SRR)</p>
-            <Button size="sm" variant="outline" onClick={loadDocs} disabled={docsLoading} className="text-xs">
-              <RotateCcw className={cn("w-3.5 h-3.5 mr-1", docsLoading && "animate-spin")} /> Refresh
-            </Button>
+        {/* ============== REPORT TAB ============== */}
+        <TabsContent value="report" className="flex-1 min-h-0 flex flex-col overflow-hidden px-6 !mt-2 data-[state=inactive]:hidden data-[state=active]:flex">
+          {/* Filter Row (mirrors Calc) */}
+          <div className="pb-2 flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-medium text-muted-foreground">Filter:</span>
+            <MultiSelectFilter label="Store" icon={<Store className="w-3 h-3 mr-1" />}
+              options={filterOpts.stores.map(s => s.store_name)} selected={docStoreFilter} onChange={setDocStoreFilter} width="w-80" />
+            <MultiSelectFilter label="Type Store" icon={<Layers className="w-3 h-3 mr-1" />}
+              options={filterOpts.types} selected={docTypeFilter} onChange={setDocTypeFilter} width="w-56" />
+            <MultiSelectFilter label="Item Type" icon={<Tag className="w-3 h-3 mr-1" />}
+              options={filterOpts.itemTypes} selected={docItemTypeFilter} onChange={setDocItemTypeFilter} width="w-56" />
+            <MultiSelectFilter label="Buying Status" icon={<Activity className="w-3 h-3 mr-1" />}
+              options={filterOpts.buyingStatuses} selected={docBuyingFilter} onChange={setDocBuyingFilter} width="w-56" />
+            <MultiSelectFilter label="Division" options={filterOpts.divisions} selected={docDivisionFilter} onChange={setDocDivisionFilter} width="w-56" />
+            <MultiSelectFilter label="Department" options={filterOpts.departments} selected={docDepartmentFilter} onChange={setDocDepartmentFilter} width="w-56" />
+            <MultiSelectFilter label="Sub-Department" options={filterOpts.subDepartments} selected={docSubDeptFilter} onChange={setDocSubDeptFilter} width="w-56" />
+            <MultiSelectFilter label="Class" options={filterOpts.classes} selected={docClassFilter} onChange={setDocClassFilter} width="w-56" />
+            {(docStoreFilter.length + docTypeFilter.length + docItemTypeFilter.length + docBuyingFilter.length + docDivisionFilter.length + docDepartmentFilter.length + docSubDeptFilter.length + docClassFilter.length) > 0 && (
+              <Button size="sm" variant="ghost" className="h-7 text-xs"
+                onClick={() => { setDocStoreFilter([]); setDocTypeFilter([]); setDocItemTypeFilter([]); setDocBuyingFilter([]); setDocDivisionFilter([]); setDocDepartmentFilter([]); setDocSubDeptFilter([]); setDocClassFilter([]); }}>
+                <X className="w-3 h-3 mr-1" /> Clear
+              </Button>
+            )}
+            <div className="flex items-center gap-2 ml-auto">
+              {canDelete && (
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={() => setDeleteOpen(true)}
+                  disabled={!hasReportFilter || deleting || reportLoading}
+                  title={!hasReportFilter ? "เลือก Filter ก่อนกด Delete" : "ลบ Min/Max ตาม Filter ปัจจุบัน"}
+                  className="text-xs h-7"
+                >
+                  <Trash2 className="w-3.5 h-3.5 mr-1" /> Delete
+                </Button>
+              )}
+              <Button size="sm" variant="outline" onClick={loadReport} disabled={reportLoading} className="text-xs h-7">
+                <RotateCcw className={cn("w-3.5 h-3.5 mr-1", reportLoading && "animate-spin")} /> Refresh
+              </Button>
+              <Button size="sm" variant={exportingReport ? "destructive" : "default"}
+                onClick={() => { if (exportingReport) { cancelExportRef.current = true; } else { exportReportExcel(); } }}
+                disabled={!exportingReport && reportRows.length === 0} className="text-xs h-7">
+                {exportingReport ? (
+                  <><StopCircle className="w-3.5 h-3.5 mr-1" /> Stop · {exportProgress.label || "..."}</>
+                ) : (
+                  <><Download className="w-3.5 h-3.5 mr-1" /> Export Excel</>
+                )}
+              </Button>
+            </div>
           </div>
-          {docs.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
-              <FileText className="w-12 h-12 mb-3 opacity-30" />
-              <p className="text-sm">ยังไม่มี Document</p>
-            </div>
-          ) : (
-            <div className="border border-border rounded-md overflow-hidden">
-              <table className="text-xs w-full">
-                <thead className="bg-muted/60">
-                  <tr>
-                    <th className="px-3 py-2 text-left font-medium">Doc Name</th>
-                    <th className="px-3 py-2 text-right font-medium">N</th>
-                    <th className="px-3 py-2 text-right font-medium">Items</th>
-                    <th className="px-3 py-2 text-left font-medium">Created</th>
-                    <th className="px-3 py-2 text-center font-medium">Status</th>
-                    <th className="px-3 py-2 text-right font-medium">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {docs.map((d, idx) => (
-                    <tr key={d.id} className="border-t border-border/40 hover:bg-muted/30">
-                      <td className="px-3 py-2 font-mono">{d.doc_name}</td>
-                      <td className="px-3 py-2 text-right">{d.n_factor}</td>
-                      <td className="px-3 py-2 text-right">{d.item_count.toLocaleString()}</td>
-                      <td className="px-3 py-2">{new Date(d.created_at).toLocaleString()}</td>
-                      <td className="px-3 py-2 text-center">
-                        {idx === 0 && <Badge className="text-[10px] h-5">Active</Badge>}
-                      </td>
-                      <td className="px-3 py-2 text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setViewingDoc(d)}>
-                            View
-                          </Button>
-                          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => exportDoc(d)}>
-                            <Download className="w-3.5 h-3.5" />
-                          </Button>
-                          <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive" onClick={() => deleteDoc(d.id)}>
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </Button>
-                        </div>
-                      </td>
+
+          {(() => {
+            // Group reportRows: Store → Division → Department
+            type Row = typeof reportRows[number];
+            const storeMap = new Map<string, { type_store: string; divs: Map<string, Row[]> }>();
+            for (const r of reportRows) {
+              if (!storeMap.has(r.store_name)) storeMap.set(r.store_name, { type_store: r.type_store, divs: new Map() });
+              const s = storeMap.get(r.store_name)!;
+              if (!s.divs.has(r.division)) s.divs.set(r.division, []);
+              s.divs.get(r.division)!.push(r);
+            }
+            const grandSku = reportRows.reduce((a, b) => a + b.sku_count, 0);
+            const grandMin = reportRows.reduce((a, b) => a + b.sum_min, 0);
+            const grandMax = reportRows.reduce((a, b) => a + b.sum_max, 0);
+            const storeCount = storeMap.size;
+
+            if (reportLoading) return (
+              <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
+                <Loader2 className="w-8 h-8 mb-3 animate-spin opacity-50" />
+                <p className="text-sm">กำลังโหลดสรุป...</p>
+              </div>
+            );
+            if (reportRows.length === 0) return (
+              <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
+                <BarChart3 className="w-12 h-12 mb-3 opacity-30" />
+                <p className="text-sm">ยังไม่มีข้อมูล Min/Max ใน View</p>
+              </div>
+            );
+
+            const sortedStores = [...storeMap.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+
+            return (
+              <div className="flex-1 min-h-0 overflow-auto border border-border rounded-md">
+                <table className="text-xs w-full">
+                  <thead className="bg-muted sticky top-0 z-20 shadow-sm">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-semibold w-[40%]">Store / Division / Department</th>
+                      <th className="px-3 py-2 text-left font-semibold">Type Store</th>
+                      <th className="px-3 py-2 text-right font-semibold">SKU Count</th>
+                      <th className="px-3 py-2 text-right font-semibold">Sum Min</th>
+                      <th className="px-3 py-2 text-right font-semibold">Sum Max (Qty)</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                  </thead>
+                  <tbody>
+                    {sortedStores.map(([storeName, { type_store, divs }]) => {
+                      const storeOpen = expandedDiv.has(storeName);
+                      const allRows = [...divs.values()].flat();
+                      const sSku = allRows.reduce((a, b) => a + b.sku_count, 0);
+                      const sMin = allRows.reduce((a, b) => a + b.sum_min, 0);
+                      const sMax = allRows.reduce((a, b) => a + b.sum_max, 0);
+                      const sortedDivs = [...divs.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+                      return (
+                        <Fragment key={storeName}>
+                          <tr className="bg-primary/5 border-t-2 border-border hover:bg-primary/10 cursor-pointer"
+                            onClick={() => setExpandedDiv(p => { const n = new Set(p); n.has(storeName) ? n.delete(storeName) : n.add(storeName); return n; })}>
+                            <td className="px-3 py-1.5 font-bold">
+                              <span className="inline-flex items-center gap-1">
+                                {storeOpen ? <ChevronDownIcon className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                                🏬 {storeName}
+                                <span className="text-[10px] text-muted-foreground font-normal ml-1">({sortedDivs.length} Div · {allRows.length} Dept)</span>
+                              </span>
+                            </td>
+                            <td className="px-3 py-1.5 text-[11px]">{type_store}</td>
+                            <td className="px-3 py-1.5 text-right tabular-nums font-bold">{sSku.toLocaleString()}</td>
+                            <td className="px-3 py-1.5 text-right tabular-nums font-bold">{sMin.toLocaleString()}</td>
+                            <td className="px-3 py-1.5 text-right tabular-nums font-bold">{sMax.toLocaleString()}</td>
+                          </tr>
+                          {storeOpen && sortedDivs.map(([divName, depts]) => {
+                            const divKey = `${storeName}|${divName}`;
+                            const divOpen = expandedDept.has(divKey);
+                            const dSku = depts.reduce((a, b) => a + b.sku_count, 0);
+                            const dMin = depts.reduce((a, b) => a + b.sum_min, 0);
+                            const dMax = depts.reduce((a, b) => a + b.sum_max, 0);
+                            const sortedDepts = [...depts].sort((a, b) => a.department.localeCompare(b.department));
+                            return (
+                              <Fragment key={divKey}>
+                                <tr className="bg-muted/40 hover:bg-muted/60 cursor-pointer"
+                                  onClick={() => setExpandedDept(p => { const n = new Set(p); n.has(divKey) ? n.delete(divKey) : n.add(divKey); return n; })}>
+                                  <td className="px-3 py-1.5 font-semibold pl-8">
+                                    <span className="inline-flex items-center gap-1">
+                                      {divOpen ? <ChevronDownIcon className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                                      📁 {divName}
+                                      <span className="text-[10px] text-muted-foreground font-normal ml-1">({sortedDepts.length} Dept)</span>
+                                    </span>
+                                  </td>
+                                  <td></td>
+                                  <td className="px-3 py-1.5 text-right tabular-nums font-semibold">{dSku.toLocaleString()}</td>
+                                  <td className="px-3 py-1.5 text-right tabular-nums font-semibold">{dMin.toLocaleString()}</td>
+                                  <td className="px-3 py-1.5 text-right tabular-nums font-semibold">{dMax.toLocaleString()}</td>
+                                </tr>
+                                {divOpen && sortedDepts.map(d => (
+                                  <tr key={`${divKey}|${d.department}`} className="hover:bg-muted/20">
+                                    <td className="px-3 py-1 text-[11px] pl-14">📂 {d.department}</td>
+                                    <td></td>
+                                    <td className="px-3 py-1 text-right tabular-nums">{d.sku_count.toLocaleString()}</td>
+                                    <td className="px-3 py-1 text-right tabular-nums">{d.sum_min.toLocaleString()}</td>
+                                    <td className="px-3 py-1 text-right tabular-nums">{d.sum_max.toLocaleString()}</td>
+                                  </tr>
+                                ))}
+                              </Fragment>
+                            );
+                          })}
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot className="bg-muted sticky bottom-0 border-t-2 border-border">
+                    <tr>
+                      <td className="px-3 py-2 font-bold" colSpan={2}>Grand Total ({storeCount} Stores)</td>
+                      <td className="px-3 py-2 text-right font-bold tabular-nums">{grandSku.toLocaleString()}</td>
+                      <td className="px-3 py-2 text-right font-bold tabular-nums">{grandMin.toLocaleString()}</td>
+                      <td className="px-3 py-2 text-right font-bold tabular-nums">{grandMax.toLocaleString()}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            );
+          })()}
         </TabsContent>
       </Tabs>
 
@@ -1124,7 +1797,7 @@ export default function MinmaxCalPage() {
           <DialogHeader>
             <DialogTitle>Import Min/Max</DialogTitle>
             <DialogDescription>
-              ไฟล์ Excel ต้องมีคอลัมน์: <code>sku_code</code>, <code>min_qty</code>, <code>max_qty</code>
+              ไฟล์ Excel ต้องมีคอลัมน์: <code>sku_code</code>, <code>min_qty</code>, <code>max_qty</code>, <code>unit_pick</code>
               (ใส่ <code>store_name</code> เพิ่มเพื่อระบุร้าน ถ้าไม่ใส่จะ apply ทุกร้านของ SKU นั้น)
             </DialogDescription>
           </DialogHeader>
@@ -1155,63 +1828,64 @@ export default function MinmaxCalPage() {
               )}
             </DialogDescription>
           </DialogHeader>
-          <Input value={saveName} onChange={e => setSaveName(e.target.value)} className="text-sm font-mono" />
+          <Input value={saveName} onChange={e => setSaveName(e.target.value)} className="text-sm font-mono" disabled={saving} />
+          {saving && (
+            <div className="space-y-2 bg-muted px-3 py-2.5 rounded border border-border">
+              <div className="flex items-center justify-between text-xs">
+                <span className="flex items-center gap-2 font-medium">
+                  <span className="inline-block w-2 h-2 rounded-full bg-primary animate-pulse" />
+                  Step {saveStep.idx}/{saveStep.total}{saveStep.label ? ` · ${saveStep.label}` : ""}
+                </span>
+                <span className="font-mono tabular-nums text-primary font-semibold">{savePct}%</span>
+              </div>
+              <div className="h-2 w-full bg-background rounded overflow-hidden border border-border">
+                <div
+                  className="h-full bg-primary transition-all duration-200"
+                  style={{ width: `${savePct}%` }}
+                />
+              </div>
+              {saveStatus && (
+                <div className="text-[11px] text-muted-foreground leading-relaxed">{saveStatus}</div>
+              )}
+            </div>
+          )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setSaveOpen(false)}>ยกเลิก</Button>
-            <Button onClick={saveDoc}>Save</Button>
+            <Button variant="outline" onClick={() => setSaveOpen(false)} disabled={saving}>ยกเลิก</Button>
+            <Button onClick={saveDoc} disabled={saving}>{saving ? "กำลังบันทึก..." : "Save"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* ===== View Doc ===== */}
-      <Dialog open={!!viewingDoc} onOpenChange={(o) => !o && setViewingDoc(null)}>
-        <DialogContent className="sm:max-w-[90vw] max-h-[85vh] flex flex-col">
+      {/* Delete Filtered Min/Max confirm */}
+      <Dialog open={deleteOpen} onOpenChange={(o) => !deleting && setDeleteOpen(o)}>
+        <DialogContent>
           <DialogHeader>
-            <DialogTitle className="font-mono text-sm">{viewingDoc?.doc_name}</DialogTitle>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <Trash2 className="w-4 h-4" /> ลบ Min/Max ตาม Filter
+            </DialogTitle>
             <DialogDescription>
-              N = {viewingDoc?.n_factor} · {viewingDoc?.item_count.toLocaleString()} แถว ·
-              {viewingDoc && " " + new Date(viewingDoc.created_at).toLocaleString()}
+              ระบบจะลบแถวใน Min/Max ที่ตรงกับ Filter ปัจจุบันออกจากฐานข้อมูล (ไม่สามารถกู้คืนได้)
             </DialogDescription>
           </DialogHeader>
-          <div className="flex-1 overflow-auto border border-border rounded">
-            <table className="text-xs w-full">
-              <thead className="bg-muted sticky top-0 z-10">
-                <tr>
-                  {["SKU", "Store", "Type", "Size", "UnitPick", "Avg", "Rank", "MinCal", "MaxCal", "MinEdit", "MaxEdit", "Min", "Max"].map(h =>
-                    <th key={h} className="px-2 py-1 text-left font-medium bg-muted">{h}</th>)}
-                </tr>
-              </thead>
-              <tbody>
-                {((viewingDoc?.data as any[]) || []).slice(0, 500).map((r, i) => (
-                  <tr key={i} className="border-t border-border/40">
-                    <td className="px-2 py-0.5 font-mono">{r.sku_code}</td>
-                    <td className="px-2 py-0.5">{r.store_name}</td>
-                    <td className="px-2 py-0.5">{r.type_store}</td>
-                    <td className="px-2 py-0.5">{r.size_store}</td>
-                    <td className="px-2 py-0.5 text-right">{r.unit_pick}</td>
-                    <td className="px-2 py-0.5 text-right">{Number(r.avg_sale).toFixed(2)}</td>
-                    <td className="px-2 py-0.5">{r.rank_sale}</td>
-                    <td className="px-2 py-0.5 text-right">{r.min_cal}</td>
-                    <td className="px-2 py-0.5 text-right">{r.max_cal}</td>
-                    <td className="px-2 py-0.5 text-right">{r.min_edit ?? "-"}</td>
-                    <td className="px-2 py-0.5 text-right">{r.max_edit ?? "-"}</td>
-                    <td className="px-2 py-0.5 text-right font-semibold">{r.min_final}</td>
-                    <td className="px-2 py-0.5 text-right font-semibold">{r.max_final}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {((viewingDoc?.data as any[]) || []).length > 500 && (
-              <p className="text-[10px] text-muted-foreground text-center py-2">
-                แสดง 500 แถวแรก จากทั้งหมด {((viewingDoc?.data as any[]) || []).length.toLocaleString()} แถว
-              </p>
-            )}
+          <div className="text-xs space-y-1 bg-muted/40 rounded p-3">
+            {docStoreFilter.length > 0 && <div><span className="font-semibold">Store:</span> {docStoreFilter.join(", ")}</div>}
+            {docTypeFilter.length > 0 && <div><span className="font-semibold">Type Store:</span> {docTypeFilter.join(", ")}</div>}
+            {docItemTypeFilter.length > 0 && <div><span className="font-semibold">Item Type:</span> {docItemTypeFilter.join(", ")}</div>}
+            {docBuyingFilter.length > 0 && <div><span className="font-semibold">Buying Status:</span> {docBuyingFilter.join(", ")}</div>}
+            {docDivisionFilter.length > 0 && <div><span className="font-semibold">Division:</span> {docDivisionFilter.join(", ")}</div>}
+            {docDepartmentFilter.length > 0 && <div><span className="font-semibold">Department:</span> {docDepartmentFilter.join(", ")}</div>}
+            {docSubDeptFilter.length > 0 && <div><span className="font-semibold">Sub-Department:</span> {docSubDeptFilter.join(", ")}</div>}
+            {docClassFilter.length > 0 && <div><span className="font-semibold">Class:</span> {docClassFilter.join(", ")}</div>}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setViewingDoc(null)}>ปิด</Button>
+            <Button variant="outline" onClick={() => setDeleteOpen(false)} disabled={deleting}>ยกเลิก</Button>
+            <Button variant="destructive" onClick={handleDeleteFiltered} disabled={deleting || !hasReportFilter}>
+              {deleting ? <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> กำลังลบ...</> : <><Trash2 className="w-4 h-4 mr-1" /> ยืนยันลบ</>}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
     </div>
   );
 }
