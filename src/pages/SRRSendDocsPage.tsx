@@ -1593,7 +1593,7 @@ export default function SRRSendDocsPage() {
 
           <div className="border rounded">
             <table className="w-full text-sm">
-              <thead className="bg-muted">
+              <thead className="bg-muted sticky top-0 z-10">
                 <tr>
                   <th className="w-6 p-2"></th>
                   <th className="text-left p-2">Doc</th>
