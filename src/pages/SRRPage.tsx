@@ -1945,6 +1945,41 @@ function SRRDCItemPage() {
       };
     }));
   };
+  const updateOnOrder = (rowId: string, value: number) => {
+    const updater = (rows: SRRRow[]) => rows.map(r =>
+      r.id !== rowId ? r : recalcRow({ ...r, on_order: value })
+    );
+    setShowData(updater);
+    setVendorDocs(prev => prev.map(doc => {
+      const hasRow = doc.data.some(r => r.id === rowId);
+      if (!hasRow) return doc;
+      const editedCols = new Set(doc.edited_columns);
+      editedCols.add("on_order");
+      return {
+        ...doc,
+        data: doc.data.map(r => r.id === rowId ? recalcRow({ ...r, on_order: value }) : r),
+        edit_count: doc.edit_count + 1,
+        edited_columns: [...editedCols],
+      };
+    }));
+  };
+
+  const clearAllOnOrder = () => {
+    setShowData(prev => prev.map(r => recalcRow({ ...r, on_order: 0 })));
+    setVendorDocs(prev => prev.map(doc => ({
+      ...doc,
+      data: doc.data.map(r => recalcRow({ ...r, on_order: 0 })),
+    })));
+  };
+
+  const restoreAllOnOrder = () => {
+    setShowData(prev => prev.map(r => recalcRow({ ...r, on_order: r.orig_on_order })));
+    setVendorDocs(prev => prev.map(doc => ({
+      ...doc,
+      data: doc.data.map(r => recalcRow({ ...r, on_order: r.orig_on_order })),
+    })));
+  };
+
   const updateOrderUomEdit = (rowId: string, value: string) => {
     const updater = (rows: SRRRow[]) => rows.map(r => {
       if (r.id !== rowId) return r;
@@ -2600,6 +2635,20 @@ function SRRDCItemPage() {
                             >Restore</button>
                           )}
                         </div>
+                      ) : showEditColumns && col.key === "on_order" ? (
+                        <div className="flex items-center gap-0.5">
+                          <span className="text-xs flex-1">{formatCellValue(val, col.key)}</span>
+                          <button
+                            className="text-[9px] text-destructive hover:underline px-0.5"
+                            onClick={e => { e.stopPropagation(); updateOnOrder(row.id, 0); }}
+                            title="ล้างค่า ON ORDER"
+                          >Clear</button>
+                          <button
+                            className="text-[9px] text-primary hover:underline px-0.5"
+                            onClick={e => { e.stopPropagation(); updateOnOrder(row.id, row.orig_on_order); }}
+                            title="คืนค่า ON ORDER เดิม"
+                          >Restore</button>
+                        </div>
                       ) : isEditable && col.key === "order_uom_edit" ? (
                         <Input
                           className="h-6 text-xs px-1 py-0 border-primary/50 w-full"
@@ -3175,6 +3224,12 @@ function SRRDCItemPage() {
                 <>
                   <Button size="sm" onClick={recalcSelected} className="text-xs gap-1.5" variant="outline">
                     <RefreshCw className="w-3.5 h-3.5" /> Recal{selectedRows.size > 0 ? ` (${selectedRows.size})` : ""}
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={clearAllOnOrder} className="text-xs gap-1">
+                    <XCircle className="w-3.5 h-3.5" /> Clear All ON ORDER
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={restoreAllOnOrder} className="text-xs gap-1">
+                    <RefreshCw className="w-3.5 h-3.5" /> Restore All ON ORDER
                   </Button>
 
                   <Popover>

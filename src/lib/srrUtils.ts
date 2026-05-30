@@ -292,6 +292,7 @@ export function buildSRRRows(rawRows: any[], vendorInfoList: VendorInfo[]): SRRR
       safety: safetyDays, leadtime, order_cycle: orderCycle,
       tt_safety: leadtime + orderCycle + safetyDays,
       dc_min: 0, on_order: Number(r.on_order) || 0,
+      orig_on_order: Number(r.on_order) || 0,
       gap_store: 0, gap_dc: 0,
       suggest_qty: 0, final_suggest_qty: 0, final_suggest_uom: 0,
       order_uom_edit: "",

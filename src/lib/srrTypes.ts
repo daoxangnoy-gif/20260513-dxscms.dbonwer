@@ -44,6 +44,7 @@ export interface SRRRow {
   sub_department: string;
   class: string;
   sub_class: string;
+  orig_on_order: number;
   orig_avg_sales_jmart: number;
   orig_avg_sales_kokkok: number;
   orig_avg_sales_kokkok_fc: number;
