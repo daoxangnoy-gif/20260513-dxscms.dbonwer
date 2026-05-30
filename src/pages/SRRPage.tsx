@@ -54,7 +54,7 @@ import {
   VIEWS_KEY, loadSavedViews, saveSavedViews, PO_KEY,
   applyHighPrecisionFormat, loadSavedPOs, saveSavedPOs,
   VENDOR_DOCS_KEY, loadVendorDocs, saveVendorDocs,
-  getDateKey, isWithin30Days, stripSeconds, getLocalPOBatches,
+  getDateKey, isWithin30Days, stripSeconds, formatLocalBatchLabel, getLocalPOBatches,
 } from "@/lib/srrUtils";
 export { applyHighPrecisionFormat, getLocalPOBatches } from "@/lib/srrUtils";
 export { ListImportPO } from "@/components/ListImportPO";
