@@ -148,12 +148,17 @@ export const OPERATORS: { value: FilterOperator; label: string; needsValue: bool
   { value: "distinct", label: "Distinct by column (keep first)", needsValue: false },
 ];
 
-// In-memory cache (per session)
+// In-memory cache with TTL
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const cache = new Map<string, FilterTemplate[]>();
+let cacheTs = 0;           // timestamp of last full fetch
+let prefetchPromise: Promise<void> | null = null;
 const EVENT = "filter-templates-updated";
 
 export function invalidateFilterTemplatesCache() {
   cache.clear();
+  cacheTs = 0;
+  prefetchPromise = null;
   if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(EVENT));
 }
 
@@ -164,6 +169,25 @@ export function onFilterTemplatesUpdated(cb: () => void): () => void {
   return () => window.removeEventListener(EVENT, h);
 }
 
+/** Fetch ALL active templates in one query and populate cache. */
+async function prefetchAllTemplates(): Promise<void> {
+  const { data, error } = await (supabase as any)
+    .from("filter_templates")
+    .select("*")
+    .eq("is_active", true);
+  if (error) {
+    console.error("[filter_templates] prefetch error", error);
+    return;
+  }
+  cache.clear();
+  for (const tpl of (data || []) as FilterTemplate[]) {
+    const list = cache.get(tpl.target_table) ?? [];
+    list.push(tpl);
+    cache.set(tpl.target_table, list);
+  }
+  cacheTs = Date.now();
+}
+
 /** Returns true if at least one active template exists for the menu. */
 export async function hasActiveFilterTemplates(table: string): Promise<boolean> {
   const tpls = await loadActiveFilterTemplates(table);
@@ -171,19 +195,14 @@ export async function hasActiveFilterTemplates(table: string): Promise<boolean> 
 }
 
 export async function loadActiveFilterTemplates(table: string): Promise<FilterTemplate[]> {
-  if (cache.has(table)) return cache.get(table)!;
-  const { data, error } = await (supabase as any)
-    .from("filter_templates")
-    .select("*")
-    .eq("target_table", table)
-    .eq("is_active", true);
-  if (error) {
-    console.error("[filter_templates] load error", error);
-    return [];
+  const isStale = Date.now() - cacheTs > CACHE_TTL_MS;
+  if (!isStale && cache.has(table)) return cache.get(table)!;
+  if (isStale || cacheTs === 0) {
+    // Dedupe concurrent calls: only one prefetch at a time
+    prefetchPromise ??= prefetchAllTemplates().finally(() => { prefetchPromise = null; });
+    await prefetchPromise;
   }
-  const tpls = (data || []) as FilterTemplate[];
-  cache.set(table, tpls);
-  return tpls;
+  return cache.get(table) ?? [];
 }
 
 function ruleMatches(row: any, rule: FilterRule): boolean {
