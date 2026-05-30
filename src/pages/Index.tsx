@@ -16,7 +16,8 @@ import ConfigColumnExportPage from "@/pages/ConfigColumnExportPage";
 import ConfigFilterPage from "@/pages/ConfigFilterPage";
 import { AllTableName, DATA_TABLES, SRR_SUB_MENUS, REPORT_SUB_MENUS } from "@/lib/tableConfig";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { Loader2, BarChart3 } from "lucide-react";
+import { AppSkeleton } from "@/components/AppSkeleton";
+import { BarChart3 } from "lucide-react";
 
 const PAGE_SLUG: Record<MainPage, string> = {
   data_control: "data-control",
@@ -142,23 +143,11 @@ const Index = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPage, userPermissions, isAdmin]);
 
-  if (loading) {
-    return (
-      <div className="flex h-screen items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-      </div>
-    );
-  }
+  if (loading) return <AppSkeleton />;
 
   if (!user) return <LoginPage />;
 
-  if (!userPermissions) {
-    return (
-      <div className="flex h-screen items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-      </div>
-    );
-  }
+  if (!userPermissions) return <AppSkeleton />;
 
   if (!userPermissions.is_active || !userPermissions.role_name) {
     return <PendingApprovalPage />;

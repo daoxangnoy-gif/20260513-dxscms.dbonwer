@@ -9,6 +9,7 @@ import {
   type PoCostSkipRow, type PoCostResolved, type PoCostMarginWarning, type PoCostVendorMismatch, type PoCostMoqPackingWarning,
 } from "@/lib/poCostImport";
 import { useToast } from "@/hooks/use-toast";
+import { TableSkeleton } from "@/components/AppSkeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -2657,9 +2658,8 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
         onClick={() => showSearchDropdown && setShowSearchDropdown(false)}
       >
         {loading ? (
-          <div className="flex items-center justify-center h-64">
-            <Loader2 className="w-6 h-6 animate-spin text-primary" />
-            <span className="ml-2 text-sm text-muted-foreground">กำลังโหลด...</span>
+          <div className="p-4">
+            <TableSkeleton rows={10} cols={Math.min(columns.length, 8)} />
           </div>
         ) : (() => {
           const base = activeTable === "po_cost" ? (marginRows ?? []) : data;
