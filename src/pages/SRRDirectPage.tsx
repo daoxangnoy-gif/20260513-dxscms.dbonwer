@@ -108,6 +108,7 @@ interface D2SRow {
   leadtime: number;
   srr_suggest: number;
   on_order_store: number;
+  orig_on_order_store: number;
   final_order_qty: number;
   moq: number;
   pack: number | null;
@@ -527,6 +528,7 @@ function buildD2SRows(rawRows: any[]): D2SRow[] {
       leadtime: Number(r.leadtime) || 0,
       srr_suggest: 0,
       on_order_store: Number(r.on_order_store) || 0,
+      orig_on_order_store: Number(r.on_order_store) || 0,
       final_order_qty: 0,
       moq,
       pack: null,
@@ -2449,12 +2451,42 @@ export default function SRRDirectPage() {
       console.warn("[SRR DIRECT Show] pack/box overlay failed:", e);
     }
 
+    // Backward-compat: snapshots saved before orig_on_order_store was added will have undefined here.
+    merged = merged.map(r => ({
+      ...r,
+      orig_on_order_store: (r as any).orig_on_order_store ?? r.on_order_store,
+    }));
+
     const _excluded2 = await (await import("@/lib/filterTemplates")).applyExcludeFilters(merged as any[], "srr_direct");
     setShowData(_excluded2 as any);
     setPage(0);
     setSelectedRows(new Set());
     setActiveCell(null);
     toast({ title: `แสดง ${merged.length.toLocaleString()} รายการ` });
+  };
+
+  const updateOnOrderStore = (rowId: string, value: number) => {
+    setShowData((rows) => rows.map((r) => (r.id !== rowId ? r : recalcD2SRow({ ...r, on_order_store: value }))));
+    setVendorDocs((prev) => prev.map((doc) => {
+      if (!doc.data.some((r) => r.id === rowId)) return doc;
+      return { ...doc, data: doc.data.map((r) => r.id === rowId ? recalcD2SRow({ ...r, on_order_store: value }) : r) };
+    }));
+  };
+
+  const clearAllOnOrderStore = () => {
+    setShowData((rows) => rows.map((r) => recalcD2SRow({ ...r, on_order_store: 0 })));
+    setVendorDocs((prev) => prev.map((doc) => ({
+      ...doc,
+      data: doc.data.map((r) => recalcD2SRow({ ...r, on_order_store: 0 })),
+    })));
+  };
+
+  const restoreAllOnOrderStore = () => {
+    setShowData((rows) => rows.map((r) => recalcD2SRow({ ...r, on_order_store: r.orig_on_order_store })));
+    setVendorDocs((prev) => prev.map((doc) => ({
+      ...doc,
+      data: doc.data.map((r) => recalcD2SRow({ ...r, on_order_store: r.orig_on_order_store })),
+    })));
   };
 
   // Edit handlers
@@ -3281,6 +3313,20 @@ export default function SRRDirectPage() {
                             </button>
                           )}
                         </div>
+                      ) : showEdit && col.key === "on_order_store" ? (
+                        <div className="flex items-center gap-0.5">
+                          <span className="text-xs flex-1">{displayVal}</span>
+                          <button
+                            className="text-[9px] text-destructive hover:underline px-0.5"
+                            onClick={(e) => { e.stopPropagation(); updateOnOrderStore(row.id, 0); }}
+                            title="ล้างค่า ON ORDER"
+                          >Clear</button>
+                          <button
+                            className="text-[9px] text-primary hover:underline px-0.5"
+                            onClick={(e) => { e.stopPropagation(); updateOnOrderStore(row.id, row.orig_on_order_store); }}
+                            title="คืนค่า ON ORDER เดิม"
+                          >Restore</button>
+                        </div>
                       ) : showEdit && col.key === "order_uom_edit" ? (
                         <Input
                           className="h-6 text-xs px-1 py-0 border-primary/50 w-full"
@@ -3999,6 +4045,12 @@ export default function SRRDirectPage() {
                     className="text-xs gap-1.5"
                   >
                     <Upload className="w-3.5 h-3.5" /> Import
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={clearAllOnOrderStore} className="text-xs gap-1">
+                    <XCircle className="w-3.5 h-3.5" /> Clear All ON ORDER
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={restoreAllOnOrderStore} className="text-xs gap-1">
+                    <RefreshCw className="w-3.5 h-3.5" /> Restore All ON ORDER
                   </Button>
                   {showImportSkipped.length > 0 && (
                     <ImportSkipBar
