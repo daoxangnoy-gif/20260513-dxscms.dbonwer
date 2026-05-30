@@ -185,7 +185,7 @@ export function SrrImportFilter({
   };
 
   const downloadTemplate = (includeVendor = false) => {
-    const headers = ["Barcode&SkuCode", "Qty Uom", "Qty Unit", "Po cost"];
+    const headers = ["Barcode&SkuCode", "Qty Uom", "Qty Unit", "Po cost Unit"];
     const sample: any[][] = [headers, ["8851234567890", 5, "", 12.50], ["SKU-00123", "", 25, ""], ["8851111122223", 12, "", 8.75]];
     if (showStoreNameInTemplate) {
       headers.push("Store name");
@@ -244,7 +244,7 @@ export function SrrImportFilter({
         const keyRaw = lookupKey(r, ["Barcode&SkuCode", "barcode&skucode", "Barcode", "SkuCode", "SKU", "sku"]) ?? Object.values(r)[0];
         const qtyUomRaw = lookupKey(r, ["Qty Uom", "Qty UOM", "qty uom", "QtyUom", "qty_uom", "Qty", "qty", "QTY", "Quantity"]) ?? "";
         const qtyUnitRaw = lookupKey(r, ["Qty Unit", "qty unit", "QtyUnit", "qty_unit", "Qty unit"]) ?? "";
-        const poCostRaw = lookupKey(r, ["Po cost", "PO Cost", "po_cost", "PoCost", "Cost"]) ?? "";
+        const poCostRaw = lookupKey(r, ["Po cost Unit", "Po cost", "PO Cost", "po_cost", "PoCost", "Cost"]) ?? "";
         const storeRaw = lookupKey(r, ["Store name", "store_name", "Store Name", "StoreName"]) ?? "";
         const vendorRaw = lookupKey(r, ["vendor_code", "Vendor Code", "VendorCode", "vendor", "Vendor"]) ?? "";
         const key = String(keyRaw ?? "").trim();
@@ -500,7 +500,7 @@ export function SrrImportFilter({
             </TabsList>
             <TabsContent value="upload" className="space-y-2 pt-2">
               <p className="text-xs text-muted-foreground">
-                ไฟล์ <code className="bg-muted px-1 rounded">.xlsx / .csv</code> — คอลัมน์ <code className="bg-muted px-1 rounded">Barcode&amp;SkuCode</code> (จำเป็น), <code className="bg-muted px-1 rounded">Qty Uom</code>, <code className="bg-muted px-1 rounded">Qty Unit</code>, <code className="bg-muted px-1 rounded">Po cost</code>{showStoreNameInTemplate && <>, <code className="bg-muted px-1 rounded">Store name</code></>} (optional)
+                ไฟล์ <code className="bg-muted px-1 rounded">.xlsx / .csv</code> — คอลัมน์ <code className="bg-muted px-1 rounded">Barcode&amp;SkuCode</code> (จำเป็น), <code className="bg-muted px-1 rounded">Qty Uom</code>, <code className="bg-muted px-1 rounded">Qty Unit</code>, <code className="bg-muted px-1 rounded">Po cost Unit</code>{showStoreNameInTemplate && <>, <code className="bg-muted px-1 rounded">Store name</code></>} (optional)
                 <br />
                 <span className="text-amber-600 dark:text-amber-400">⚠ Qty Uom และ Qty Unit เลือกใส่แค่ช่องเดียวในแต่ละแถว</span>
               </p>
@@ -679,7 +679,7 @@ export function SrrImportFilter({
                   <th className="text-left px-3 py-2">Barcode / SKU Code</th>
                   <th className="text-right px-3 py-2 w-24">Qty Uom</th>
                   <th className="text-right px-3 py-2 w-24">Qty Unit</th>
-                  <th className="text-right px-3 py-2 w-24">Po cost</th>
+                  <th className="text-right px-3 py-2 w-24">Po cost Unit</th>
                   {showStoreNameInTemplate && <th className="text-left px-3 py-2 w-32">Store</th>}
                   <th className="text-left px-3 py-2 w-28">Override Vendor</th>
                 </tr>

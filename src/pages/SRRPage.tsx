@@ -466,6 +466,12 @@ function SRRDCItemPage() {
   const [page, setPage] = useState(srrStateRef.current?.page || 0);
   const [pageSize, setPageSize] = useState(srrStateRef.current?.pageSize || 30);
 
+  // Tab 2: Custom Safety Days per Rank (persisted)
+  const DEFAULT_SAFETY_BY_RANK = { A: 21, B: 14, C: 10, D: 7 };
+  const [safetyByRank, setSafetyByRank] = useState<Record<string, number>>(
+    srrStateRef.current?.safetyByRank || DEFAULT_SAFETY_BY_RANK
+  );
+
   // Tab 2: Odoo-style chip search
   const [tableSearchChips, setTableSearchChips] = useState<SearchChip[]>([]);
   const TABLE_SEARCH_COLS = useMemo(() => [
@@ -532,7 +538,7 @@ function SRRDCItemPage() {
         vendorDocs, activeTab, page, pageSize,
         itemTypeFilter, selectedDocSpc, orderDayFilter, vendorFilter, buyingStatusFilter,
         poGroupFilter, showOnlyFinalGt0, tab2Mode,
-        showData,
+        showData, safetyByRank,
         // --- mode isolation persistence ---
         importMode,
         selectedBatchValuesByMode,
@@ -2022,14 +2028,15 @@ function SRRDCItemPage() {
   // Apply chip search to showData
   const filteredShowData = useMemo(() => {
     const base = showOnlyFinalGt0 ? showData.filter(r => r.final_suggest_qty > 0) : showData;
-    // Ensure orig_on_order is always set — covers state restored from srrStateRef
-    // and any other path that bypasses showFilteredData's patch.
-    const patched = base.map(r => ({
-      ...r,
-      orig_on_order: r.orig_on_order ?? r.on_order,
-    }));
+    const patched = base.map(r => {
+      const origOnOrder = r.orig_on_order ?? r.on_order;
+      const newSafety = safetyByRank[r.rank_sales?.toUpperCase()] ?? safetyByRank["D"] ?? 7;
+      const needsSafetyUpdate = r.safety !== newSafety;
+      if (!needsSafetyUpdate && r.orig_on_order != null) return r;
+      return recalcRow({ ...r, orig_on_order: origOnOrder, safety: newSafety });
+    });
     return applyChipFilter(patched, tableSearchChips, TABLE_SEARCH_KEYS);
-  }, [showData, tableSearchChips, TABLE_SEARCH_KEYS, showOnlyFinalGt0]);
+  }, [showData, tableSearchChips, TABLE_SEARCH_KEYS, showOnlyFinalGt0, safetyByRank]);
   const pagedData = filteredShowData.slice(page * pageSize, (page + 1) * pageSize);
   const totalPages = Math.ceil(filteredShowData.length / pageSize);
 
@@ -3238,6 +3245,29 @@ function SRRDCItemPage() {
                   <Button size="sm" onClick={recalcSelected} className="text-xs gap-1.5" variant="outline">
                     <RefreshCw className="w-3.5 h-3.5" /> Recal{selectedRows.size > 0 ? ` (${selectedRows.size})` : ""}
                   </Button>
+                  {/* Safety Days per Rank */}
+                  <div className="flex items-center gap-1 px-2 py-1 rounded-md bg-muted/40 border border-border">
+                    <span className="text-[10px] text-muted-foreground font-medium shrink-0">Safety:</span>
+                    {(["A", "B", "C", "D"] as const).map(rank => (
+                      <div key={rank} className="flex items-center gap-0.5">
+                        <span className="text-[10px] text-muted-foreground">{rank}=</span>
+                        <Input
+                          type="number"
+                          min={0}
+                          value={safetyByRank[rank] ?? DEFAULT_SAFETY_BY_RANK[rank]}
+                          onChange={e => {
+                            const v = parseInt(e.target.value);
+                            if (!isNaN(v) && v >= 0) setSafetyByRank(prev => ({ ...prev, [rank]: v }));
+                          }}
+                          className="h-6 w-10 text-xs px-1 py-0"
+                        />
+                      </div>
+                    ))}
+                    <Button size="sm" variant="ghost" className="h-6 text-[10px] px-1.5 shrink-0"
+                      onClick={() => setSafetyByRank(DEFAULT_SAFETY_BY_RANK)}>
+                      Reset
+                    </Button>
+                  </div>
                   <Button size="sm" variant="outline" onClick={clearAllOnOrder} className="text-xs gap-1">
                     <XCircle className="w-3.5 h-3.5" /> Clear All ON ORDER
                   </Button>
