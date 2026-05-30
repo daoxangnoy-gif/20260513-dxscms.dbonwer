@@ -3654,18 +3654,6 @@ export default function SRRDirectPage() {
 
                 {importMode !== "filter" && (
                   <>
-                    <MultiSelect
-                      compact
-                      label="SPC"
-                      options={(() => {
-                        const set = new Set<string>();
-                        for (const o of preSpcOptions) if (o.value) set.add(o.value);
-                        for (const s of selectedSpcForCal) if (s) set.add(s);
-                        return [...set].sort().map(s => ({ value: s, display: s }));
-                      })()}
-                      selected={selectedSpcForCal}
-                      onChange={(v) => { setSelectedSpcForCal(v); }}
-                    />
                     <MultiSelect compact label="Type Store" options={TYPE_STORE_OPTIONS} selected={typeStoreCal} onChange={setTypeStoreCal} searchable={false} />
                     <MultiSelect
                       compact
@@ -3686,6 +3674,7 @@ export default function SRRDirectPage() {
                     )}
                   </>
                 )}
+
               </div>
 
               {/* GO zone — green: prepare + run */}
