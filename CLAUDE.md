@@ -11,6 +11,129 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 5. **Auto-push ทุกครั้ง** — หลังแก้ code เสร็จทุกครั้ง ให้รัน `git add .` → `git commit` → `git push origin main` ทันที โดยไม่ต้องรอให้สั่งแยก (ยกเว้นผู้ใช้บอกว่ายังไม่ให้ push)
 6. **วิเคราะห์ผลกระทบหลังแก้เสร็จ** — ทุกครั้งที่แก้ไขฟีเจอร์เสร็จ ให้วิเคราะห์ว่ามีส่วนอื่นในระบบที่เกี่ยวข้องหรือคล้ายกันไหม ถ้ามีให้เสนอว่า "มีส่วนที่เกี่ยวข้องคือ... อยากให้แก้ด้วยไหม?" แต่ห้ามแก้ให้อัตโนมัติ ต้องรอให้สั่งก่อนเสมอ
 
+## Business Logic
+
+### ภาพรวมระบบ
+
+DX-SCMS เป็นระบบจัดการ Supply Chain ของธุรกิจค้าปลีก ใช้ภายในองค์กรสำหรับทีม Buyer, SPC และ Operations เพื่อคำนวณและสร้างคำสั่งซื้อสินค้าเข้าคลัง (Replenishment)
+
+**คำศัพท์หลัก:**
+- **DC** — Distribution Center (คลังกลาง)
+- **SPC** — ชื่อผู้สั่งซื้อ (Purchaser) ที่รับผิดชอบ Vendor กลุ่มนั้น
+- **Type Store / Store Group** — กลุ่มสาขา เช่น Jmart, Kokkok, Kokkok-fc, U-dee (แต่ละกลุ่มมีสาขาหลายแห่ง)
+- **Rank Sales (A/B/C/D)** — อันดับยอดขายของสินค้า ใช้กำหนด Safety Days (A=21, B=14, C=10, D=7 วัน)
+- **D2S** — Direct to Store (ส่งตรงจาก Vendor ถึงสาขา ไม่ผ่าน DC)
+- **MOQ** — Minimum Order Quantity (จำนวนสั่งซื้อขั้นต่ำต่อครั้ง)
+
+---
+
+### Data Control
+
+หน้าจัดการข้อมูล Master ของระบบ ใช้ import/export ข้อมูลผ่าน Excel และแก้ไขตรง UI
+
+| ตาราง | เนื้อหา |
+|-------|---------|
+| `data_master` | ข้อมูลสินค้าทั้งหมด (SKU, barcode, vendor, division, ราคา, etc.) |
+| `stock` | สต็อกปัจจุบันแยกตาม location/store |
+| `minmax` | ค่า Min/Max แยกตาม SKU × store |
+| `po_cost` | ราคาสั่งซื้อ (PO Cost) และ MOQ ของแต่ละ Vendor |
+| `on_order` | สินค้าที่สั่งไปแล้วแต่ยังไม่รับของ |
+| `vendor_master` | ข้อมูล Vendor (leadtime, order cycle, SPC, currency) |
+| `sales_by_week` | ยอดขายรายสัปดาห์แยกตาม store |
+| `rank_sales` | อันดับขายของสินค้าแต่ละรายการ |
+| `range_store` | สินค้าที่ range ในแต่ละ store (pack/box qty) |
+
+---
+
+### Min/Max Calculation (`MinmaxCalPage`)
+
+คำนวณค่า Min และ Max ของสินค้าแต่ละชิ้นต่อแต่ละ store โดยใช้:
+- ยอดขายเฉลี่ยต่อวัน (`avg_day`)
+- Rank factor ตาม Rank Sales (A/B/C/D)
+- Unit Pick (จำนวนหน่วยต่อการหยิบ)
+
+ผลลัพธ์ถูกนำไปใช้ใน SRR DC เป็น Min/Max ต่อ store group
+
+---
+
+### SRR DC ITEM (`SRRPage` → tab `dc_item`)
+
+กระบวนการสั่งซื้อสินค้าเข้า DC โดยระบบคำนวณจากข้อมูลทุก store group รวมกัน
+
+**Tab 1: Read & Cal** — ดึงข้อมูล + คำนวณ
+1. เลือก Filter (SPC / Vendor / Order Day / Division / ฯลฯ) หรือ Import SKU/Vendor
+2. กด "Prepare" → ดึงข้อมูลจาก Supabase RPC (`get_srr_data_json`)
+3. กด "Cal" → คำนวณสูตรและบันทึกเป็น VendorDocument แยกตาม Vendor
+
+**สูตรคำนวณ SRR DC:**
+```
+TT MIN       = Σ Min ทุก store group
+TT Stock     = Stock DC + Σ Stock ทุก store group
+TT Safety    = Leadtime + Order Cycle + Safety Days
+DC Min       = avg_sales_tt × TT Safety
+Gap Store    = TT MIN - TT Stock Store  (ถ้า Stock Store ≤ TT MIN)
+Gap DC       = DC Min - Stock DC        (ถ้า Stock DC ≤ DC Min)
+Suggest Qty  = Gap Store + Gap DC
+Final Suggest = ROUNDUP(max(Suggest - On Order, 0) / MOQ) × MOQ
+DOH ASIS     = TT Stock / avg_sales_tt
+DOH TOBE     = (TT Stock + Final + On Order - avg_tt × leadtime) / avg_tt
+```
+
+**Tab 2: Show & Edit** — ดูและแก้ไขผลลัพธ์
+- ดึง VendorDocument ที่คำนวณแล้วมาแสดง
+- แก้ไขค่า Avg Sales, Min/Max, Stock, Safety, ON ORDER ได้
+- ปุ่ม Clear/Restore แต่ละ field เพื่อล้างหรือคืนค่าเดิม
+
+---
+
+### SRR Direct Item / D2S (`SRRDirectPage`)
+
+กระบวนการสั่งซื้อแบบ Direct to Store — Vendor ส่งสินค้าตรงถึงแต่ละสาขา ไม่ผ่าน DC
+
+คำนวณ**ต่อ SKU × Store** (ไม่ใช่ต่อ store group) โดยใช้:
+```
+SRR Suggest  = IF(Stock ≤ Min, Min - Stock + Avg × OC, 0)
+Final Order  = ROUNDUP(max(SRR Suggest - On Order, 0) / MOQ) × MOQ
+```
+
+---
+
+### SAR (เบิกก่อนได้ก่อน)
+
+ระบบคำนวณจำนวนที่แต่ละสาขาควรได้รับจาก DC โดย**มองเฉพาะว่า DC มีสต็อกพอไหม** ไม่ได้คำนวณว่าสต็อก DC จะพอแบ่งให้ทุกสาขาครบตามจำนวนหรือเปล่า (first-come-first-served)
+
+ใช้ข้อมูล Min/Max จาก VendorDocument ของ SRR DC ร่วมกับ stock DC และ on_order ปัจจุบัน เพื่อแนะนำจำนวนที่ควรเบิก
+
+---
+
+### Order B2B (`SRROrderB2BPage`)
+
+นำเข้ารหัสสินค้าและจำนวนที่ลูกค้า B2B สั่งมา (import Excel) จากนั้นดึงข้อมูลที่เกี่ยวข้อง (vendor, cost, stock) มาแสดง แล้ว Save เป็น Document แยกตามประเภทตามเงื่อนไขที่กำหนด
+
+---
+
+### Special Order, Job Assign, Send Docs, Payment Overdue
+
+หน้าเสริมสำหรับ workflow การสั่งซื้อพิเศษและติดตามสถานะ — ไม่มีสูตรคำนวณซับซ้อน เป็นหลักการ import/export และ tracking สถานะเอกสาร
+
+---
+
+### ไหลของข้อมูลทั้งระบบ
+
+```
+[Data Control: import master data]
+        ↓
+[MinMax Cal: คำนวณ Min/Max ต่อ store]
+        ↓
+[SRR DC / D2S: Read & Cal → VendorDocuments]
+        ↓
+[Show & Edit: ปรับแก้ตัวเลข]
+        ↓
+[Save PO → List Import PO → Export Excel]
+        ↓
+[ส่ง PO ให้ Vendor]
+```
+
 ## Commands
 
 ```bash
