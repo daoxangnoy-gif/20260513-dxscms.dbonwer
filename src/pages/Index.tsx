@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import LoginPage from "@/pages/LoginPage";
 import PendingApprovalPage from "@/pages/PendingApprovalPage";
@@ -16,6 +17,47 @@ import ConfigFilterPage from "@/pages/ConfigFilterPage";
 import { AllTableName, DATA_TABLES, SRR_SUB_MENUS, REPORT_SUB_MENUS } from "@/lib/tableConfig";
 import { Loader2, BarChart3 } from "lucide-react";
 
+const PAGE_SLUG: Record<MainPage, string> = {
+  data_control: "data-control",
+  srr: "srr",
+  user_control: "user-control",
+  report: "report",
+  log: "log",
+  config: "config",
+};
+const SLUG_TO_PAGE: Record<string, MainPage> = Object.fromEntries(
+  Object.entries(PAGE_SLUG).map(([k, v]) => [v, k as MainPage])
+);
+const toSlug = (s: string) => s.replace(/_/g, "-");
+const fromSlug = (s: string) => s.replace(/-/g, "_");
+
+function buildPath(
+  page: MainPage, table: AllTableName, srrSub: string,
+  logSub: string, reportSub: string, configSub: string,
+): string {
+  const slug = PAGE_SLUG[page];
+  if (page === "data_control") return `/${slug}/${toSlug(table)}`;
+  if (page === "srr")          return `/${slug}/${toSlug(srrSub)}`;
+  if (page === "log")          return `/${slug}/${toSlug(logSub)}`;
+  if (page === "report")       return `/${slug}/${toSlug(reportSub)}`;
+  if (page === "config")       return `/${slug}/${toSlug(configSub)}`;
+  return `/${slug}`;
+}
+
+function parsePath(pathname: string) {
+  const parts = pathname.split("/").filter(Boolean);
+  const page: MainPage = SLUG_TO_PAGE[parts[0]] ?? "data_control";
+  const sub = parts[1] ? fromSlug(parts[1]) : null;
+  return {
+    page,
+    table:     (sub ?? "data_master") as AllTableName,
+    srrSub:    sub ?? "dc_item",
+    logSub:    sub ?? "log_po_cost",
+    reportSub: sub ?? "report_po",
+    configSub: sub ?? "config_column_export",
+  };
+}
+
 const PAGE_TO_MENU: Record<MainPage, string> = {
   data_control: "data_control",
   srr: "srr",
@@ -27,22 +69,33 @@ const PAGE_TO_MENU: Record<MainPage, string> = {
 
 const Index = () => {
   const { user, loading, userPermissions, canViewMenu, isAdmin } = useAuth();
-  const [currentPage, setCurrentPage] = useState<MainPage>("data_control");
-  const [activeTable, setActiveTable] = useState<AllTableName>("data_master");
-  const [activeSrrSub, setActiveSrrSub] = useState("dc_item");
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const initUrl = useMemo(() => parsePath(location.pathname), []);
+  const [currentPage, setCurrentPage] = useState<MainPage>(initUrl.page);
+  const [activeTable, setActiveTable] = useState<AllTableName>(initUrl.table);
+  const [activeSrrSub, setActiveSrrSub] = useState(initUrl.srrSub);
+  const [activeLogSub, setActiveLogSub] = useState(initUrl.logSub);
+  const [activeReportSub, setActiveReportSub] = useState(initUrl.reportSub);
+  const [activeConfigSub, setActiveConfigSub] = useState(initUrl.configSub);
+
+  // Sync state → URL
+  useEffect(() => {
+    const path = buildPath(currentPage, activeTable, activeSrrSub, activeLogSub, activeReportSub, activeConfigSub);
+    if (location.pathname !== path) navigate(path, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPage, activeTable, activeSrrSub, activeLogSub, activeReportSub, activeConfigSub]);
 
   // Deep-link: ?send_docs_dest=<id> → jump to SRR > Send Docs (used by "ถึงปลายทาง" new tab)
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
+    const params = new URLSearchParams(location.search);
     if (params.get("send_docs_dest")) {
       setCurrentPage("srr");
       setActiveSrrSub("srr_send_docs");
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const [activeLogSub, setActiveLogSub] = useState("log_po_cost");
-  const [activeReportSub, setActiveReportSub] = useState("report_po");
-  const [activeConfigSub, setActiveConfigSub] = useState("config_column_export");
 
   const canSeePage = (p: MainPage) => isAdmin || canViewMenu(PAGE_TO_MENU[p]);
 
