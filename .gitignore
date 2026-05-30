@@ -2,6 +2,12 @@
 .env
 .env.*
 
+# Vite cache
+.vite/
+
+# Supabase CLI temp state
+supabase/.temp/
+
 # Logs
 logs
 *.log
