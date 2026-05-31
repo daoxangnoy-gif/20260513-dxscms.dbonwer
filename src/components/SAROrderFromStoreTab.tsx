@@ -191,6 +191,8 @@ export default function SAROrderFromStoreTab() {
   const [viewTitle, setViewTitle] = useState("");
   const [viewDocType, setViewDocType] = useState<"RO" | "PO" | "MIXED" | null>(null);
   const [viewLoading, setViewLoading] = useState(false);
+  const [perROChunk, setPerROChunk] = useState(50);
+  const [perPOChunk, setPerPOChunk] = useState(50);
 
   // ============================================================
   // IMPORT TAB — logic
@@ -629,8 +631,8 @@ export default function SAROrderFromStoreTab() {
     XLSX.writeFile(wb, `OFS_${label}_${Date.now()}.xlsx`);
   };
 
-  // Template RO — ใช้ format เดียวกับ SAR exportListRO
-  // Group by Store → Sub-Department, header row ต่อ chunk, 50 items/chunk
+  // Template RO — format เดียวกับ SAR exportListRO
+  // Group by Store → Sub-Department, header row ต่อ chunk, perROChunk items/chunk
   const exportTemplateRO = (rows: ProcessedRow[]) => {
     const target = rows.filter(r => (!r._doc_type || r._doc_type === "RO") && r.final_order_unit > 0);
     if (!target.length) { toast({ title: "ไม่มีรายการ RO ที่มี Final Order > 0", variant: "destructive" }); return; }
@@ -640,8 +642,7 @@ export default function SAROrderFromStoreTab() {
         "Order Lines/Barcode", "Order Lines/Product", "Order Lines/Unit of Measure",
         "Order Lines/Quantity", "Order Lines/Exclude In Package", "Order Lines/Unit Price",
       ];
-      const PER_RO = 50;
-      // Group by store_name → sub_department
+      const perChunk = Math.max(1, perROChunk);
       const byStore = new Map<string, Map<string, ProcessedRow[]>>();
       for (const r of target) {
         const s = r.store_name || "(no store)";
@@ -654,11 +655,9 @@ export default function SAROrderFromStoreTab() {
       const out: any[] = [];
       for (const [store, sdMap] of byStore.entries()) {
         for (const [sd, items] of sdMap.entries()) {
-          for (let start = 0; start < items.length; start += PER_RO) {
-            const chunk = items.slice(start, start + PER_RO);
+          for (let start = 0; start < items.length; start += perChunk) {
+            const chunk = items.slice(start, start + perChunk);
             chunk.forEach((r, idx) => {
-              const up = r.unit_pick > 0 ? r.unit_pick : 1;
-              const qty = r.final_order_unit;
               const isHeader = idx === 0;
               out.push({
                 "Company": isHeader ? store : "",
@@ -669,7 +668,7 @@ export default function SAROrderFromStoreTab() {
                 "Order Lines/Barcode": r.main_barcode || "",
                 "Order Lines/Product": r.main_barcode || "",
                 "Order Lines/Unit of Measure": "Unit",
-                "Order Lines/Quantity": qty,
+                "Order Lines/Quantity": r.final_order_unit,
                 "Order Lines/Exclude In Package": "TRUE",
                 "Order Lines/Unit Price": 0,
               });
@@ -685,33 +684,84 @@ export default function SAROrderFromStoreTab() {
     } catch (e: any) { toast({ title: "Export ไม่สำเร็จ", description: e.message, variant: "destructive" }); }
   };
 
+  // helper: build SRR-format row (ใช้กับทั้ง DC และ D2S PO)
+  const toSrrPoRow = (r: ProcessedRow, qty: number, isFirst: boolean, groupKey: string, partnerId: string) => ({
+    "partner_id": isFirst ? partnerId : "",
+    "Picking Type / Database ID": isFirst ? "" : "",
+    "Inter Transfer": isFirst ? "" : "",
+    "PO Group": isFirst ? groupKey : "",
+    "Products to Purchase/barcode": r.main_barcode || "",
+    "Products to Purchase/Product": r.main_barcode || "",
+    "Product name": r.product_name_la || "",
+    "Products to Purchase/UoM": r.unit_of_measure || "Unit",
+    "Products to Purchase/Exclude In Package": "True",
+    "Products to Purchase/Quantity": qty,
+    "Products to Purchase/Unit Price": r.cost || 0,
+    "assigned_to": isFirst ? "" : "",
+    "description": isFirst ? "" : "",
+  });
+
+  // PO DC — group by sub_department, sum qty by SKU, split by perPOChunk → srr_dc_po template
   const exportPODC = async (rows: ProcessedRow[]) => {
-    const target = rows.filter(r => !r._doc_type || r._doc_type === "PO");
+    const target = rows.filter(r => (!r._doc_type || r._doc_type === "PO") && r.final_order_unit > 0);
     if (!target.length) { toast({ title: "ไม่มีรายการ PO", variant: "destructive" }); return; }
-    // Sum by sku → 1 row per sku
-    const bySkuQty = new Map<string, number>();
-    const bySkuRow = new Map<string, ProcessedRow>();
-    for (const r of target) { bySkuQty.set(r.sku_code, (bySkuQty.get(r.sku_code) || 0) + r.final_order_unit); if (!bySkuRow.has(r.sku_code)) bySkuRow.set(r.sku_code, r); }
     try {
-      const raw = Array.from(bySkuRow.entries()).map(([sku, r]) => ({ ...toRaw(r), qty: bySkuQty.get(sku) || 0 }));
-      const mapped = await remapRowsByTemplate("srr_special_po", raw);
+      const perChunk = Math.max(1, perPOChunk);
+      const bySubDept = new Map<string, Map<string, { qty: number; row: ProcessedRow }>>();
+      for (const r of target) {
+        const sd = r.sub_department || "(no sub-dept)";
+        if (!bySubDept.has(sd)) bySubDept.set(sd, new Map());
+        const skuMap = bySubDept.get(sd)!;
+        if (!skuMap.has(r.sku_code)) skuMap.set(r.sku_code, { qty: r.final_order_unit, row: r });
+        else skuMap.get(r.sku_code)!.qty += r.final_order_unit;
+      }
+      const out: any[] = [];
+      for (const [sd, skuMap] of bySubDept) {
+        const items = Array.from(skuMap.values());
+        for (let start = 0; start < items.length; start += perChunk) {
+          items.slice(start, start + perChunk).forEach(({ qty, row }, idx) => {
+            out.push(toSrrPoRow(row, qty, idx === 0, sd, ""));
+          });
+        }
+      }
+      const mapped = await remapRowsByTemplate("srr_dc_po", out);
       const ws = XLSX.utils.json_to_sheet(mapped);
       const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "PO_DC");
-      XLSX.writeFile(wb, `OFS_PO_DC_${Date.now()}.xlsx`);
-      toast({ title: "Export PO DC สำเร็จ", description: `${raw.length} SKU` });
+      XLSX.writeFile(wb, `OFS_PO_DC_${fmtFile(new Date())}.xlsx`);
+      toast({ title: "Export PO DC สำเร็จ", description: `${out.length} rows` });
     } catch (e: any) { toast({ title: "Export ไม่สำเร็จ", description: e.message, variant: "destructive" }); }
   };
 
+  // PO D2S — group by store → sub_department, per store, split by perPOChunk → srr_d2s_po template
   const exportPOD2S = async (rows: ProcessedRow[]) => {
-    const target = rows.filter(r => !r._doc_type || r._doc_type === "PO");
+    const target = rows.filter(r => (!r._doc_type || r._doc_type === "PO") && r.final_order_unit > 0);
     if (!target.length) { toast({ title: "ไม่มีรายการ PO", variant: "destructive" }); return; }
     try {
-      const raw = target.map(r => ({ ...toRaw(r), store_name: r.store_name }));
-      const mapped = await remapRowsByTemplate("srr_special_po", raw);
+      const perChunk = Math.max(1, perPOChunk);
+      const byStore = new Map<string, Map<string, ProcessedRow[]>>();
+      for (const r of target) {
+        const s = r.store_name || "(no store)";
+        const sd = r.sub_department || "(no sub-dept)";
+        if (!byStore.has(s)) byStore.set(s, new Map());
+        const sdMap = byStore.get(s)!;
+        if (!sdMap.has(sd)) sdMap.set(sd, []);
+        sdMap.get(sd)!.push(r);
+      }
+      const out: any[] = [];
+      for (const [store, sdMap] of byStore) {
+        for (const [sd, items] of sdMap) {
+          for (let start = 0; start < items.length; start += perChunk) {
+            items.slice(start, start + perChunk).forEach((r, idx) => {
+              out.push(toSrrPoRow(r, r.final_order_unit, idx === 0, sd, store));
+            });
+          }
+        }
+      }
+      const mapped = await remapRowsByTemplate("srr_d2s_po", out);
       const ws = XLSX.utils.json_to_sheet(mapped);
       const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "PO_D2S");
-      XLSX.writeFile(wb, `OFS_PO_D2S_${Date.now()}.xlsx`);
-      toast({ title: "Export PO D2S สำเร็จ", description: `${target.length} rows` });
+      XLSX.writeFile(wb, `OFS_PO_D2S_${fmtFile(new Date())}.xlsx`);
+      toast({ title: "Export PO D2S สำเร็จ", description: `${out.length} rows` });
     } catch (e: any) { toast({ title: "Export ไม่สำเร็จ", description: e.message, variant: "destructive" }); }
   };
 
