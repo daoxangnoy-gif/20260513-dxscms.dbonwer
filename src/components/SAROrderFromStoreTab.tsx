@@ -5,10 +5,11 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { FileSpreadsheet, Upload, Download, Loader2, AlertCircle } from "lucide-react";
+import { FileSpreadsheet, Upload, Download, Loader2, AlertCircle, ClipboardPaste } from "lucide-react";
 import * as XLSX from "xlsx";
 import { remapRowsByTemplate } from "@/lib/exportTemplate";
 
@@ -77,6 +78,55 @@ export default function SAROrderFromStoreTab() {
   const [subTab, setSubTab] = useState<"ro" | "po">("ro");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [pasteText, setPasteText] = useState("");
+
+  // ----------- Download Template -----------
+  const downloadTemplate = () => {
+    const ws = XLSX.utils.json_to_sheet([
+      { "Barcode/SKUCode": "8857123456789", "Qty": 5 },
+      { "Barcode/SKUCode": "8857987654321", "Qty": 10 },
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Template");
+    XLSX.writeFile(wb, "OFS_Import_Template.xlsx");
+  };
+
+  // ----------- Helper: load stores & open store popup -----------
+  const openStorePopup = async (imported: ImportRow[]) => {
+    setImportRows(imported);
+    const { data: storeData } = await supabase
+      .from("store_type" as any)
+      .select("store_name")
+      .order("store_name");
+    const names = [...new Set((storeData || []).map((r: any) => r.store_name).filter(Boolean) as string[])];
+    setStores(names);
+    setSelectedStore(names[0] ?? "");
+    setStorePopupOpen(true);
+    toast({ title: `Import ${imported.length} รายการ`, description: "เลือก Store เพื่อดำเนินการต่อ" });
+  };
+
+  // ----------- Paste Import -----------
+  const handlePasteImport = async () => {
+    const lines = pasteText.trim().split(/\r?\n/).filter(l => l.trim());
+    const imported: ImportRow[] = [];
+    for (const line of lines) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 2) continue;
+      const code = parts[0].trim();
+      const qty = Number(parts[1]);
+      if (!code || !Number.isFinite(qty) || qty <= 0) continue;
+      imported.push({ code, qty });
+    }
+    if (!imported.length) {
+      toast({ title: "ไม่พบข้อมูลที่ valid", description: "รูปแบบ: barcode qty (คั่นด้วย space, 1 บรรทัดต่อรายการ)", variant: "destructive" });
+      return;
+    }
+    setPasteOpen(false);
+    setPasteText("");
+    await openStorePopup(imported);
+  };
+
   // ----------- File Import -----------
   const handleFile = async (file: File) => {
     try {
@@ -101,17 +151,7 @@ export default function SAROrderFromStoreTab() {
 
       if (!imported.length) { toast({ title: "ไม่พบข้อมูลที่ valid", variant: "destructive" }); return; }
 
-      setImportRows(imported);
-
-      const { data: storeData } = await supabase
-        .from("store_type" as any)
-        .select("store_name")
-        .order("store_name");
-      const names = [...new Set((storeData || []).map((r: any) => r.store_name).filter(Boolean) as string[])];
-      setStores(names);
-      setSelectedStore(names[0] ?? "");
-      setStorePopupOpen(true);
-      toast({ title: `Import ${imported.length} รายการ`, description: "เลือก Store เพื่อดำเนินการต่อ" });
+      await openStorePopup(imported);
     } catch (e: any) {
       toast({ title: "อ่านไฟล์ไม่สำเร็จ", description: e.message, variant: "destructive" });
     }
@@ -405,6 +445,41 @@ export default function SAROrderFromStoreTab() {
         </DialogContent>
       </Dialog>
 
+      {/* Paste Dialog */}
+      <Dialog open={pasteOpen} onOpenChange={setPasteOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>วางข้อมูล</DialogTitle>
+            <DialogDescription>
+              วางข้อมูล 1 บรรทัดต่อรายการ รูปแบบ: <b>barcode qty</b> (คั่นด้วย space)
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Textarea
+              placeholder={"8857123456789 5\n8857987654321 10\n..."}
+              value={pasteText}
+              onChange={e => setPasteText(e.target.value)}
+              className="font-mono text-xs min-h-[200px]"
+              autoFocus
+            />
+            <div className="text-[11px] text-muted-foreground">
+              {pasteText.trim()
+                ? (() => {
+                    const n = pasteText.trim().split(/\r?\n/).filter(l => l.trim().split(/\s+/).length >= 2 && Number(l.trim().split(/\s+/)[1]) > 0).length;
+                    return `${n} รายการที่ valid`;
+                  })()
+                : "ยังไม่มีข้อมูล"}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setPasteOpen(false); setPasteText(""); }}>ยกเลิก</Button>
+            <Button onClick={handlePasteImport} disabled={!pasteText.trim()}>
+              <ClipboardPaste className="w-4 h-4 mr-1" />นำเข้า
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* IDLE */}
       {step === "idle" && (
         <div className="flex-1 flex items-center justify-center p-8">
@@ -413,12 +488,20 @@ export default function SAROrderFromStoreTab() {
             <div>
               <div className="font-semibold text-sm">Order From Store</div>
               <div className="text-xs text-muted-foreground mt-1">
-                Import Excel 2 คอลัมน์: <b>barcode</b> (หรือ skucode) + <b>qty</b>
+                Import 2 คอลัมน์: <b>barcode</b> (หรือ skucode) + <b>qty</b>
               </div>
             </div>
-            <Button onClick={() => fileRef.current?.click()}>
-              <Upload className="w-4 h-4 mr-2" />Import Excel
-            </Button>
+            <div className="flex flex-col gap-2">
+              <Button onClick={() => fileRef.current?.click()} className="w-full">
+                <Upload className="w-4 h-4 mr-2" />เลือกไฟล์ Excel
+              </Button>
+              <Button variant="outline" onClick={() => setPasteOpen(true)} className="w-full">
+                <ClipboardPaste className="w-4 h-4 mr-2" />วางข้อมูล
+              </Button>
+              <Button variant="ghost" onClick={downloadTemplate} className="w-full text-muted-foreground">
+                <Download className="w-4 h-4 mr-2" />Download Template
+              </Button>
+            </div>
             <input
               ref={fileRef}
               type="file"
