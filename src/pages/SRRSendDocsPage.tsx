@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   ScanLine, Camera, Plus, Save, Trash2, X, CheckCircle2, AlertCircle, Download, Truck, Pencil,
   ChevronDown, ChevronRight, Printer, Database, MapPin, FileSpreadsheet, ArrowUp, ArrowDown,
+  Maximize2, Minimize2,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
@@ -1030,6 +1031,7 @@ export default function SRRSendDocsPage() {
   const [destDepositor, setDestDepositor] = useState<string>("");
   const [destReceiver, setDestReceiver] = useState<string>("");
   const [selectedDestTab, setSelectedDestTab] = useState(999);
+  const [scanFullscreen, setScanFullscreen] = useState(false);
   // Post-arrival popup: appears after user saves "รับตรวจ" — ask ฝากต่อ or จบ
   const [arrivedPopupOpen, setArrivedPopupOpen] = useState(false);
   const [popupStep, setPopupStep] = useState<"choose" | "form">("choose");
@@ -2129,21 +2131,35 @@ export default function SRRSendDocsPage() {
           return prevArrived?.location_name || activeShipment.origin_location || originMv?.location_name || "";
         })();
 
+        // Tab location names helper
+        const getTabLocName = (i: number): string => {
+          if (i === 0) return activeShipment.origin_location || originMv?.location_name || "";
+          if (showActiveDest && i === totalTabs - 1) return activeDestLocation || destLocation || "";
+          return visibleHops[i - 1]?.location_name || "";
+        };
+
         return (
-          <div className="mt-3 border rounded-lg bg-card p-3">
-            <div className="mb-3 flex items-center justify-between gap-3">
+          <div className={scanFullscreen
+            ? "fixed inset-0 z-[9999] bg-background overflow-hidden flex flex-col p-3 gap-3"
+            : "mt-3 border rounded-lg bg-card p-3"}>
+            <div className={`flex items-center justify-between gap-3 ${scanFullscreen ? "shrink-0" : "mb-3"}`}>
               <div>
                 <h2 className="text-base font-semibold">บันทึกจุดเอกสาร — {activeShipment.doc_name}</h2>
                 <p className="text-xs text-muted-foreground mt-0.5">เลือก tab เพื่อดูสถานะแต่ละจุด — แท็บขวาสุดคือจุดปัจจุบัน (active)</p>
               </div>
-              <Button variant="outline" size="sm" onClick={() => setMainTab("deposit")}>กลับไปรายการ</Button>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" onClick={() => setScanFullscreen(f => !f)}>
+                  {scanFullscreen ? <><Minimize2 className="w-4 h-4 mr-1" />ย่อคืน</> : <><Maximize2 className="w-4 h-4 mr-1" />Expand</>}
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setMainTab("deposit")}>กลับไปรายการ</Button>
+              </div>
             </div>
 
-            <div className="flex gap-3" style={{ minHeight: 560 }}>
+            <div className={`flex gap-3 ${scanFullscreen ? "flex-1 min-h-0" : ""}`} style={!scanFullscreen ? { minHeight: 560 } : undefined}>
 
               {/* ===== LEFT: PO Status List ===== */}
-              <div className="w-[200px] shrink-0 border rounded-lg flex flex-col">
-                <div className="p-2 bg-muted border-b rounded-t-lg">
+              <div className={`w-[200px] shrink-0 border rounded-lg flex flex-col ${scanFullscreen ? "min-h-0 overflow-hidden" : ""}`}>
+                <div className="p-2 bg-muted border-b rounded-t-lg shrink-0">
                   <div className="text-xs font-semibold">
                     {isOriginTab ? "ต้นทาง" : isActiveTab ? `ปลายทาง ${currentTab} (active)` : `ปลายทาง ${currentTab}`}
                   </div>
@@ -2154,7 +2170,7 @@ export default function SRRSendDocsPage() {
                     {leftGern > 0 && <span className="text-orange-700 font-medium">{leftGern} เกิน</span>}
                   </div>
                 </div>
-                <ScrollArea className="flex-1" style={{ maxHeight: 500 }}>
+                <ScrollArea className="flex-1" style={!scanFullscreen ? { maxHeight: 500 } : undefined}>
                   {leftPOs.length === 0 ? (
                     <div className="p-4 text-center text-xs text-muted-foreground">ยังไม่มีรายการ</div>
                   ) : (
@@ -2171,26 +2187,29 @@ export default function SRRSendDocsPage() {
               </div>
 
               {/* ===== RIGHT: Tab bar + Content ===== */}
-              <div className="flex-1 flex flex-col min-w-0">
+              <div className={`flex-1 flex flex-col min-w-0 ${scanFullscreen ? "min-h-0" : ""}`}>
 
                 {/* Tab bar */}
-                <div className="flex gap-1 flex-wrap border-b pb-2 mb-3">
+                <div className="flex gap-1 flex-wrap border-b pb-2 mb-3 shrink-0">
                   {Array.from({ length: totalTabs }, (_, i) => {
                     const isOrigin = i === 0;
                     const isScanTab = showActiveDest && i === totalTabs - 1;
-                    const label = isOrigin ? "ต้นทาง" : `ปลายทาง ${i}`;
+                    const baseLabel = isOrigin ? "ต้นทาง" : `ปลายทาง ${i}`;
+                    const locName = getTabLocName(i);
                     return (
-                      <Button key={i} size="sm" variant={currentTab === i ? "default" : "outline"} className="h-7 text-xs gap-1" onClick={() => setSelectedDestTab(i)}>
-                        {label}
+                      <Button key={i} size="sm" variant={currentTab === i ? "default" : "outline"} className="h-auto py-1 text-xs gap-1 max-w-[180px]" onClick={() => setSelectedDestTab(i)}>
+                        <span className="flex flex-col items-start leading-tight min-w-0">
+                          <span className="truncate w-full">{baseLabel}{locName ? `: ${locName}` : ""}</span>
+                        </span>
                         {!isOrigin && !isScanTab && <CheckCircle2 className="w-3 h-3 text-emerald-500 shrink-0" />}
-                        {isScanTab && <span className="text-[9px] opacity-70">active</span>}
+                        {isScanTab && <span className="text-[9px] opacity-70 shrink-0">active</span>}
                       </Button>
                     );
                   })}
                 </div>
 
                 {/* Tab content */}
-                <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+                <div className={`overflow-y-auto space-y-3 pr-1 ${scanFullscreen ? "flex-1 min-h-0" : "flex-1"}`}>
 
                   {/* ── ต้นทาง tab ── */}
                   {isOriginTab && (
