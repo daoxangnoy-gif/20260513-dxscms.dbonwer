@@ -23,7 +23,7 @@ import { remapRowsByTemplate } from "@/lib/exportTemplate";
 import { SARRow, computeRow } from "@/lib/sarCalc";
 
 // --------------- Types ---------------
-type OfsSubTab = "import" | "import_docs" | "result_docs";
+type OfsSubTab = "import_docs" | "result_docs";
 
 interface ImportRow { code: string; qty: number; }
 
@@ -142,12 +142,12 @@ export default function SAROrderFromStoreTab() {
   const hasAny = canImport || canHQ || canResult;
 
 
-  const [subTab, setSubTab] = useState<OfsSubTab>("import");
+  const [subTab, setSubTab] = useState<OfsSubTab>("import_docs");
   const initialSet = useRef(false);
   useEffect(() => {
     if (initialSet.current || !hasAny) return;
     initialSet.current = true;
-    if (!canImport) setSubTab(canHQ ? "import_docs" : "result_docs");
+    if (!canImport && !canHQ) setSubTab("result_docs");
   }, [canImport, canHQ, canResult, hasAny]);
 
   // ---- Shared ----
@@ -162,7 +162,6 @@ export default function SAROrderFromStoreTab() {
   const [storeTypeCache, setStoreTypeCache] = useState<Record<string, string>>({});
   const [selectedStore, setSelectedStore] = useState("");
   const [importSaving, setImportSaving] = useState(false);
-  const [importStep, setImportStep] = useState<"idle" | "done">("idle");
   const [lastSave, setLastSave] = useState<{ total: number; pass: number; skip: number } | null>(null);
   const [pendingSkips, setPendingSkips] = useState<SkipRow[]>([]);
 
@@ -318,8 +317,8 @@ export default function SAROrderFromStoreTab() {
       setPendingSkips(skips);
       setLastSave({ total: importRows.length, pass: valid.length, skip: skips.length });
       setStoreSelectOpen(false);
-      setImportStep("done");
       toast({ title: "บันทึกสำเร็จ", description: `${docName}` });
+      await loadImportDocs();
     } catch (e: any) {
       toast({ title: "เกิดข้อผิดพลาด", description: e.message, variant: "destructive" });
     } finally { setImportSaving(false); }
@@ -336,9 +335,6 @@ export default function SAROrderFromStoreTab() {
     XLSX.writeFile(wb, `OFS_Skip_${Date.now()}.xlsx`);
   };
 
-  const resetImport = () => {
-    setImportStep("idle"); setImportRows([]); setPendingSkips([]); setLastSave(null);
-  };
 
   // ============================================================
   // HQ TAB — logic
@@ -912,70 +908,47 @@ export default function SAROrderFromStoreTab() {
       <Tabs value={subTab} onValueChange={v => setSubTab(v as OfsSubTab)} className="flex-1 flex flex-col overflow-hidden">
         <div className="border-b px-4 pt-2 bg-background shrink-0">
           <TabsList>
-            {canImport && <TabsTrigger value="import">Import</TabsTrigger>}
-            {canHQ && <TabsTrigger value="import_docs">Import Docs</TabsTrigger>}
+            {(canImport || canHQ) && <TabsTrigger value="import_docs">Import Docs</TabsTrigger>}
             {canResult && <TabsTrigger value="result_docs">Result Docs</TabsTrigger>}
           </TabsList>
         </div>
 
-        {/* ============ IMPORT TAB ============ */}
-        {canImport && (
-          <TabsContent value="import" className="flex-1 overflow-hidden mt-0 data-[state=active]:flex flex-col">
-            {importStep === "idle" ? (
-              <div className="flex-1 flex items-center justify-center p-8">
-                <div className="text-center space-y-4 max-w-xs">
-                  <FileSpreadsheet className="w-12 h-12 mx-auto text-muted-foreground/50" />
-                  <div><div className="font-semibold text-sm">Order From Store — Import</div><div className="text-xs text-muted-foreground mt-1">Import 2 คอลัมน์: <b>barcode/skucode</b> + <b>qty</b></div></div>
-                  <div className="flex flex-col gap-2">
-                    <Button onClick={() => fileRef.current?.click()} className="w-full"><Upload className="w-4 h-4 mr-2" />เลือกไฟล์ Excel</Button>
-                    <Button variant="outline" onClick={() => setPasteOpen(true)} className="w-full"><ClipboardPaste className="w-4 h-4 mr-2" />วางข้อมูล</Button>
-                    <Button variant="ghost" onClick={downloadTemplate} className="w-full text-muted-foreground"><Download className="w-4 h-4 mr-2" />Download Template</Button>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="flex-1 flex items-center justify-center p-8">
-                <div className="text-center space-y-4 max-w-sm">
-                  <CheckCircle2 className="w-12 h-12 mx-auto text-emerald-500" />
-                  <div>
-                    <div className="font-semibold">บันทึกสำเร็จ</div>
-                    {lastSave && (
-                      <div className="flex items-center gap-1 justify-center mt-2 text-xs">
-                        <Badge variant="secondary">Import {lastSave.total} รายการ</Badge>
-                        <span className="text-muted-foreground">/</span>
-                        <Badge className="bg-emerald-100 text-emerald-700 border border-emerald-300">ผ่าน {lastSave.pass} รายการ</Badge>
-                        <span className="text-muted-foreground">/</span>
-                        <Badge className={cn("border", lastSave.skip > 0 ? "bg-amber-100 text-amber-700 border-amber-300" : "bg-muted text-muted-foreground")}>Skip {lastSave.skip} รายการ</Badge>
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex gap-2 justify-center">
-                    {pendingSkips.length > 0 && (
-                      <Button size="sm" variant="outline" onClick={downloadSkipList}><AlertCircle className="w-3.5 h-3.5 mr-1 text-amber-500" /><Download className="w-3.5 h-3.5 mr-1" />Skip List ({pendingSkips.length})</Button>
-                    )}
-                    <Button size="sm" onClick={resetImport}><Upload className="w-3.5 h-3.5 mr-1" />Import ใหม่</Button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </TabsContent>
-        )}
-
-        {/* ============ IMPORT DOCS (HQ) TAB ============ */}
-        {canHQ && (
+        {/* ============ IMPORT DOCS TAB ============ */}
+        {(canImport || canHQ) && (
           <TabsContent value="import_docs" className="flex-1 overflow-hidden mt-0 data-[state=active]:flex flex-col">
+            {/* Import section */}
+            <div className="border-b px-4 py-2 flex items-center gap-2 flex-wrap shrink-0 bg-background">
+              <span className="text-xs font-medium text-muted-foreground">Import:</span>
+              <Button size="sm" onClick={() => fileRef.current?.click()}><Upload className="w-3.5 h-3.5 mr-1" />Excel</Button>
+              <Button size="sm" variant="outline" onClick={() => setPasteOpen(true)}><ClipboardPaste className="w-3.5 h-3.5 mr-1" />Paste</Button>
+              <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={downloadTemplate}><Download className="w-3.5 h-3.5 mr-1" />Template</Button>
+              {lastSave && (
+                <div className="flex items-center gap-1 ml-2">
+                  <Badge variant="secondary" className="text-[10px]">Import {lastSave.total}</Badge>
+                  <Badge className="bg-emerald-100 text-emerald-700 border-emerald-300 text-[10px]">ผ่าน {lastSave.pass}</Badge>
+                  {lastSave.skip > 0 && (
+                    <>
+                      <Badge className="bg-amber-100 text-amber-700 border-amber-300 text-[10px]">Skip {lastSave.skip}</Badge>
+                      <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={downloadSkipList}>
+                        <AlertCircle className="w-3 h-3 mr-1 text-amber-500" /><Download className="w-3 h-3 mr-1" />Skip List
+                      </Button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
             {/* Toolbar */}
             <div className="border-b px-4 py-2 flex items-center gap-2 flex-wrap shrink-0 bg-muted/20">
               <div className="text-sm font-semibold">Import Docs</div>
               {selectedDocIds.size > 0 && <Badge variant="secondary" className="text-xs">เลือก {selectedDocIds.size}</Badge>}
               <Button size="sm" variant="outline" onClick={loadImportDocs} disabled={importDocsLoading}><RefreshCw className={cn("w-3.5 h-3.5 mr-1", importDocsLoading && "animate-spin")} />Refresh</Button>
-              {selectedDocIds.size > 0 && !hqFetched && (
+              {canHQ && selectedDocIds.size > 0 && !hqFetched && (
                 <Button size="sm" onClick={handleFetchData} disabled={hqLoading}>{hqLoading ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-1" />}ดึงข้อมูล</Button>
               )}
-              {hqFetched && (
+              {canHQ && hqFetched && (
                 <Button size="sm" onClick={handleCalculate} disabled={hqCalculating || hqCalculated}>{hqCalculating ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Calculator className="w-4 h-4 mr-1" />}คำนวณ</Button>
               )}
-              {hqCalculated && (
+              {canHQ && hqCalculated && (
                 <Button size="sm" onClick={() => setSaveOpen(true)}><Save className="w-4 h-4 mr-1" />Save</Button>
               )}
               {hqFetched && (
@@ -1046,7 +1019,7 @@ export default function SAROrderFromStoreTab() {
                               </td>
                               <td className="px-2 py-1 text-muted-foreground">{new Date(d.created_at).toLocaleString()}</td>
                               <td className="px-2 py-1 text-center" onClick={e => e.stopPropagation()}>
-                                <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" onClick={() => deleteImportDoc(d.id, d.doc_name)}><Trash2 className="w-3 h-3" /></Button>
+                                {canHQ && <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" onClick={() => deleteImportDoc(d.id, d.doc_name)}><Trash2 className="w-3 h-3" /></Button>}
                               </td>
                             </tr>
                             {/* Expanded line items */}
