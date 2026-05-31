@@ -248,14 +248,19 @@ export default function SAROrderFromStoreTab() {
     setImportSaving(true);
     try {
       const codes = importRows.map(r => r.code);
-      const dmSel = "sku_code,main_barcode,product_name_la,buying_status,item_type,product_owner";
-      const [dmByBarcode, dmBySku] = await Promise.all([
-        queryInChunks<any>("data_master", "main_barcode", codes, dmSel, q => q.eq("packing_size_qty", 1)),
+      // ไม่กรอง packing_size_qty=1 ตอน validate — barcode อาจอยู่ใน row ที่เป็น pack/box
+      // ค้น 3 ทาง: main_barcode / barcode / sku_code
+      const dmSel = "sku_code,main_barcode,barcode,product_name_la,buying_status,item_type,product_owner";
+      const [dmByMainBarcode, dmBySku, dmByBarcode] = await Promise.all([
+        queryInChunks<any>("data_master", "main_barcode", codes, dmSel),
         queryInChunks<any>("data_master", "sku_code", codes, dmSel, q => q.eq("packing_size_qty", 1)),
+        queryInChunks<any>("data_master", "barcode", codes, dmSel),
       ]);
       const dmMap: Record<string, any> = {};
-      dmByBarcode.forEach((r: any) => { if (r.main_barcode) dmMap[r.main_barcode] = r; });
+      // ลำดับความสำคัญ: main_barcode > sku_code > barcode (non-unit)
+      dmByMainBarcode.forEach((r: any) => { if (r.main_barcode && !dmMap[r.main_barcode]) dmMap[r.main_barcode] = r; });
       dmBySku.forEach((r: any) => { if (r.sku_code && !dmMap[r.sku_code]) dmMap[r.sku_code] = r; });
+      dmByBarcode.forEach((r: any) => { if (r.barcode && !dmMap[r.barcode]) dmMap[r.barcode] = r; });
 
       // Detect dup sku
       const skuToCode: Record<string, string[]> = {};
