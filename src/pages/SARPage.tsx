@@ -134,6 +134,7 @@ export default function SARPage() {
   const canOnOrder  = isAdmin || canDo("on-order-dc",  "view");
   const canSkuNoOrd = isAdmin || canDo("sku-no-order", "view");
   const canOFS      = isAdmin || canDo("ofs_import",   "view") || canDo("ofs_hq", "view") || canDo("ofs_result", "view");
+  const canDocs     = isAdmin || canDo("sar",          "view");
   const { toast } = useToast();
 
   // Tab state
@@ -1208,7 +1209,7 @@ export default function SARPage() {
             {canOnOrder  && <TabsTrigger value="on_order_dc">On Order DC</TabsTrigger>}
             {canSkuNoOrd && <TabsTrigger value="sku_no_order">SKU No Order</TabsTrigger>}
             {canOFS      && <TabsTrigger value="order_from_store">Order From Store</TabsTrigger>}
-            <TabsTrigger value="docs">Doc Snapshot</TabsTrigger>
+            {canDocs && <TabsTrigger value="docs">Doc Snapshot</TabsTrigger>}
           </TabsList>
         </div>
 
@@ -1462,7 +1463,7 @@ export default function SARPage() {
           </TabsContent>
         )}
 
-        <TabsContent value="docs" className="flex-1 overflow-hidden mt-0 data-[state=active]:flex flex-col">
+        {canDocs && <TabsContent value="docs" className="flex-1 overflow-hidden mt-0 data-[state=active]:flex flex-col">
           <div className="px-4 py-2 flex items-center gap-2 border-b">
             <div className="text-sm font-semibold">SAR Snapshot Documents</div>
             {selectedSnapshots.size > 0 && (
@@ -1528,7 +1529,7 @@ export default function SARPage() {
               </tbody>
             </table>
           </div>
-        </TabsContent>
+        </TabsContent>}
       </Tabs>
 
       {/* Save Dialog (with List Import RO export inside) */}
