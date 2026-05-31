@@ -703,7 +703,7 @@ export default function SAROrderFromStoreTab() {
 
   // PO DC — group by sub_department, sum qty by SKU, split by perPOChunk → srr_dc_po template
   const exportPODC = async (rows: ProcessedRow[]) => {
-    const target = rows.filter(r => (!r._doc_type || r._doc_type === "PO") && r.final_order_unit > 0);
+    const target = rows.filter(r => (!r._doc_type || r._doc_type === "PO") && r.qty_import > 0);
     if (!target.length) { toast({ title: "ไม่มีรายการ PO", variant: "destructive" }); return; }
     try {
       const perChunk = Math.max(1, perPOChunk);
@@ -712,8 +712,9 @@ export default function SAROrderFromStoreTab() {
         const sd = r.sub_department || "(no sub-dept)";
         if (!bySubDept.has(sd)) bySubDept.set(sd, new Map());
         const skuMap = bySubDept.get(sd)!;
-        if (!skuMap.has(r.sku_code)) skuMap.set(r.sku_code, { qty: r.final_order_unit, row: r });
-        else skuMap.get(r.sku_code)!.qty += r.final_order_unit;
+        const rowQty = r.final_order_unit > 0 ? r.final_order_unit : r.qty_import;
+        if (!skuMap.has(r.sku_code)) skuMap.set(r.sku_code, { qty: rowQty, row: r });
+        else skuMap.get(r.sku_code)!.qty += rowQty;
       }
       const out: any[] = [];
       for (const [sd, skuMap] of bySubDept) {
@@ -734,7 +735,7 @@ export default function SAROrderFromStoreTab() {
 
   // PO D2S — group by store → sub_department, per store, split by perPOChunk → srr_d2s_po template
   const exportPOD2S = async (rows: ProcessedRow[]) => {
-    const target = rows.filter(r => (!r._doc_type || r._doc_type === "PO") && r.final_order_unit > 0);
+    const target = rows.filter(r => (!r._doc_type || r._doc_type === "PO") && r.qty_import > 0);
     if (!target.length) { toast({ title: "ไม่มีรายการ PO", variant: "destructive" }); return; }
     try {
       const perChunk = Math.max(1, perPOChunk);
@@ -752,7 +753,8 @@ export default function SAROrderFromStoreTab() {
         for (const [sd, items] of sdMap) {
           for (let start = 0; start < items.length; start += perChunk) {
             items.slice(start, start + perChunk).forEach((r, idx) => {
-              out.push(toSrrPoRow(r, r.final_order_unit, idx === 0, sd, store));
+              const qty = r.final_order_unit > 0 ? r.final_order_unit : r.qty_import;
+              out.push(toSrrPoRow(r, qty, idx === 0, sd, store));
             });
           }
         }
@@ -1048,30 +1050,37 @@ export default function SAROrderFromStoreTab() {
                             </tr>
                             {/* Expanded line items */}
                             {isExpanded && (
-                              <>
-                                {/* Sub-header */}
-                                <tr className="bg-muted/40 border-t">
-                                  <td colSpan={2} />
-                                  <td className="px-3 py-1 text-[10px] font-semibold text-muted-foreground">SKU Code</td>
-                                  <td className="px-2 py-1 text-[10px] font-semibold text-muted-foreground">Barcode</td>
-                                  <td className="px-2 py-1 text-[10px] font-semibold text-muted-foreground">Product Name LA</td>
-                                  <td className="px-2 py-1 text-right text-[10px] font-semibold text-muted-foreground">Qty</td>
-                                  <td />
-                                </tr>
-                                {lineItems.length === 0
-                                  ? <tr className="bg-muted/20 border-t"><td colSpan={7} className="px-3 py-1 text-[10px] text-muted-foreground italic">ไม่มีรายการ</td></tr>
-                                  : lineItems.map((item, idx) => (
-                                    <tr key={`${d.id}-${idx}`} className="bg-muted/20 border-t border-border/30">
-                                      <td colSpan={2} />
-                                      <td className="px-3 py-0.5 font-mono text-[10px]">{item.sku_code}</td>
-                                      <td className="px-2 py-0.5 text-[10px] text-muted-foreground">{item.main_barcode}</td>
-                                      <td className="px-2 py-0.5 text-[10px] truncate max-w-[200px]">{item.product_name_la}</td>
-                                      <td className="px-2 py-0.5 text-right text-[10px] font-medium">{item.qty?.toLocaleString()}</td>
-                                      <td />
-                                    </tr>
-                                  ))
-                                }
-                              </>
+                              <tr>
+                                <td colSpan={7} className="p-0 border-t bg-muted/10">
+                                  <div className="px-8 py-2">
+                                    {lineItems.length === 0
+                                      ? <div className="text-[10px] text-muted-foreground italic">ไม่มีรายการ</div>
+                                      : (
+                                        <table className="text-[10px] border-collapse">
+                                          <thead>
+                                            <tr>
+                                              <th className="px-2 py-1 text-left font-semibold bg-muted/60 border border-border/40">SKU Code</th>
+                                              <th className="px-2 py-1 text-left font-semibold bg-muted/60 border border-border/40">Barcode</th>
+                                              <th className="px-2 py-1 text-left font-semibold bg-muted/60 border border-border/40">Product Name LA</th>
+                                              <th className="px-2 py-1 text-right font-semibold bg-muted/60 border border-border/40">Qty</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody>
+                                            {lineItems.map((item, idx) => (
+                                              <tr key={`${d.id}-item-${idx}`}>
+                                                <td className="px-2 py-0.5 font-mono border border-border/30">{item.sku_code}</td>
+                                                <td className="px-2 py-0.5 text-muted-foreground border border-border/30">{item.main_barcode}</td>
+                                                <td className="px-2 py-0.5 border border-border/30 max-w-[200px]">{item.product_name_la}</td>
+                                                <td className="px-2 py-0.5 text-right font-medium border border-border/30">{item.qty?.toLocaleString()}</td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      )
+                                    }
+                                  </div>
+                                </td>
+                              </tr>
                             )}
                           </Fragment>
                         );
@@ -1090,7 +1099,14 @@ export default function SAROrderFromStoreTab() {
             )}
 
             {/* SAR Table */}
-            {hqFetched && renderTable(filteredHqRows, true)}
+            {hqFetched && (
+              <>
+                <div className="px-4 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/30 border-b shrink-0 select-none">
+                  ตารางคำนวณ — {filteredHqRows.length.toLocaleString()} รายการ
+                </div>
+                {renderTable(filteredHqRows, true)}
+              </>
+            )}
 
             {!hqFetched && !hqLoading && (
               <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
