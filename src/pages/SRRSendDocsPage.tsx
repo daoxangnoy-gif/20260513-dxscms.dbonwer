@@ -1378,11 +1378,9 @@ export default function SRRSendDocsPage() {
     const hops = hist.filter(m => m.action !== "origin_save");
     const lastArrived = [...hops].reverse().find(m => m.action === "arrived");
     if (!lastArrived) return;
-    // Forward set = union(scanned at this point, items missing from origin at this point)
-    // so the diff POs propagate forward and can be verified at next point (highlighted yellow).
-    const arrivedSet = new Set(lastArrived.codes || []);
-    const missingFromOrigin = (activeShipment.origin_codes || []).filter(c => !arrivedSet.has(c));
-    const forwardCodes = [...(lastArrived.codes || []), ...missingFromOrigin];
+    // Forward set = เฉพาะ PO ที่สะแกนได้จริงที่จุดนี้ (ตรง + เกิน)
+    // PO ที่ขาดไม่ต้องส่งต่อ — จุดถัดไปรับเฉพาะของที่มีอยู่จริงเท่านั้น
+    const forwardCodes = [...(lastArrived.codes || [])];
     await supabase.from("document_movements" as any).insert({
       shipment_id: activeShipment.id,
       location_name: popupDestination.trim(),
