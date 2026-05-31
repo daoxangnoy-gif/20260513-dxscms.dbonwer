@@ -134,7 +134,7 @@ export default function SARPage() {
   const canOnOrder  = isAdmin || canDo("on-order-dc",  "view");
   const canSkuNoOrd = isAdmin || canDo("sku-no-order", "view");
   const canOFS      = isAdmin || canDo("ofs_import",   "view") || canDo("ofs_hq", "view") || canDo("ofs_result", "view");
-  const canDocs     = isAdmin || canDo("sar",          "view");
+  const canDocs     = isAdmin || canDo("docs",         "view");
   const { toast } = useToast();
 
   // Tab state
