@@ -141,7 +141,7 @@ function LocationCombobox({
           <ChevronDown className="w-4 h-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="p-0 w-72" align="start">
+      <PopoverContent className="p-0 w-72 z-[70000]" align="start">
         <Command>
           <CommandInput placeholder="ค้นหาจุด..." />
           <CommandList>
