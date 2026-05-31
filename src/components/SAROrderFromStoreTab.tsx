@@ -460,8 +460,10 @@ export default function SAROrderFromStoreTab() {
       const rows: ProcessedRow[] = [];
       for (const [key, { qty, main_barcode: mb, product_name_la: pnLa }] of storeSkuMap) {
         const [storeName, sku] = key.split("\x00");
+        // mmMap / stockStoreMap / onOrderMap ใช้ key เป็น sku\x00store ต้อง construct ใหม่
+        const lookupKey = `${sku}\x00${storeName}`;
         const dm = dmMap.get(sku);
-        const mm = mmMap.get(key);
+        const mm = mmMap.get(lookupKey);
         const rsv = rsvMap.get(sku);
         const up = Number(mm?.unit_pick_edit ?? mm?.unit_pick ?? 1) || 1;
         const sarRow: SARRow = {
@@ -478,8 +480,8 @@ export default function SAROrderFromStoreTab() {
           pack_size: up === 1 ? "Unit" : `1x${up}`,
           avg_sale: Number(mm?.avg_sale) || 0, rank_sale: mm?.rank_sale || "D", rank_factor: Number(mm?.rank_factor) || 7,
           min_val: Number(mm?.min_final ?? mm?.min_cal ?? 0) || 0, max_val: Number(mm?.max_final ?? mm?.max_cal ?? 0) || 0,
-          stock_dc: stockDCMap.get(sku) || 0, stock_store: stockStoreMap.get(key) || 0,
-          on_order: onOrderMap.get(key) || 0,
+          stock_dc: stockDCMap.get(sku) || 0, stock_store: stockStoreMap.get(lookupKey) || 0,
+          on_order: onOrderMap.get(lookupKey) || 0,
           sar_suggest1: 0, sar_suggest2: 0, tt_order: 0, suggest_order_edit: null,
           final_order_unit: 0, final_order_uom: 0, doh_min: 0, doh_max: 0, doh_stock: 0, doh_tobe: 0, calculated: false,
         };
@@ -499,6 +501,14 @@ export default function SAROrderFromStoreTab() {
     setHqRows(next); setHqCalculated(true);
     setHqCalculating(false);
     toast({ title: "คำนวณเสร็จ", description: `${next.length} แถว` });
+  };
+
+  const updateSuggestEdit = (storeName: string, skuCode: string, val: number | null) => {
+    setHqRows(prev => prev.map(r => {
+      if (r.sku_code !== skuCode || r.store_name !== storeName) return r;
+      const updated = computeRow({ ...r, suggest_order_edit: val });
+      return { ...updated, qty_import: r.qty_import, division_group: r.division_group };
+    }));
   };
 
   const handleHQSave = async () => {
@@ -668,10 +678,14 @@ export default function SAROrderFromStoreTab() {
             {COLS.map(col => (
               <th key={col.key} className={cn("px-2 py-1.5 font-semibold border-b whitespace-nowrap", col.right ? "text-right" : "text-left", HIGHLIGHT_COLS.has(col.key) && "bg-amber-100")} style={{ width: col.w, minWidth: col.w }}>
                 {showToggle && col.key === "final_order_unit" ? (
-                  <div className="flex items-center gap-1 justify-end">
+                  <div className="flex flex-col items-end gap-0.5">
                     <span>{col.label}</span>
-                    <button onClick={() => setUseQtyImport(v => !v)} className={cn("text-[9px] px-1.5 py-0.5 rounded border font-normal", useQtyImport ? "bg-amber-200 text-amber-800 border-amber-400" : "bg-primary/10 text-primary border-primary/30")}>
-                      {useQtyImport ? "Qty Import" : "Calculated"}
+                    <button
+                      onClick={() => setUseQtyImport(v => !v)}
+                      className={cn("text-[9px] px-1.5 py-0.5 rounded border font-normal leading-none", useQtyImport ? "bg-amber-200 text-amber-800 border-amber-400" : "bg-primary/10 text-primary border-primary/30")}
+                      title="Toggle: ใช้ค่าที่คำนวณ หรือ Qty Import"
+                    >
+                      {useQtyImport ? "▶ Qty Import" : "▶ Calculated"}
                     </button>
                   </div>
                 ) : col.label}
@@ -685,7 +699,7 @@ export default function SAROrderFromStoreTab() {
             : rows.map((r, i) => {
               const eu = showToggle ? getEffUnit(r) : r.final_order_unit;
               return (
-                <tr key={`${r.sku_code}-${r.store_name}-${i}`} className="border-b hover:bg-emerald-100/70">
+                <tr key={`${r.sku_code}-${r.store_name}-${i}`} className="border-b hover:bg-emerald-100/70 focus-within:bg-emerald-100/70">
                   {COLS.map(col => {
                     let v: any = (r as any)[col.key];
                     if (col.key === "final_order_unit") v = eu;
@@ -693,6 +707,24 @@ export default function SAROrderFromStoreTab() {
                     const isHL = HIGHLIGHT_COLS.has(col.key);
                     const isQA = showToggle && useQtyImport && col.key === "qty_import";
                     const isFA = showToggle && useQtyImport && col.key === "final_order_unit";
+
+                    // suggest_order_edit — editable เฉพาะ HQ tab (showToggle=true)
+                    if (showToggle && col.key === "suggest_order_edit") {
+                      return (
+                        <td key={col.key} className="px-1 py-0.5 border-r border-r-border/40" style={{ width: col.w, minWidth: col.w }}>
+                          <input
+                            type="number"
+                            step="any"
+                            value={r.suggest_order_edit ?? ""}
+                            onChange={e => updateSuggestEdit(r.store_name, r.sku_code, e.target.value === "" ? null : Number(e.target.value))}
+                            onFocus={e => e.currentTarget.select()}
+                            className="w-full h-6 px-1 text-right border rounded text-xs bg-background"
+                            placeholder="-"
+                          />
+                        </td>
+                      );
+                    }
+
                     return (
                       <td key={col.key} className={cn("px-2 py-1 border-r border-r-border/40", col.right && "text-right tabular-nums", isHL && "bg-amber-50 font-semibold", (isQA || isFA) && "!bg-amber-200 font-bold")} style={{ width: col.w, minWidth: col.w, maxWidth: col.w }} title={typeof v === "string" ? v : undefined}>
                         <div className="truncate">{NUM_COLS.has(col.key) ? fmtNum(v) : (v ?? "")}</div>
