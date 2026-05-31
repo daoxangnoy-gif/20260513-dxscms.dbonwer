@@ -62,6 +62,9 @@ const TAB_DEFS: Record<string, { label: string; tabs: { key: string; label: stri
       { key: "read-cal", label: "Read & Cal" },
       { key: "on-order-dc", label: "On Order DC" },
       { key: "sku-no-order", label: "SKU No Order" },
+      { key: "ofs_import", label: "Order From Store — Import" },
+      { key: "ofs_hq", label: "Order From Store — Import Docs (HQ)" },
+      { key: "ofs_result", label: "Order From Store — Result Docs" },
     ],
   },
   srr_send_docs: {
