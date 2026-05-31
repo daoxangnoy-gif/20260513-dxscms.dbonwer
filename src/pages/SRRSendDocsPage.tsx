@@ -1672,32 +1672,15 @@ export default function SRRSendDocsPage() {
                   // โดยหัก codes ที่ adjust ออกไปแล้ว (จุดเคลียร์เอกสาร) ออกจากทั้ง miss/extra
                   const adjustMvsForShipment = docMvs.filter(m => m.action === "adjust");
                   const hasAdjustments = adjustMvsForShipment.length > 0;
-                  let recomputedFull = s.status === "matched";
-                  if (isClosed) {
-                    const hopsArr = docMvs.filter(m => m.action !== "origin_save" && m.action !== "adjust");
-                    const lastClosingHop = [...hopsArr].reverse().find(m => m.action === "closed" || m.action === "arrived");
-                    if (lastClosingHop) {
-                      const myIdx = hopsArr.findIndex(h => h.id === lastClosingHop.id);
-                      let incoming: string[] = s.origin_codes || [];
-                      for (let k = myIdx - 1; k >= 0; k--) {
-                        if (hopsArr[k].action === "forward") { incoming = hopsArr[k].codes || []; break; }
-                      }
-                      const arrivedSet = new Set(lastClosingHop.codes || []);
-                      const incomingSet = new Set(incoming);
-                      const adjustedOut = new Set<string>();
-                      for (const a of adjustMvsForShipment) {
-                        try {
-                          const n = a.notes ? JSON.parse(a.notes) : null;
-                          if (n?.from_id === lastClosingHop.id || n?.from === lastClosingHop.location_name) {
-                            (a.codes || []).forEach(c => adjustedOut.add(c));
-                          }
-                        } catch {}
-                      }
-                      const missCnt = incoming.filter(c => !arrivedSet.has(c) && !adjustedOut.has(c)).length;
-                      const extraCnt = (lastClosingHop.codes || []).filter(c => !incomingSet.has(c) && !adjustedOut.has(c)).length;
-                      recomputedFull = missCnt === 0 && extraCnt === 0;
+                  // ตรวจว่า origin PO ทุกรายการถูกจัดการแล้วหรือยัง
+                  // (สะแกนในขั้นตอนใดก็ได้ ไม่ว่าจะเป็น arrived, closed, หรือ adjust)
+                  const allHandledCodes = new Set<string>();
+                  docMvs.forEach(m => {
+                    if (m.action === "arrived" || m.action === "closed" || m.action === "adjust") {
+                      (m.codes || []).forEach(c => allHandledCodes.add(c));
                     }
-                  }
+                  });
+                  const allOriginAccountedFor = (s.origin_codes || []).every(c => allHandledCodes.has(c));
                   const lastMv = docMvs[docMvs.length - 1];
                   const currentLoc = lastMv?.location_name || s.depositor_name || "(ไม่ระบุ)";
                   const lastAction = lastMv?.action;
@@ -1744,11 +1727,13 @@ export default function SRRSendDocsPage() {
                       <td className="p-2 text-center">{destN > 0 ? <Badge variant="outline">{destN}</Badge> : "-"}</td>
                       <td className="p-2 text-center">
                         {isClosed
-                          ? (hasAdjustments
-                              ? <Badge className="bg-sky-500 hover:bg-sky-500">จบ-เคลียร์แล้ว</Badge>
-                              : recomputedFull
-                                ? <Badge className="bg-emerald-600">จบ-ครบ</Badge>
-                                : <Badge variant="destructive">จบ-ไม่ครบ</Badge>)
+                          ? (allOriginAccountedFor
+                              ? (hasAdjustments
+                                  ? <Badge className="bg-violet-600 hover:bg-violet-600">จบ-เคลียร์แล้ว</Badge>
+                                  : <Badge className="bg-emerald-600 hover:bg-emerald-600">จบ-ครบ</Badge>)
+                              : (hasAdjustments
+                                  ? <Badge className="bg-orange-600 hover:bg-orange-600">จบ-มีส่วนต่าง</Badge>
+                                  : <Badge variant="destructive">จบ-ไม่ครบ</Badge>))
                           : lastAction === "forward"
                             ? <Badge className="bg-blue-600">กำลังเดินทาง</Badge>
                             : lastAction === "arrived"
