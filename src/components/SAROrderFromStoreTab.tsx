@@ -377,10 +377,11 @@ export default function SAROrderFromStoreTab() {
     for (const r of hqRows) {
       if (!byStore.has(r.store_name)) byStore.set(r.store_name, { ro: 0, po: 0 });
       const e = byStore.get(r.store_name)!;
-      if (r.stock_dc >= getEffUnit(r)) e.ro++; else e.po++;
+      // ใช้ qty_import เป็นเกณฑ์แยก RO/PO เหมือน handleHQSave
+      if (r.stock_dc >= r.qty_import) e.ro++; else e.po++;
     }
     return Array.from(byStore.entries()).map(([store, { ro, po }]) => ({ store, ro, po }));
-  }, [hqRows, hqCalculated, getEffUnit]);
+  }, [hqRows, hqCalculated]);
 
   const handleFetchData = async () => {
     const selectedDocs = importDocs.filter(d => selectedDocIds.has(d.id));
@@ -528,8 +529,9 @@ export default function SAROrderFromStoreTab() {
           const eu = getEffUnit(r);
           return { ...r, final_order_unit: eu, final_order_uom: eu / Math.max(r.unit_pick, 1) };
         };
-        const roRows = rows.filter(r => r.stock_dc >= getEffUnit(r)).map(toSave);
-        const poRows = rows.filter(r => r.stock_dc < getEffUnit(r)).map(toSave);
+        // RO = stock dc >= qty_import, PO = stock dc < qty_import
+        const roRows = rows.filter(r => r.stock_dc >= r.qty_import).map(toSave);
+        const poRows = rows.filter(r => r.stock_dc < r.qty_import).map(toSave);
         if (roRows.length > 0) {
           const { error } = await (supabase as any).from("ofs_result_docs").insert({ doc_name: `${prefix}-RO-${storeName}`, doc_type: "RO", store_name: storeName, source_doc_ids: srcIds, item_count: roRows.length, data: roRows, user_id: user.id });
           if (error) throw error; saved++;
@@ -627,15 +629,59 @@ export default function SAROrderFromStoreTab() {
     XLSX.writeFile(wb, `OFS_${label}_${Date.now()}.xlsx`);
   };
 
-  const exportTemplateRO = async (rows: ProcessedRow[]) => {
-    const target = rows.filter(r => !r._doc_type || r._doc_type === "RO");
-    if (!target.length) { toast({ title: "ไม่มีรายการ RO", variant: "destructive" }); return; }
+  // Template RO — ใช้ format เดียวกับ SAR exportListRO
+  // Group by Store → Sub-Department, header row ต่อ chunk, 50 items/chunk
+  const exportTemplateRO = (rows: ProcessedRow[]) => {
+    const target = rows.filter(r => (!r._doc_type || r._doc_type === "RO") && r.final_order_unit > 0);
+    if (!target.length) { toast({ title: "ไม่มีรายการ RO ที่มี Final Order > 0", variant: "destructive" }); return; }
     try {
-      const mapped = await remapRowsByTemplate("srr_special_ro", target.map(toRaw));
-      const ws = XLSX.utils.json_to_sheet(mapped);
-      const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "RO");
-      XLSX.writeFile(wb, `OFS_RO_Template_${Date.now()}.xlsx`);
-      toast({ title: "Export Template RO สำเร็จ" });
+      const COLS_RO = [
+        "Company", "Partner", "RPM Type", "Currency", "Order Group",
+        "Order Lines/Barcode", "Order Lines/Product", "Order Lines/Unit of Measure",
+        "Order Lines/Quantity", "Order Lines/Exclude In Package", "Order Lines/Unit Price",
+      ];
+      const PER_RO = 50;
+      // Group by store_name → sub_department
+      const byStore = new Map<string, Map<string, ProcessedRow[]>>();
+      for (const r of target) {
+        const s = r.store_name || "(no store)";
+        const sd = r.sub_department || "(no sub-dept)";
+        if (!byStore.has(s)) byStore.set(s, new Map());
+        const m = byStore.get(s)!;
+        if (!m.has(sd)) m.set(sd, []);
+        m.get(sd)!.push(r);
+      }
+      const out: any[] = [];
+      for (const [store, sdMap] of byStore.entries()) {
+        for (const [sd, items] of sdMap.entries()) {
+          for (let start = 0; start < items.length; start += PER_RO) {
+            const chunk = items.slice(start, start + PER_RO);
+            chunk.forEach((r, idx) => {
+              const up = r.unit_pick > 0 ? r.unit_pick : 1;
+              const qty = r.final_order_unit;
+              const isHeader = idx === 0;
+              out.push({
+                "Company": isHeader ? store : "",
+                "Partner": isHeader ? "Lanexang Green Property Sole Co.,Ltd" : "",
+                "RPM Type": isHeader ? "DC Item" : "",
+                "Currency": isHeader ? "LAK" : "",
+                "Order Group": isHeader ? sd : "",
+                "Order Lines/Barcode": r.main_barcode || "",
+                "Order Lines/Product": r.main_barcode || "",
+                "Order Lines/Unit of Measure": "Unit",
+                "Order Lines/Quantity": qty,
+                "Order Lines/Exclude In Package": "TRUE",
+                "Order Lines/Unit Price": 0,
+              });
+            });
+          }
+        }
+      }
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(out, { header: COLS_RO });
+      XLSX.utils.book_append_sheet(wb, ws, "Import RO");
+      XLSX.writeFile(wb, `OFS_Import_RO_${fmtFile(new Date())}.xlsx`);
+      toast({ title: "Export RO สำเร็จ", description: `${out.length} rows` });
     } catch (e: any) { toast({ title: "Export ไม่สำเร็จ", description: e.message, variant: "destructive" }); }
   };
 
