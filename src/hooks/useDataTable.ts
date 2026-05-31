@@ -169,7 +169,9 @@ export function useDataTable(tableName: TableName) {
       }
 
       const columnMap = buildColumnMap(jsonData[0], tableName);
-      const batchSize = 500;
+      // stock มี row มากและ payload หนัก ลด batch size เพื่อป้องกัน connection timeout
+      const BATCH_SIZES: Partial<Record<string, number>> = { stock: 200 };
+      const batchSize = BATCH_SIZES[tableName] ?? 500;
       const totalBatches = Math.ceil(jsonData.length / batchSize);
       let processed = 0;
       setImportProgress({ current: 0, total: jsonData.length, phase: "กำลังนำเข้า" });
@@ -215,14 +217,16 @@ export function useDataTable(tableName: TableName) {
         return Array.from(map.values());
       };
 
-      // Helper: upsert with retry on transient network errors
+      // Helper: upsert with retry + exponential backoff สำหรับ transient network errors
+      // attempt 1 = ครั้งแรก, retry สูงสุด 6 ครั้ง (รอ 1s, 2s, 4s, 8s, 16s, 30s)
       const upsertWithRetry = async (rows: any[], opts: any, attempt = 1): Promise<void> => {
         const { error } = await supabase.from(tableName).upsert(rows, opts);
         if (!error) return;
-        const msg = error.message || "";
-        const transient = /fetch|network|timeout|503|504|ECONN|gateway/i.test(msg);
-        if (transient && attempt < 4) {
-          await new Promise(r => setTimeout(r, 500 * attempt));
+        const msg = (error.message || "") + (error.code || "");
+        const transient = /fetch|network|timeout|503|504|ECONN|gateway|reset|abort/i.test(msg);
+        if (transient && attempt <= 6) {
+          const delay = Math.min(1000 * Math.pow(2, attempt - 1), 30000); // 1s→2s→4s→8s→16s→30s
+          await new Promise(r => setTimeout(r, delay));
           return upsertWithRetry(rows, opts, attempt + 1);
         }
         throw error;
@@ -303,6 +307,10 @@ export function useDataTable(tableName: TableName) {
             if (error) throw error;
           }
           processed += batch.length;
+          // พักระหว่าง batch ให้ server หายใจได้ ป้องกัน connection drop เมื่อ import ข้อมูลจำนวนมาก
+          if (i + batchSize < workingData.length) {
+            await new Promise(r => setTimeout(r, 120));
+          }
         }
         setImportProgress({
           current: processed,
