@@ -2086,10 +2086,11 @@ export default function SRRSendDocsPage() {
         type PORow = { code: string; status: S };
         const getLeftPOs = (): PORow[] => {
           if (isOriginTab) {
-            const firstHopCodes = new Set(visibleHops[0]?.codes || []);
+            // Compare each origin PO against union of all scanned codes across every arrived destination
+            const allScannedCodes = new Set(visibleHops.flatMap(h => h.codes || []));
             return (activeShipment.origin_codes || []).map(c => ({
               code: c,
-              status: (firstHopCodes.size > 0 ? (firstHopCodes.has(c) ? "ตรง" : "ขาด") : "ขาด") as S,
+              status: (allScannedCodes.has(c) ? "ตรง" : "ขาด") as S,
             }));
           }
           if (isActiveTab) {
@@ -2123,7 +2124,10 @@ export default function SRRSendDocsPage() {
         const leftKhad = leftPOs.filter(x => x.status === "ขาด").length;
         const leftGern = leftPOs.filter(x => x.status === "เกิน").length;
         // Show status badges only when there's at least 1 scan for the current tab
-        const leftShowBadges = isOriginTab ? visibleHops.length > 0 : isActiveTab ? destCodes.length > 0 : true;
+        const leftShowBadges =
+          isOriginTab ? visibleHops.some(h => (h.codes || []).length > 0)
+          : isActiveTab ? destCodes.length > 0
+          : (selectedHop?.codes || []).length > 0;
 
         const afterForward = lastHop?.action === "forward";
         const activeDepositor = afterForward ? (lastHop?.depositor_name || destDepositor) : destDepositor;
