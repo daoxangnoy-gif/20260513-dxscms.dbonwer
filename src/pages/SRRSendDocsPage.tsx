@@ -621,23 +621,48 @@ function ReportTab({ items, movements, poInfoMap, ensurePoInfo, canExport, final
   });
 
 
-  // ===== Global latest location per PO code (across ALL shipments) =====
-  // ถ้า PO เดิมถูกสะแกนใหม่ในเอกสารใหม่ จุดปัจจุบันต้องย้ายไปตามการสะแกนล่าสุด
-  // รวบรวม movement ทุก shipment เรียงเวลา desc แล้วหา hit ล่าสุดของแต่ละโค้ด
-  const allMovesDesc = movements.slice().sort((a, b) =>
-    new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  // ===== Global latest location + owner shipment per PO code (across ALL shipments) =====
+  // PO ที่ถูกสะแกนใน Doc ใหม่กว่า ให้นับอยู่ใน Doc นั้น — ไม่นับซ้ำใน Doc เดิม
+  // Sort ASC so last write wins (most recent scan)
+  const allMovesAsc = movements.slice().sort((a, b) =>
+    new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
   );
-  const latestLocByCode: Record<string, string> = {};
-  for (const m of allMovesDesc) {
+  const latestScanByCode: Record<string, { shipmentId: string; location: string }> = {};
+  for (const m of allMovesAsc) {
     if (m.action !== "adjust" && m.action !== "arrived") continue;
-    const codes = Array.isArray(m.codes) ? m.codes : [];
-    for (const c of codes) {
-      if (!(c in latestLocByCode)) latestLocByCode[c] = m.location_name;
+    for (const c of (m.codes || [])) {
+      latestScanByCode[c] = { shipmentId: m.shipment_id, location: m.location_name };
     }
   }
 
-  // Per-PO location (per shipment row) — ใช้ "global latest" เป็นหลัก
-  // ถ้าโค้ดไม่เคยถูกสะแกน arrived/adjust ที่ไหน ให้คงอยู่จุดต้นทางของ shipment นั้น
+  // For codes never scanned: owner = most recently created shipment having that code in origin_codes
+  const codeToShipsMap: Record<string, Shipment[]> = {};
+  items.forEach(s => {
+    (s.origin_codes || []).forEach(c => {
+      if (!codeToShipsMap[c]) codeToShipsMap[c] = [];
+      codeToShipsMap[c].push(s);
+    });
+  });
+  const unscannedOwner: Record<string, { shipmentId: string; location: string }> = {};
+  Object.entries(codeToShipsMap).forEach(([c, ships]) => {
+    if (latestScanByCode[c]) return;
+    const latest = ships.reduce((best, s) => {
+      const t = new Date(s.origin_scanned_at || s.created_at).getTime();
+      const bt = new Date(best.origin_scanned_at || best.created_at).getTime();
+      return t > bt ? s : best;
+    });
+    unscannedOwner[c] = { shipmentId: latest.id, location: latest.origin_location || "(ไม่ระบุจุด)" };
+  });
+
+  // Helper: which shipment "owns" a code and where it currently is
+  const getCodeOwner = (code: string): { shipmentId: string; location: string } =>
+    latestScanByCode[code] ?? unscannedOwner[code] ?? { shipmentId: "", location: "(ไม่ระบุจุด)" };
+
+  // Build latestLocByCode for export sections (statusByShipmentCode etc.) — unchanged
+  const latestLocByCode: Record<string, string> = {};
+  for (const [c, info] of Object.entries(latestScanByCode)) { latestLocByCode[c] = info.location; }
+
+  // Per-PO location map per shipment — used only for locationsUsed + export sheet4
   const locByShipmentCode: Record<string, Record<string, string>> = {};
   items.forEach(s => {
     const origin = s.origin_location || "(ไม่ระบุจุด)";
@@ -650,7 +675,6 @@ function ReportTab({ items, movements, poInfoMap, ensurePoInfo, canExport, final
   // Collect all locations actually used
   const locSet = new Set<string>();
   Object.values(locByShipmentCode).forEach(m => Object.values(m).forEach(l => locSet.add(l)));
-  // Always include origin locations even if empty doc
   items.forEach(s => { if (s.origin_location) locSet.add(s.origin_location); });
   const locationsUsed = Array.from(locSet).sort();
 
@@ -712,13 +736,16 @@ function ReportTab({ items, movements, poInfoMap, ensurePoInfo, canExport, final
         if (!(partnerHit || docHit || codeHit)) return;
       }
       const locCounts: Record<string, number> = {};
+      let ownedCount = 0;
       if (!isFinalized) {
         partnerCodes.forEach(c => {
-          const loc = locByShipmentCode[s.id]?.[c] || (s.origin_location || "(ไม่ระบุจุด)");
-          locCounts[loc] = (locCounts[loc] || 0) + 1;
+          const owner = getCodeOwner(c);
+          if (owner.shipmentId !== s.id) return; // PO นี้ถูกนับใน Doc ล่าสุดแทน
+          locCounts[owner.location] = (locCounts[owner.location] || 0) + 1;
+          ownedCount++;
         });
       }
-      rows.push({ doc: s, partner: p, count: isFinalized ? 0 : partnerCodes.length, locCounts });
+      rows.push({ doc: s, partner: p, count: isFinalized ? 0 : ownedCount, locCounts });
     });
   });
 
