@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, Fragment as FragmentRow } from "react";
+import { createPortal } from "react-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -1941,7 +1942,7 @@ export default function SRRSendDocsPage() {
 
       {/* Post-arrival popup — after user saves "รับตรวจ", ask whether to forward or end */}
       <Dialog open={arrivedPopupOpen} onOpenChange={setArrivedPopupOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md" style={{ zIndex: 60000 }}>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <CheckCircle2 className="w-5 h-5 text-emerald-600" />
@@ -2121,6 +2122,8 @@ export default function SRRSendDocsPage() {
         const leftTrong = leftPOs.filter(x => x.status === "ตรง").length;
         const leftKhad = leftPOs.filter(x => x.status === "ขาด").length;
         const leftGern = leftPOs.filter(x => x.status === "เกิน").length;
+        // Show status badges only when there's at least 1 scan for the current tab
+        const leftShowBadges = isOriginTab ? visibleHops.length > 0 : isActiveTab ? destCodes.length > 0 : true;
 
         const afterForward = lastHop?.action === "forward";
         const activeDepositor = afterForward ? (lastHop?.depositor_name || destDepositor) : destDepositor;
@@ -2138,10 +2141,11 @@ export default function SRRSendDocsPage() {
           return visibleHops[i - 1]?.location_name || "";
         };
 
-        return (
-          <div className={scanFullscreen
-            ? "fixed inset-0 z-[9999] bg-background overflow-hidden flex flex-col p-3 gap-3"
-            : "mt-3 border rounded-lg bg-card p-3"}>
+        const scanContent = (
+          <div
+            className={scanFullscreen ? "flex flex-col overflow-hidden p-3 gap-3 bg-background" : "mt-3 border rounded-lg bg-card p-3"}
+            style={scanFullscreen ? { position: "fixed", top: 0, left: 0, width: "100vw", height: "100vh", zIndex: 50000 } : undefined}
+          >
             <div className={`flex items-center justify-between gap-3 ${scanFullscreen ? "shrink-0" : "mb-3"}`}>
               <div>
                 <h2 className="text-base font-semibold">บันทึกจุดเอกสาร — {activeShipment.doc_name}</h2>
@@ -2165,9 +2169,9 @@ export default function SRRSendDocsPage() {
                   </div>
                   <div className="flex flex-wrap gap-x-2 text-[10px] mt-0.5">
                     <span className="text-muted-foreground">{leftPOs.length} รายการ</span>
-                    {leftTrong > 0 && <span className="text-emerald-700 font-medium">{leftTrong} ตรง</span>}
-                    {leftKhad > 0 && <span className="text-red-700 font-medium">{leftKhad} ขาด</span>}
-                    {leftGern > 0 && <span className="text-orange-700 font-medium">{leftGern} เกิน</span>}
+                    {leftShowBadges && leftTrong > 0 && <span className="text-emerald-700 font-medium">{leftTrong} ตรง</span>}
+                    {leftShowBadges && leftKhad > 0 && <span className="text-red-700 font-medium">{leftKhad} ขาด</span>}
+                    {leftShowBadges && leftGern > 0 && <span className="text-orange-700 font-medium">{leftGern} เกิน</span>}
                   </div>
                 </div>
                 <ScrollArea className="flex-1" style={!scanFullscreen ? { maxHeight: 500 } : undefined}>
@@ -2178,7 +2182,7 @@ export default function SRRSendDocsPage() {
                       {leftPOs.map(({ code, status }, i) => (
                         <li key={code + i} className="px-2 py-1 flex items-center gap-1">
                           <span className="font-mono text-[10px] truncate flex-1 min-w-0">{i + 1}. {code}</span>
-                          <Badge className={`${statusBadgeCls(status)} text-[9px] px-1 py-0 shrink-0`}>{status}</Badge>
+                          {leftShowBadges && <Badge className={`${statusBadgeCls(status)} text-[9px] px-1 py-0 shrink-0`}>{status}</Badge>}
                         </li>
                       ))}
                     </ul>
@@ -2510,6 +2514,7 @@ export default function SRRSendDocsPage() {
             </div>
           </div>
         );
+        return scanFullscreen ? createPortal(scanContent, document.body) : scanContent;
       })()}
 
       {/* Adjust doc dialog — เคลียร์เอกสารส่วนต่างจากจุด arrived ไปยังจุดอื่น */}
