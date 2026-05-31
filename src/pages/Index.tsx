@@ -168,6 +168,8 @@ const Index = () => {
 
   return (
     <div className="flex h-screen overflow-hidden">
+      {/* placeholder คงพื้นที่ 48px สำหรับ sidebar ที่ fixed positioned — content ไม่ขยับ */}
+      <div className="w-12 flex-shrink-0" />
       <AppSidebar
         currentPage={currentPage}
         setCurrentPage={setCurrentPage}
