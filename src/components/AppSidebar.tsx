@@ -33,6 +33,8 @@ interface AppSidebarProps {
   setActiveReportSub: (s: string) => void;
   activeConfigSub: string;
   setActiveConfigSub: (s: string) => void;
+  pinned: boolean;
+  onPinnedChange: (pinned: boolean) => void;
 }
 
 export const LOG_SUB_MENUS: { key: string; label: string; menuCode: string }[] = [
@@ -57,13 +59,11 @@ export default function AppSidebar({
   activeLogSub, setActiveLogSub,
   activeReportSub, setActiveReportSub,
   activeConfigSub, setActiveConfigSub,
+  pinned, onPinnedChange,
 }: AppSidebarProps) {
   const { canViewMenu, userPermissions, signOut, isAdmin } = useAuth();
 
   const [isHovered, setIsHovered] = useState(false);
-  const [pinned, setPinned] = useState(() => {
-    try { return localStorage.getItem("sidebar_pinned") === "1"; } catch { return false; }
-  });
   const [dataExpanded, setDataExpanded] = useState(true);
   const [srrExpanded, setSrrExpanded] = useState(false);
   const [logExpanded, setLogExpanded] = useState(false);
@@ -75,8 +75,8 @@ export default function AppSidebar({
 
   const togglePin = () => {
     const next = !pinned;
-    setPinned(next);
     try { localStorage.setItem("sidebar_pinned", next ? "1" : "0"); } catch {}
+    onPinnedChange(next);
   };
 
   const handleMainClick = (key: MainPage) => {

@@ -81,6 +81,9 @@ const Index = () => {
   const [activeLogSub, setActiveLogSub] = useState(initUrl.logSub);
   const [activeReportSub, setActiveReportSub] = useState(initUrl.reportSub);
   const [activeConfigSub, setActiveConfigSub] = useState(initUrl.configSub);
+  const [sidebarPinned, setSidebarPinned] = useState(() => {
+    try { return localStorage.getItem("sidebar_pinned") === "1"; } catch { return false; }
+  });
 
   // Sync state → URL
   useEffect(() => {
@@ -168,8 +171,8 @@ const Index = () => {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      {/* placeholder คงพื้นที่ 48px สำหรับ sidebar ที่ fixed positioned — content ไม่ขยับ */}
-      <div className="w-12 flex-shrink-0" />
+      {/* placeholder ปรับตาม pinned state: w-12 (collapsed) หรือ w-60 (pinned) */}
+      <div className={`flex-shrink-0 transition-[width] duration-200 ease-in-out ${sidebarPinned ? "w-60" : "w-12"}`} />
       <AppSidebar
         currentPage={currentPage}
         setCurrentPage={setCurrentPage}
@@ -183,6 +186,8 @@ const Index = () => {
         setActiveReportSub={setActiveReportSub}
         activeConfigSub={activeConfigSub}
         setActiveConfigSub={setActiveConfigSub}
+        pinned={sidebarPinned}
+        onPinnedChange={setSidebarPinned}
       />
       <main className="flex-1 overflow-hidden">
         <ErrorBoundary>
