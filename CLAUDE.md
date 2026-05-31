@@ -171,13 +171,13 @@ Final Order  = ROUNDUP(max(SRR Suggest - On Order, 0) / MOQ) × MOQ
 ## Commands
 
 ```bash
-bun dev          # Dev server at http://localhost:8080
-bun build        # Production build (base path: /20260513-dxscms.dbonwer/)
-bun build:dev    # Build in development mode
-bun lint         # ESLint
-bun test         # Run tests once (vitest)
-bun test:watch   # Watch mode
-bun deploy       # Deploy to GitHub Pages (gh-pages -d dist)
+npm run dev          # Dev server at http://localhost:8080
+npm run build        # Production build (base path: /20260513-dxscms.dbonwer/)
+npm run build:dev    # Build in development mode
+npm run lint         # ESLint
+npm run test         # Run tests once (vitest)
+npm run test:watch   # Watch mode
+npm run deploy       # Deploy to GitHub Pages (gh-pages -d dist)
 ```
 
 ## Architecture Overview
