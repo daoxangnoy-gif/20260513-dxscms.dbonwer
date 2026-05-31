@@ -1029,6 +1029,7 @@ export default function SRRSendDocsPage() {
   const [destNotes, setDestNotes] = useState<string>("");
   const [destDepositor, setDestDepositor] = useState<string>("");
   const [destReceiver, setDestReceiver] = useState<string>("");
+  const [selectedDestTab, setSelectedDestTab] = useState(999);
   // Post-arrival popup: appears after user saves "รับตรวจ" — ask ฝากต่อ or จบ
   const [arrivedPopupOpen, setArrivedPopupOpen] = useState(false);
   const [popupStep, setPopupStep] = useState<"choose" | "form">("choose");
@@ -1529,20 +1530,24 @@ export default function SRRSendDocsPage() {
   };
 
   // Export PO list (Ponumber / Partner / ยอดรวม) for a checkpoint column
-  const exportColumnExcel = (codes: string[], colLabel: string, docName: string) => {
+  const exportColumnExcel = (codes: string[], colLabel: string, docName: string, statusMap?: Record<string, string>) => {
     if (!codes.length) { toast({ title: "ไม่มีรายการสำหรับ Export", variant: "destructive" }); return; }
     const rows: any[] = codes.map((c, i) => {
       const p = poInfoMap[c];
-      return {
+      const row: any = {
         "#": i + 1,
         "PO Number": c,
         "Partner": p?.partner || "",
         "ยอดรวม": p?.total != null ? Number(p.total) : 0,
         "Currency": p?.currency_name || "",
       };
+      if (statusMap) row["สถานะสะแกน"] = statusMap[c] || "";
+      return row;
     });
     const total = rows.reduce((s, r) => s + (Number(r["ยอดรวม"]) || 0), 0);
-    rows.push({ "#": "", "PO Number": "", "Partner": "รวมทั้งหมด", "ยอดรวม": total, "Currency": "" });
+    const footer: any = { "#": "", "PO Number": "", "Partner": "รวมทั้งหมด", "ยอดรวม": total, "Currency": "" };
+    if (statusMap) footer["สถานะสะแกน"] = "";
+    rows.push(footer);
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "POs");
@@ -2023,535 +2028,470 @@ export default function SRRSendDocsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* สะแกนตรวจ (Destination) — rendered inline when scan tab active */}
-      {mainTab === "scan" && activeShipment && (
-        <div className="mt-3 border rounded-lg bg-card p-3 max-h-[calc(100vh-220px)] overflow-y-auto overflow-x-auto">
+      {/* สะแกนตรวจ — 2-panel redesign */}
+      {mainTab === "scan" && activeShipment && (() => {
+        // hist sorted ASC (oldest first)
+        const hist = movements
+          .filter(m => m.shipment_id === activeShipment.id)
+          .slice()
+          .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+        const originMv = hist.find(m => m.action === "origin_save");
+        const adjustMvs = hist.filter(m => m.action === "adjust");
+        const allHops = hist.filter(m => m.action !== "origin_save" && m.action !== "adjust");
+        const visibleHops = allHops.filter(m => m.action === "arrived");
+        const isClosed = allHops.some(m => m.action === "closed");
+        const lastHop = allHops[allHops.length - 1];
 
-          <div className="mb-3 flex items-start justify-between gap-3">
-            <div>
-              <h2 className="text-base font-semibold">บันทึกจุดเอกสาร — {activeShipment?.doc_name}</h2>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                ต้นทาง → ปลายทางตามลำดับ — คอลัมน์ขวาสุดคือจุดปัจจุบัน (active)
-              </p>
+        const adjustedOutFrom = (hopId: string): Set<string> => {
+          const out = new Set<string>();
+          for (const a of adjustMvs) {
+            try {
+              const meta = a.notes ? JSON.parse(a.notes) : null;
+              if (meta?.from_id === hopId) (a.codes || []).forEach(c => out.add(c));
+            } catch {}
+          }
+          return out;
+        };
+
+        const showActiveDest = !isClosed && (lastHop?.action !== "arrived");
+        const canEditNextDestination = !lastHop || lastHop.action === "forward";
+        const expectedAtThisHop = lastHop?.action === "forward" ? (lastHop.codes || []) : (activeShipment.origin_codes || []);
+
+        // Tab layout: [0=ต้นทาง, 1=ปลายทาง 1, ..., N=active]
+        const totalTabs = 1 + visibleHops.length + (showActiveDest ? 1 : 0);
+        const currentTab = Math.min(Math.max(0, selectedDestTab), Math.max(0, totalTabs - 1));
+        const isOriginTab = currentTab === 0;
+        const isActiveTab = showActiveDest && currentTab === totalTabs - 1;
+        const hopIdx = currentTab - 1;
+        const selectedHop = (!isOriginTab && !isActiveTab && hopIdx >= 0 && hopIdx < visibleHops.length) ? visibleHops[hopIdx] : null;
+
+        type S = "ตรง" | "ขาด" | "เกิน";
+        const statusBadgeCls = (s: S) =>
+          s === "ตรง" ? "bg-emerald-600 hover:bg-emerald-600 text-white" :
+          s === "ขาด" ? "bg-red-600 hover:bg-red-600 text-white" :
+                        "bg-orange-500 hover:bg-orange-500 text-white";
+
+        const buildStatusMap = (expected: string[], scanned: string[]): Record<string, S> => {
+          const scannedSet = new Set(scanned);
+          const expectedSet = new Set(expected);
+          const map: Record<string, S> = {};
+          expected.forEach(c => { map[c] = scannedSet.has(c) ? "ตรง" : "ขาด"; });
+          scanned.filter(c => !expectedSet.has(c)).forEach(c => { map[c] = "เกิน"; });
+          return map;
+        };
+
+        type PORow = { code: string; status: S };
+        const getLeftPOs = (): PORow[] => {
+          if (isOriginTab) {
+            const firstHopCodes = new Set(visibleHops[0]?.codes || []);
+            return (activeShipment.origin_codes || []).map(c => ({
+              code: c,
+              status: (firstHopCodes.size > 0 ? (firstHopCodes.has(c) ? "ตรง" : "ขาด") : "ขาด") as S,
+            }));
+          }
+          if (isActiveTab) {
+            const scannedSet = new Set(destCodes);
+            const expectedSet = new Set(expectedAtThisHop);
+            const extras = destCodes.filter(c => !expectedSet.has(c));
+            return [
+              ...expectedAtThisHop.map(c => ({ code: c, status: (scannedSet.has(c) ? "ตรง" : "ขาด") as S })),
+              ...extras.map(c => ({ code: c, status: "เกิน" as S })),
+            ];
+          }
+          if (selectedHop) {
+            const myIdx = allHops.findIndex(h => h.id === selectedHop.id);
+            let incoming: string[] = activeShipment.origin_codes || [];
+            for (let k = myIdx - 1; k >= 0; k--) {
+              if (allHops[k].action === "forward") { incoming = allHops[k].codes || []; break; }
+            }
+            const incomingSet = new Set(incoming);
+            const arrivedSet = new Set(selectedHop.codes || []);
+            const adjustedOut = adjustedOutFrom(selectedHop.id);
+            const extras = (selectedHop.codes || []).filter(c => !incomingSet.has(c) && !adjustedOut.has(c));
+            return [
+              ...incoming.filter(c => !adjustedOut.has(c)).map(c => ({ code: c, status: (arrivedSet.has(c) ? "ตรง" : "ขาด") as S })),
+              ...extras.map(c => ({ code: c, status: "เกิน" as S })),
+            ];
+          }
+          return [];
+        };
+        const leftPOs = getLeftPOs();
+        const leftTrong = leftPOs.filter(x => x.status === "ตรง").length;
+        const leftKhad = leftPOs.filter(x => x.status === "ขาด").length;
+        const leftGern = leftPOs.filter(x => x.status === "เกิน").length;
+
+        const afterForward = lastHop?.action === "forward";
+        const activeDepositor = afterForward ? (lastHop?.depositor_name || destDepositor) : destDepositor;
+        const activeReceiver = afterForward ? (lastHop?.receiver_name || destReceiver) : destReceiver;
+        const activeDestLocation = afterForward ? (lastHop?.location_name || destLocation) : destLocation;
+        const activeOriginLoc = (() => {
+          const prevArrived = [...allHops].reverse().find(h => h.action === "arrived");
+          return prevArrived?.location_name || activeShipment.origin_location || originMv?.location_name || "";
+        })();
+
+        return (
+          <div className="mt-3 border rounded-lg bg-card p-3">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold">บันทึกจุดเอกสาร — {activeShipment.doc_name}</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">เลือก tab เพื่อดูสถานะแต่ละจุด — แท็บขวาสุดคือจุดปัจจุบัน (active)</p>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => setMainTab("deposit")}>กลับไปรายการ</Button>
             </div>
-            <Button variant="outline" size="sm" onClick={() => setMainTab("deposit")}>กลับไปรายการ</Button>
-          </div>
 
+            <div className="flex gap-3" style={{ minHeight: 560 }}>
 
-          {activeShipment && (() => {
-            // hist sorted ASC (oldest first)
-            const hist = movements
-              .filter(m => m.shipment_id === activeShipment.id)
-              .slice()
-              .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-            const originMv = hist.find(m => m.action === "origin_save");
-            // Only "arrived" hops are shown as completed columns; "forward" is an internal
-            // state transition (triggered from the post-arrival popup) and not rendered.
-            // "adjust" records are side actions (เคลียร์ส่วนต่าง) and are NOT part of
-            // the main timeline; they're rendered in a separate "จุดเคลียร์เอกสาร" column.
-            const adjustMvs = hist.filter(m => m.action === "adjust");
-            const allHops = hist.filter(m => m.action !== "origin_save" && m.action !== "adjust");
-            // Only "arrived" hops are shown as columns. "closed" status is reflected
-            // as a "จบ" badge on the LAST arrived column (not a separate column).
-            const visibleHops = allHops.filter(m => m.action === "arrived");
-            const isClosed = allHops.some(m => m.action === "closed");
-            const lastHop = allHops[allHops.length - 1];
-            // Helper: codes that have been adjusted away from a given hop id
-            const adjustedOutFrom = (hopId: string): Set<string> => {
-              const out = new Set<string>();
-              for (const a of adjustMvs) {
-                try {
-                  const meta = a.notes ? JSON.parse(a.notes) : null;
-                  if (meta?.from_id === hopId) (a.codes || []).forEach(c => out.add(c));
-                } catch { /* ignore non-JSON notes */ }
-              }
-              return out;
-            };
-            const showActiveDest = !isClosed && (lastHop?.action !== "arrived");
-            const activeStepIdx = visibleHops.length + 1; // next ปลายทาง number
-            // Editable when no previous hop yet (first destination) or after forward
-            const canEditNextDestination = !lastHop || lastHop.action === "forward";
-            const canSaveScan = destCodes.length > 0;
-            // Expected list at the current point = codes received at previous hop (or origin)
-            const expectedAtThisHop = (lastHop?.action === "forward" ? (lastHop.codes || []) : (activeShipment.origin_codes || []));
-            
+              {/* ===== LEFT: PO Status List ===== */}
+              <div className="w-[200px] shrink-0 border rounded-lg flex flex-col">
+                <div className="p-2 bg-muted border-b rounded-t-lg">
+                  <div className="text-xs font-semibold">
+                    {isOriginTab ? "ต้นทาง" : isActiveTab ? `ปลายทาง ${currentTab} (active)` : `ปลายทาง ${currentTab}`}
+                  </div>
+                  <div className="flex flex-wrap gap-x-2 text-[10px] mt-0.5">
+                    <span className="text-muted-foreground">{leftPOs.length} รายการ</span>
+                    {leftTrong > 0 && <span className="text-emerald-700 font-medium">{leftTrong} ตรง</span>}
+                    {leftKhad > 0 && <span className="text-red-700 font-medium">{leftKhad} ขาด</span>}
+                    {leftGern > 0 && <span className="text-orange-700 font-medium">{leftGern} เกิน</span>}
+                  </div>
+                </div>
+                <ScrollArea className="flex-1" style={{ maxHeight: 500 }}>
+                  {leftPOs.length === 0 ? (
+                    <div className="p-4 text-center text-xs text-muted-foreground">ยังไม่มีรายการ</div>
+                  ) : (
+                    <ul className="divide-y text-[11px]">
+                      {leftPOs.map(({ code, status }, i) => (
+                        <li key={code + i} className="px-2 py-1 flex items-center gap-1">
+                          <span className="font-mono text-[10px] truncate flex-1 min-w-0">{i + 1}. {code}</span>
+                          <Badge className={`${statusBadgeCls(status)} text-[9px] px-1 py-0 shrink-0`}>{status}</Badge>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </ScrollArea>
+              </div>
 
-            // Helper: resize handle — free drag, allow any width (even very small / overlap)
-            const startResize = (idx: number, startX: number, startW: number, side: "left" | "right" = "right") => {
-              const onMove = (ev: MouseEvent) => {
-                const dx = ev.clientX - startX;
-                const w = Math.max(80, side === "left" ? startW - dx : startW + dx);
-                setColWidths(prev => ({ ...prev, [idx]: w }));
-              };
-              const onUp = () => {
-                window.removeEventListener("mousemove", onMove);
-                window.removeEventListener("mouseup", onUp);
-              };
-              window.addEventListener("mousemove", onMove);
-              window.addEventListener("mouseup", onUp);
-            };
+              {/* ===== RIGHT: Tab bar + Content ===== */}
+              <div className="flex-1 flex flex-col min-w-0">
 
-            const getWidth = (idx: number) => colWidths[idx] || (idx === activeStepIdx ? 420 : 300);
+                {/* Tab bar */}
+                <div className="flex gap-1 flex-wrap border-b pb-2 mb-3">
+                  {Array.from({ length: totalTabs }, (_, i) => {
+                    const isOrigin = i === 0;
+                    const isScanTab = showActiveDest && i === totalTabs - 1;
+                    const label = isOrigin ? "ต้นทาง" : `ปลายทาง ${i}`;
+                    return (
+                      <Button key={i} size="sm" variant={currentTab === i ? "default" : "outline"} className="h-7 text-xs gap-1" onClick={() => setSelectedDestTab(i)}>
+                        {label}
+                        {!isOrigin && !isScanTab && <CheckCircle2 className="w-3 h-3 text-emerald-500 shrink-0" />}
+                        {isScanTab && <span className="text-[9px] opacity-70">active</span>}
+                      </Button>
+                    );
+                  })}
+                </div>
 
+                {/* Tab content */}
+                <div className="flex-1 overflow-y-auto space-y-3 pr-1">
 
-
-            const matchesSearch = (code: string, q: string) => {
-              if (!q.trim()) return true;
-              const ql = q.toLowerCase();
-              if (code.toLowerCase().includes(ql)) return true;
-              const partner = poInfoMap[code]?.partner || "";
-              return partner.toLowerCase().includes(ql);
-            };
-
-            const ColHeader = ({ idx, children }: { idx: number; children: React.ReactNode }) => (
-              <>
-                {children}
-                <Input
-                  className="mt-1 h-7 text-xs"
-                  placeholder="ค้นหา PO / Partner..."
-                  value={colSearch[idx] || ""}
-                  onChange={(e) => setColSearch(prev => ({ ...prev, [idx]: e.target.value }))}
-                />
-              </>
-            );
-
-            const ResizeHandle = ({ idx, side = "right" }: { idx: number; side?: "left" | "right" }) => (
-              <div
-                onMouseDown={(e) => { e.preventDefault(); startResize(idx, e.clientX, getWidth(idx), side); }}
-                className="w-3 -mx-1.5 z-20 cursor-col-resize bg-transparent hover:bg-primary/40 active:bg-primary/60 self-stretch shrink-0"
-                title={side === "left" ? "ลากขอบซ้ายเพื่อปรับช่องนี้" : "ลากขอบขวาเพื่อปรับช่องนี้"}
-              />
-            );
-
-            return (
-              <div className="overflow-x-auto">
-                <div className="flex gap-0 items-stretch min-w-fit">
-                  {/* ต้นทาง column */}
-                  <div className="border rounded bg-muted/30 flex flex-col shrink-0" style={{ width: getWidth(0) }}>
-                    <div className="p-2 border-b bg-muted">
-                      <ColHeader idx={0}>
-                        <div className="text-xs text-muted-foreground">ต้นทาง</div>
-                        <div className="font-semibold text-sm">
-                          {activeShipment.origin_location || originMv?.location_name || "(ไม่ระบุ)"}
+                  {/* ── ต้นทาง tab ── */}
+                  {isOriginTab && (
+                    <>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <Label className="text-xs">ผู้ฝาก</Label>
+                          <Input className="h-8 text-xs bg-muted" value={activeShipment.depositor_name || "-"} readOnly />
                         </div>
-                        <div className="text-xs text-muted-foreground">
-                          เอกสาร {activeShipment.origin_codes.length} ชุด
-                          {originMv && ` • ${new Date(originMv.created_at).toLocaleString("th-TH")}`}
+                        <div>
+                          <Label className="text-xs">ผู้รับปลายทาง</Label>
+                          <Input className="h-8 text-xs bg-muted" value={activeShipment.receiver_name || "-"} readOnly />
                         </div>
-                        {visibleHops[0]?.location_name && (
-                          <div className="text-[11px] text-primary font-medium mt-0.5">
-                            → ฝากต่อ <b>{visibleHops[0].location_name}</b>
-                          </div>
-                        )}
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-6 text-[10px] px-2 mt-1 w-full"
-                          onClick={() => exportColumnExcel(activeShipment.origin_codes || [], `ต้นทาง_${activeShipment.origin_location || originMv?.location_name || ""}`, activeShipment.doc_name)}
-                        >
+                        <div>
+                          <Label className="text-xs">จุดต้นทาง</Label>
+                          <Input className="h-8 text-xs bg-muted" value={activeShipment.origin_location || originMv?.location_name || "-"} readOnly />
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                        <span>เอกสารทั้งหมด {activeShipment.origin_codes.length} ชุด</span>
+                        {originMv && <span>{new Date(originMv.created_at).toLocaleString("th-TH")}</span>}
+                        <Button size="sm" variant="outline" className="h-6 text-[10px] px-2 ml-auto" onClick={() => {
+                          const sMap = buildStatusMap(activeShipment.origin_codes || [], visibleHops[0]?.codes || []);
+                          exportColumnExcel(activeShipment.origin_codes || [], `ต้นทาง_${activeShipment.origin_location || ""}`, activeShipment.doc_name, sMap);
+                        }}>
                           <FileSpreadsheet className="w-3 h-3 mr-1" />Export Excel
                         </Button>
-                      </ColHeader>
-                    </div>
-                    <ScrollArea className="h-80">
-                      <ul className="divide-y text-xs">
-                        {activeShipment.origin_codes
-                          .filter(c => matchesSearch(c, colSearch[0] || ""))
-                          .map((c, i) => (
-                          <li key={c} className="px-2 py-1 font-mono">
-                            <div>{i + 1}. {c}</div>
-                            {poInfoMap[c]?.partner && <div className="text-[10px] text-muted-foreground truncate">{poInfoMap[c]!.partner}</div>}
-                          </li>
-                        ))}
-                      </ul>
-                    </ScrollArea>
-                    <AttachmentPanel
-                      movementId={originMv?.id || null}
-                      url={originMv?.attachment_url || null}
-                      uploadedBy={originMv?.attachment_uploaded_by || null}
-                      onChange={(newUrl, newUploader) => {
-                        if (!originMv) return;
-                        setMovements(prev => prev.map(x => x.id === originMv.id ? { ...x, attachment_url: newUrl, attachment_uploaded_by: newUploader ?? null } : x));
-                      }}
-                    />
-                  </div>
+                      </div>
+                      <div className="border rounded">
+                        <div className="px-2 py-1 bg-muted/40 text-[11px] text-muted-foreground border-b">{activeShipment.origin_codes.length} ชุด</div>
+                        <ScrollArea className="h-72">
+                          <ul className="divide-y text-xs">
+                            {activeShipment.origin_codes.map((c, i) => {
+                              const s = leftPOs[i]?.status ?? "ขาด";
+                              return (
+                                <li key={c} className="px-2 py-1.5 font-mono">
+                                  <div className="flex items-center justify-between gap-1">
+                                    <span>{i + 1}. {c}</span>
+                                    <Badge className={`${statusBadgeCls(s)} text-[9px] px-1 py-0`}>{s}</Badge>
+                                  </div>
+                                  {poInfoMap[c]?.partner && <div className="text-[10px] text-muted-foreground truncate">{poInfoMap[c]!.partner}</div>}
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </ScrollArea>
+                      </div>
+                      <AttachmentPanel
+                        movementId={originMv?.id || null}
+                        url={originMv?.attachment_url || null}
+                        uploadedBy={originMv?.attachment_uploaded_by || null}
+                        onChange={(newUrl, newUploader) => {
+                          if (!originMv) return;
+                          setMovements(prev => prev.map(x => x.id === originMv.id ? { ...x, attachment_url: newUrl, attachment_uploaded_by: newUploader ?? null } : x));
+                        }}
+                      />
+                    </>
+                  )}
 
-
-                  {/* completed hops (read-only) — only show arrived / closed */}
-                  {visibleHops.map((m, i) => {
-                    const colIdx = i + 1;
-                    // Compute incoming expected codes for this hop (origin for first, else previous forward)
-                    const myIdx = allHops.findIndex(h => h.id === m.id);
+                  {/* ── Completed hop tab ── */}
+                  {selectedHop && (() => {
+                    const hop = selectedHop;
+                    const myIdx = allHops.findIndex(h => h.id === hop.id);
                     let incoming: string[] = activeShipment.origin_codes || [];
                     for (let k = myIdx - 1; k >= 0; k--) {
                       if (allHops[k].action === "forward") { incoming = allHops[k].codes || []; break; }
                     }
-                    const arrivedSet = new Set(m.codes || []);
                     const incomingSet = new Set(incoming);
-                    // Subtract codes that have been adjusted away from this hop —
-                    // they no longer count as missing/extra here (they live in
-                    // จุดเคลียร์เอกสาร now).
-                    const adjustedOut = adjustedOutFrom(m.id);
+                    const arrivedSet = new Set(hop.codes || []);
+                    const adjustedOut = adjustedOutFrom(hop.id);
                     const missingArrAll = incoming.filter(c => !arrivedSet.has(c) && !adjustedOut.has(c));
-                    const extraArrAll = (m.codes || []).filter(c => !incomingSet.has(c) && !adjustedOut.has(c));
-                    const missCnt = missingArrAll.length;
-                    const extraCnt = extraArrAll.length;
-                    const isFull = missCnt === 0 && extraCnt === 0;
+                    const extraArrAll = (hop.codes || []).filter(c => !incomingSet.has(c) && !adjustedOut.has(c));
+                    const isFull = missingArrAll.length === 0 && extraArrAll.length === 0;
+                    const isLastCompletedHop = hop.id === lastHop?.id && lastHop?.action === "arrived" && !isClosed;
+                    const allDisplayCodes = [...incoming.filter(c => !adjustedOut.has(c)), ...extraArrAll];
+                    const sMap = buildStatusMap(incoming.filter(c => !adjustedOut.has(c)), (hop.codes || []).filter(c => !adjustedOut.has(c)));
+                    const myAllIdx = allHops.findIndex(h => h.id === hop.id);
+                    const nextForward = allHops.slice(myAllIdx + 1).find(h => h.action === "forward");
+                    const nextVisible = visibleHops[hopIdx + 1];
+                    const nextLoc = nextForward?.location_name || nextVisible?.location_name;
                     return (
-                      <FragmentRow key={m.id}>
-                        <ResizeHandle idx={colIdx} side="left" />
-                        <div className="border rounded flex flex-col shrink-0" style={{ width: getWidth(colIdx) }}>
-                          <div className="p-2 border-b bg-muted">
-                            <ColHeader idx={colIdx}>
-                              <div className="text-xs text-muted-foreground flex items-center gap-1 flex-wrap">
-                                <span>ปลายทาง {i + 1} — {ACTION_LABELS[m.action] || m.action}</span>
-                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                                <span className="text-emerald-700 font-medium">เสร็จ</span>
-                                <Badge variant="outline" className={isFull ? "border-emerald-400 text-emerald-700 bg-emerald-50" : "border-amber-400 text-amber-700 bg-amber-50"}>
-                                  {isFull ? "ครบ" : `diff ${missCnt + extraCnt}${missCnt ? ` (ขาด ${missCnt})` : ""}${extraCnt ? ` (เกิน ${extraCnt})` : ""}`}
-                                </Badge>
-                                {isClosed && i === visibleHops.length - 1 && (
-                                  <Badge className="bg-rose-600 text-white">จบล็อต</Badge>
-                                )}
-                                <Button
-                                  size="sm"
-                                  variant={isFull ? "outline" : "default"}
-                                  disabled={isFull}
-                                  className="h-6 text-[10px] px-2 ml-auto"
-                                  onClick={() => openAdjust(m.id, m.location_name, missingArrAll, extraArrAll)}
-                                  title={isFull ? "เอกสารครบแล้ว — ไม่ต้อง adjust" : "เคลียร์เอกสารส่วนต่างไปยังจุดอื่น"}
-                                >Adjust doc</Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-6 text-[10px] px-2"
-                                  onClick={() => exportColumnExcel(m.codes || [], `ปลายทาง${i + 1}_${m.location_name}`, activeShipment.doc_name)}
-                                  title="Export Excel รายการ PO ที่จุดนี้"
-                                >
-                                  <FileSpreadsheet className="w-3 h-3 mr-1" />Excel
-                                </Button>
-                              </div>
-                              {(m.depositor_name || m.receiver_name) && (
-                                <div className="text-[10px] text-muted-foreground">
-                                  {m.depositor_name && <>ผู้ฝาก: <b>{m.depositor_name}</b></>}
-                                  {m.depositor_name && m.receiver_name && " • "}
-                                  {m.receiver_name && <>ผู้รับ: <b>{m.receiver_name}</b></>}
-                                </div>
-                              )}
-                              <div className="font-semibold text-sm">{m.location_name}</div>
-                              <div className="text-xs text-muted-foreground">
-                                {(m.codes || []).length} ชุด • {new Date(m.created_at).toLocaleString("th-TH")}
-                              </div>
-                              {(() => {
-                                // Find the next destination this point forwarded to:
-                                // a "forward" record after this hop OR the next visible arrived/closed location.
-                                const nextForward = allHops.slice(myIdx + 1).find(h => h.action === "forward");
-                                const nextVisible = visibleHops[i + 1];
-                                const nextLoc = nextForward?.location_name || nextVisible?.location_name;
-                                if (!nextLoc) return null;
-                                return (
-                                  <div className="text-[11px] text-primary font-medium mt-0.5">
-                                    → ฝากต่อ <b>{nextLoc}</b>
-                                  </div>
-                                );
-                              })()}
-                              {m.notes && <div className="text-xs italic text-muted-foreground mt-1">{m.notes}</div>}
-                              {m.id === lastHop?.id && lastHop?.action === "arrived" && !isClosed && (
-                                <div className="flex flex-wrap gap-1 pt-1.5">
-                                  <Button size="sm" variant="outline" className="h-7 text-xs flex-1 min-w-[110px]" onClick={rescanLastArrived}>
-                                    สะแกนตรวจอีกครั้ง
-                                  </Button>
-                                  <Button size="sm" variant="secondary" className="h-7 text-xs flex-1 min-w-[80px]" onClick={() => {
-                                    setPopupStep("choose");
-                                    setPopupDepositor("");
-                                    setPopupReceiver("");
-                                    setPopupDestination("");
-                                    setArrivedPopupOpen(true);
-                                  }}>ฝากต่อ</Button>
-                                  <Button size="sm" variant="destructive" className="h-7 text-xs flex-1 min-w-[80px]" onClick={() => { if (window.confirm("ยืนยันการจบล็อตเอกสารนี้?")) closeAfterArrived(); }}>จบล็อตนี้</Button>
-                                </div>
-                              )}
-                            </ColHeader>
+                      <>
+                        <div className="grid grid-cols-3 gap-2">
+                          <div>
+                            <Label className="text-xs">ชื่อผู้ฝาก</Label>
+                            <Input className="h-8 text-xs bg-muted" value={hop.depositor_name || "-"} readOnly />
                           </div>
-                          <ScrollArea className="h-80">
+                          <div>
+                            <Label className="text-xs">ชื่อผู้รับ</Label>
+                            <Input className="h-8 text-xs bg-muted" value={hop.receiver_name || "-"} readOnly />
+                          </div>
+                          <div>
+                            <Label className="text-xs">จุดปลายทาง</Label>
+                            <Input className="h-8 text-xs bg-muted" value={hop.location_name} readOnly />
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 flex-wrap text-xs">
+                          <span className="text-muted-foreground">{new Date(hop.created_at).toLocaleString("th-TH")}</span>
+                          <Badge variant="outline" className={isFull ? "border-emerald-400 text-emerald-700 bg-emerald-50" : "border-amber-400 text-amber-700 bg-amber-50"}>
+                            {isFull ? "ครบ" : `diff ${missingArrAll.length + extraArrAll.length}${missingArrAll.length ? ` (ขาด ${missingArrAll.length})` : ""}${extraArrAll.length ? ` (เกิน ${extraArrAll.length})` : ""}`}
+                          </Badge>
+                          {isClosed && hop.id === lastHop?.id && <Badge className="bg-rose-600 text-white">จบล็อต</Badge>}
+                          {nextLoc && <span className="text-primary text-[11px]">→ ฝากต่อ <b>{nextLoc}</b></span>}
+                          <div className="ml-auto flex gap-1">
+                            {!isFull && (
+                              <Button size="sm" variant="default" className="h-6 text-[10px] px-2" onClick={() => openAdjust(hop.id, hop.location_name, missingArrAll, extraArrAll)}>Adjust doc</Button>
+                            )}
+                            <Button size="sm" variant="outline" className="h-6 text-[10px] px-2" onClick={() => exportColumnExcel(hop.codes || [], `ปลายทาง${currentTab}_${hop.location_name}`, activeShipment.doc_name, sMap)}>
+                              <FileSpreadsheet className="w-3 h-3 mr-1" />Export Excel
+                            </Button>
+                          </div>
+                        </div>
+                        {hop.notes && <div className="text-xs italic text-muted-foreground">{hop.notes}</div>}
+                        <div className="border rounded">
+                          <div className="px-2 py-1 bg-muted/40 text-[11px] text-muted-foreground border-b">{allDisplayCodes.length} ชุด</div>
+                          <ScrollArea className="h-64">
                             <ul className="divide-y text-xs">
-                              {(() => {
-                                // Display = incoming expected codes (green=scanned/matched, yellow=missing/diff)
-                                // Also append any EXTRA scanned codes that weren't expected (also yellow).
-                                // Sort: missing (ขาด) first, then extras, then matched — so diff is visible without scrolling.
-                                const scannedSet = new Set(m.codes || []);
-                                const incomingArr = incoming.filter(c => !adjustedOut.has(c));
-                                const extraScanned = (m.codes || []).filter(c => !incomingSet.has(c) && !adjustedOut.has(c));
-                                const missingArr = incomingArr.filter(c => !scannedSet.has(c));
-                                const matchedArr = incomingArr.filter(c => scannedSet.has(c));
-                                const merged = [...missingArr, ...extraScanned, ...matchedArr];
-                                return merged
-                                  .filter(c => matchesSearch(c, colSearch[colIdx] || ""))
-                                  .map((c, idx) => {
-                                    const isScanned = scannedSet.has(c);
-                                    const isExpected = incomingSet.has(c);
-                                    const cls = isScanned && isExpected
-                                      ? "bg-emerald-50"          // green: matched
-                                      : !isScanned && isExpected
-                                        ? "bg-amber-200"         // yellow: missing (diff)
-                                        : "bg-amber-50";         // light amber: extra scanned
-                                    return (
-                                      <li key={c + idx} className={`px-2 py-1 font-mono ${cls}`}>
-                                        <div className="flex items-center justify-between gap-1">
-                                          <span>{idx + 1}. {c}</span>
-                                          {!isScanned && isExpected && <span className="text-[10px] text-amber-800 font-bold">ขาด</span>}
-                                          {isScanned && !isExpected && <span className="text-[10px] text-amber-700 font-semibold">เกิน</span>}
-                                        </div>
-                                        {poInfoMap[c]?.partner && <div className="text-[10px] text-muted-foreground truncate">{poInfoMap[c]!.partner}</div>}
-                                      </li>
-                                    );
-                                  });
-                              })()}
+                              {allDisplayCodes.map((c, i) => {
+                                const s = (sMap[c] ?? "เกิน") as S;
+                                const cls = s === "ตรง" ? "bg-emerald-50" : s === "ขาด" ? "bg-amber-200" : "bg-amber-50";
+                                return (
+                                  <li key={c + i} className={`px-2 py-1.5 font-mono ${cls}`}>
+                                    <div className="flex items-center justify-between gap-1">
+                                      <span>{i + 1}. {c}</span>
+                                      <Badge className={`${statusBadgeCls(s)} text-[9px] px-1 py-0`}>{s}</Badge>
+                                    </div>
+                                    {poInfoMap[c]?.partner && <div className="text-[10px] text-muted-foreground truncate">{poInfoMap[c]!.partner}</div>}
+                                  </li>
+                                );
+                              })}
                             </ul>
                           </ScrollArea>
-                          <AttachmentPanel
-                            movementId={m.id}
-                            url={m.attachment_url || null}
-                            uploadedBy={m.attachment_uploaded_by || null}
-                            onChange={(newUrl, newUploader) => setMovements(prev => prev.map(x => x.id === m.id ? { ...x, attachment_url: newUrl, attachment_uploaded_by: newUploader ?? null } : x))}
-                          />
                         </div>
-
-                      </FragmentRow>
+                        <AttachmentPanel
+                          movementId={hop.id}
+                          url={hop.attachment_url || null}
+                          uploadedBy={hop.attachment_uploaded_by || null}
+                          onChange={(newUrl, newUploader) => setMovements(prev => prev.map(x => x.id === hop.id ? { ...x, attachment_url: newUrl, attachment_uploaded_by: newUploader ?? null } : x))}
+                        />
+                        {isLastCompletedHop && (
+                          <div className="flex items-center gap-2 pt-1 border-t flex-wrap">
+                            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={rescanLastArrived}>สะแกนตรวจอีกครั้ง</Button>
+                            <Button size="sm" variant="secondary" className="h-7 text-xs" onClick={() => { setPopupStep("choose"); setPopupDepositor(""); setPopupReceiver(""); setPopupDestination(""); setArrivedPopupOpen(true); }}>ฝากต่อ</Button>
+                            <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={() => { if (window.confirm("ยืนยันการจบล็อตเอกสารนี้?")) closeAfterArrived(); }}>จบล็อตนี้</Button>
+                          </div>
+                        )}
+                      </>
                     );
-                  })}
+                  })()}
 
-                  {/* จุดเคลียร์เอกสาร — แสดงเฉพาะเมื่อมีการ adjust อย่างน้อย 1 ครั้ง
-                       1 คอลัมน์รวมต่อ shipment, แยก section ตาม location ปลายทางที่ adjust ไป */}
+                  {/* ── Active scan tab ── */}
+                  {isActiveTab && (
+                    <>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <Label className="text-xs">ชื่อผู้ฝาก <span className="text-destructive">*</span></Label>
+                          <Input className={`h-8 text-xs ${afterForward ? "bg-muted" : ""}`} placeholder="พิมพ์ชื่อผู้ฝาก" value={activeDepositor} onChange={(e) => setDestDepositor(e.target.value)} readOnly={afterForward} disabled={!canEditNextDestination && !afterForward} />
+                        </div>
+                        <div>
+                          <Label className="text-xs">ชื่อผู้รับ <span className="text-destructive">*</span></Label>
+                          <Input className={`h-8 text-xs ${afterForward ? "bg-muted" : ""}`} placeholder="พิมพ์ชื่อผู้รับ" value={activeReceiver} onChange={(e) => setDestReceiver(e.target.value)} readOnly={afterForward} disabled={!canEditNextDestination && !afterForward} />
+                        </div>
+                        <div>
+                          <Label className="text-xs">จุดปลายทาง <span className="text-destructive">*</span></Label>
+                          {afterForward ? (
+                            <Input className="h-8 text-xs bg-muted" value={activeDestLocation} readOnly />
+                          ) : (
+                            <LocationCombobox value={destLocation} onChange={setDestLocation} options={locations} placeholder="พิมพ์ หรือเลือกจุด..." disabled={!canEditNextDestination} />
+                          )}
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <Label className="text-xs">จุดต้นทาง</Label>
+                          <Input className="h-8 text-xs bg-muted" value={activeOriginLoc} readOnly />
+                        </div>
+                        <div>
+                          <Label className="text-xs">หมายเหตุ</Label>
+                          <Input className="h-8 text-xs" placeholder="หมายเหตุ (optional)" value={destNotes} onChange={(e) => setDestNotes(e.target.value)} />
+                        </div>
+                      </div>
+                      {expectedAtThisHop.length > 0 && (() => {
+                        const prevArrived = [...allHops].reverse().find(h => h.action === "arrived");
+                        const prevArrivedSet = new Set(prevArrived?.codes || []);
+                        const scannedSet = new Set(destCodes);
+                        const isFirst = !prevArrived;
+                        return (
+                          <div className="border rounded">
+                            <div className="px-2 py-1 bg-muted/40 text-[11px] text-muted-foreground flex items-center justify-between border-b">
+                              <span>คาดว่ารับ {expectedAtThisHop.length} ชุด</span>
+                              <span className="text-amber-700">เหลือง = ส่วนต่างจากจุดก่อน</span>
+                            </div>
+                            <ScrollArea className="h-40">
+                              <ul className="divide-y text-xs">
+                                {expectedAtThisHop.map((c, idx) => {
+                                  const isDiff = !isFirst && !prevArrivedSet.has(c);
+                                  const isScanned = scannedSet.has(c);
+                                  const cls = isScanned ? "bg-emerald-50" : isDiff ? "bg-amber-100" : "";
+                                  return (
+                                    <li key={c} className={`px-2 py-1 font-mono ${cls}`}>
+                                      <div className="flex items-center justify-between gap-1">
+                                        <span>{idx + 1}. {c}</span>
+                                        {isDiff && !isScanned && <span className="text-[10px] text-amber-800 font-bold">diff</span>}
+                                        {isScanned && <CheckCircle2 className="w-3 h-3 text-emerald-600" />}
+                                      </div>
+                                      {poInfoMap[c]?.partner && <div className="text-[10px] text-muted-foreground truncate">{poInfoMap[c]!.partner}</div>}
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            </ScrollArea>
+                          </div>
+                        );
+                      })()}
+                      <ScannerPanel codes={destCodes} setCodes={setDestCodes} otherList={expectedAtThisHop} />
+                      <AttachmentPanel movementId={null} url={null} onChange={() => {}} />
+                      <div className="flex items-center justify-between gap-2 pt-1 border-t flex-wrap">
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => {
+                          const expectedSet = new Set(expectedAtThisHop);
+                          const sMap = buildStatusMap(expectedAtThisHop, destCodes);
+                          exportColumnExcel([...expectedAtThisHop, ...destCodes.filter(c => !expectedSet.has(c))], `ปลายทาง${currentTab}_active`, activeShipment.doc_name, sMap);
+                        }}>
+                          <FileSpreadsheet className="w-3 h-3 mr-1" />Export Excel
+                        </Button>
+                        <div className="flex items-center gap-2">
+                          <Button size="sm" variant="secondary" onClick={() => saveHop("arrived")}>
+                            <CheckCircle2 className="w-4 h-4 mr-1" />บันทึกตรวจ (รับตรวจ)
+                          </Button>
+                          <Button size="sm" variant="destructive" onClick={() => { if (window.confirm("ยืนยันการจบล็อตเอกสารนี้?")) saveHop("closed"); }}>
+                            <Save className="w-4 h-4 mr-1" />จบล็อตนี้
+                          </Button>
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {/* Compare result */}
+                  {compareResult && isActiveTab && (
+                    <div className={`p-3 rounded border ${compareResult.missing.length === 0 && compareResult.extra.length === 0 ? "bg-emerald-50 border-emerald-300" : "bg-amber-50 border-amber-300"}`}>
+                      <div className="flex items-center gap-2 font-medium text-sm">
+                        {compareResult.missing.length === 0 && compareResult.extra.length === 0
+                          ? <><CheckCircle2 className="w-5 h-5 text-emerald-600" />เอกสารฝาก {activeShipment.origin_codes.length} / เทียบ {destCodes.length} — ครบ</>
+                          : <><AlertCircle className="w-5 h-5 text-amber-600" />ขาด {compareResult.missing.length}{compareResult.extra.length > 0 ? `, เกิน ${compareResult.extra.length}` : ""}</>}
+                      </div>
+                      {isAdmin && (
+                        <Button size="sm" variant="outline" className="mt-2" onClick={downloadDiff}>
+                          <Download className="w-4 h-4 mr-1" />ดาวน์โหลด list ส่วนต่าง
+                        </Button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Adjust section */}
                   {adjustMvs.length > 0 && (() => {
-                    const colIdx = 9000; // distinct column key for resize/search
-                    // group by target location_name, in order of first appearance
                     const byTarget: Record<string, Movement[]> = {};
                     const order: string[] = [];
-                    adjustMvs
-                      .slice()
-                      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+                    adjustMvs.slice().sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
                       .forEach(a => {
                         if (!byTarget[a.location_name]) { byTarget[a.location_name] = []; order.push(a.location_name); }
                         byTarget[a.location_name].push(a);
                       });
                     const total = adjustMvs.reduce((s, a) => s + (a.codes || []).length, 0);
                     return (
-                      <FragmentRow>
-                        <ResizeHandle idx={colIdx} side="left" />
-                        <div className="border-2 border-dashed border-amber-400 rounded bg-amber-50/40 flex flex-col shrink-0" style={{ width: getWidth(colIdx) }}>
-                          <div className="p-2 border-b bg-amber-100/60">
-                            <ColHeader idx={colIdx}>
-                              <div className="text-xs text-amber-900 font-semibold flex items-center gap-1">
-                                <MapPin className="w-3.5 h-3.5" /> จุดเคลียร์เอกสาร
-                              </div>
-                              <div className="text-[11px] text-amber-800">
-                                เคลียร์ทั้งหมด {total} ชุด • {order.length} จุดปลายทาง
-                              </div>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-6 text-[10px] px-2 mt-1 w-full"
-                                onClick={() => exportColumnExcel(adjustMvs.flatMap(a => a.codes || []), `จุดเคลียร์เอกสาร`, activeShipment.doc_name)}
-                              >
-                                <FileSpreadsheet className="w-3 h-3 mr-1" />Export Excel
-                              </Button>
-                            </ColHeader>
-                          </div>
-                          <ScrollArea className="h-80">
-                            <div className="divide-y text-xs">
-                              {order.map(loc => {
-                                const recs = byTarget[loc];
-                                const codes = recs.flatMap(r => r.codes || []);
-                                const filtered = codes.filter(c => matchesSearch(c, colSearch[colIdx] || ""));
-                                return (
-                                  <div key={loc} className="p-2">
-                                    <div className="text-[11px] font-semibold text-amber-900 mb-1">
-                                      → {loc} <span className="text-amber-700 font-normal">({codes.length} ชุด)</span>
-                                    </div>
-                                    <ul className="space-y-0.5">
-                                      {filtered.map((c, idx) => {
-                                        const fromRec = recs.find(r => (r.codes || []).includes(c));
-                                        let fromName = "";
-                                        try { fromName = fromRec?.notes ? (JSON.parse(fromRec.notes)?.from || "") : ""; } catch {}
-                                        return (
-                                          <li key={c + idx} className="px-1.5 py-1 font-mono bg-white/70 rounded border border-amber-200">
-                                            <div className="flex items-center justify-between gap-1">
-                                              <span>{idx + 1}. {c}</span>
-                                              {fromName && <span className="text-[9px] text-amber-700">จาก: {fromName}</span>}
-                                            </div>
-                                            {poInfoMap[c]?.partner && <div className="text-[10px] text-muted-foreground truncate">{poInfoMap[c]!.partner}</div>}
-                                          </li>
-                                        );
-                                      })}
-                                    </ul>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </ScrollArea>
+                      <div className="border-2 border-dashed border-amber-400 rounded bg-amber-50/40 p-2">
+                        <div className="flex items-center gap-1 text-xs text-amber-900 font-semibold mb-2">
+                          <MapPin className="w-3.5 h-3.5" />จุดเคลียร์เอกสาร — {total} ชุด • {order.length} จุดปลายทาง
                         </div>
-                      </FragmentRow>
-                    );
-                  })()}
-
-                  {/* active column (scanner) - shown when ready to pick next destination */}
-                  {showActiveDest && (() => {
-                    const colIdx = activeStepIdx;
-                    // After "forward", header values come from the popup (saved on lastHop) — readonly
-                    const afterForward = lastHop?.action === "forward";
-                    const headerDepositor = afterForward ? (lastHop?.depositor_name || destDepositor) : destDepositor;
-                    const headerReceiver = afterForward ? (lastHop?.receiver_name || destReceiver) : destReceiver;
-                    const headerDestination = afterForward ? (lastHop?.location_name || destLocation) : destLocation;
-                    // (Expected list now lives in the previous column; nothing extra needed here.)
-
-                    return (
-                      <FragmentRow>
-                        <ResizeHandle idx={colIdx} side="left" />
-                        <div className="border-2 border-primary rounded flex flex-col shrink-0" style={{ width: getWidth(colIdx) }}>
-                          <div className="p-2 border-b bg-primary/10 space-y-1.5">
-                            <div className="text-xs font-semibold text-primary">▶ ปลายทาง {activeStepIdx} (active)</div>
-                            <div>
-                              <Label className="text-xs">ชื่อผู้ฝาก <span className="text-destructive">*</span></Label>
-                              <Input
-                                className={`h-8 text-xs ${afterForward ? "bg-muted" : ""}`}
-                                placeholder="พิมพ์ชื่อผู้ฝาก"
-                                value={headerDepositor}
-                                onChange={(e) => setDestDepositor(e.target.value)}
-                                readOnly={afterForward}
-                                disabled={!canEditNextDestination && !afterForward}
-                              />
-                            </div>
-                            <div>
-                              <Label className="text-xs">ชื่อผู้รับ <span className="text-destructive">*</span></Label>
-                              <Input
-                                className={`h-8 text-xs ${afterForward ? "bg-muted" : ""}`}
-                                placeholder="พิมพ์ชื่อผู้รับ"
-                                value={headerReceiver}
-                                onChange={(e) => setDestReceiver(e.target.value)}
-                                readOnly={afterForward}
-                                disabled={!canEditNextDestination && !afterForward}
-                              />
-                            </div>
-                            <div>
-                              <Label className="text-xs">จุดต้นทาง</Label>
-                              <Input
-                                className="h-8 text-xs bg-muted"
-                                value={(() => {
-                                  // origin of this point = previous arrived's location, or original origin
-                                  const prevArrived = [...allHops].reverse().find(h => h.action === "arrived");
-                                  return prevArrived?.location_name || activeShipment.origin_location || originMv?.location_name || "";
-                                })()}
-                                readOnly
-                              />
-                            </div>
-                            <div>
-                              <Label className="text-xs">จุดปลายทาง <span className="text-destructive">*</span></Label>
-                              {afterForward ? (
-                                <Input className="h-8 text-xs bg-muted" value={headerDestination} readOnly />
-                              ) : (
-                                <LocationCombobox value={destLocation} onChange={setDestLocation} options={locations} placeholder="พิมพ์ หรือเลือกจุด..." disabled={!canEditNextDestination} />
-                              )}
-                            </div>
-                            <Input
-                              className="h-8 text-xs"
-                              placeholder="หมายเหตุ (optional)"
-                              value={destNotes}
-                              onChange={(e) => setDestNotes(e.target.value)}
-                            />
-                            <Input
-                              className="h-7 text-xs"
-                              placeholder="ค้นหา PO / Partner..."
-                              value={colSearch[colIdx] || ""}
-                              onChange={(e) => setColSearch(prev => ({ ...prev, [colIdx]: e.target.value }))}
-                            />
-                          </div>
-
-                          {/* Expected list in active column — light yellow for diff items (carried forward from previous arrival) */}
-                          {expectedAtThisHop.length > 0 && (() => {
-                            // diff items = expected codes that did NOT arrive at the previous arrived hop
-                            const prevArrived = [...allHops].reverse().find(h => h.action === "arrived");
-                            const prevArrivedSet = new Set(prevArrived?.codes || []);
-                            const scannedSet = new Set(destCodes);
-                            const isFirst = !prevArrived;
+                        <div className="divide-y text-xs">
+                          {order.map(loc => {
+                            const recs = byTarget[loc];
+                            const codes = recs.flatMap(r => r.codes || []);
                             return (
-                              <div className="border-b">
-                                <div className="px-2 py-1 bg-muted/40 text-[11px] text-muted-foreground flex items-center justify-between">
-                                  <span>คาดว่ารับ {expectedAtThisHop.length} ชุด</span>
-                                  <span className="text-amber-700">เหลือง = ส่วนต่างจากจุดก่อน</span>
-                                </div>
-                                <ScrollArea className="h-40">
-                                  <ul className="divide-y text-xs">
-                                    {expectedAtThisHop
-                                      .filter(c => matchesSearch(c, colSearch[colIdx] || ""))
-                                      .map((c, idx) => {
-                                        const isDiff = !isFirst && !prevArrivedSet.has(c);
-                                        const isScanned = scannedSet.has(c);
-                                        const cls = isScanned
-                                          ? "bg-emerald-50"
-                                          : isDiff
-                                            ? "bg-amber-100"
-                                            : "";
-                                        return (
-                                          <li key={c} className={`px-2 py-1 font-mono ${cls}`}>
-                                            <div className="flex items-center justify-between gap-1">
-                                              <span>{idx + 1}. {c}</span>
-                                              {isDiff && !isScanned && <span className="text-[10px] text-amber-800 font-bold">diff</span>}
-                                              {isScanned && <CheckCircle2 className="w-3 h-3 text-emerald-600" />}
-                                            </div>
-                                            {poInfoMap[c]?.partner && <div className="text-[10px] text-muted-foreground truncate">{poInfoMap[c]!.partner}</div>}
-                                          </li>
-                                        );
-                                      })}
-                                  </ul>
-                                </ScrollArea>
+                              <div key={loc} className="py-1.5">
+                                <div className="text-[11px] font-semibold text-amber-900 mb-1">→ {loc} <span className="font-normal text-amber-700">({codes.length} ชุด)</span></div>
+                                <ul className="space-y-0.5">
+                                  {codes.map((c, idx) => {
+                                    const fromRec = recs.find(r => (r.codes || []).includes(c));
+                                    let fromName = "";
+                                    try { fromName = fromRec?.notes ? (JSON.parse(fromRec.notes)?.from || "") : ""; } catch {}
+                                    return (
+                                      <li key={c + idx} className="px-1.5 py-0.5 font-mono bg-white/70 rounded border border-amber-200 text-[10px] flex items-center justify-between gap-1">
+                                        <span>{idx + 1}. {c}</span>
+                                        {fromName && <span className="text-[9px] text-amber-700 shrink-0">จาก: {fromName}</span>}
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
                               </div>
                             );
-                          })()}
-
-                          <div className="p-2">
-                            <ScannerPanel codes={destCodes} setCodes={setDestCodes} otherList={expectedAtThisHop} />
-                          </div>
-                          <div className="p-2 border-t bg-muted/20 flex items-center justify-end gap-2 flex-wrap">
-                            <Button size="sm" variant="secondary" onClick={() => saveHop("arrived")}>
-                              <CheckCircle2 className="w-4 h-4 mr-1" />บันทึกตรวจ (รับตรวจ)
-                            </Button>
-                            <Button size="sm" variant="destructive" onClick={() => { if (window.confirm("ยืนยันการจบล็อตเอกสารนี้?")) saveHop("closed"); }}>
-                              <Save className="w-4 h-4 mr-1" />จบล็อตนี้
-                            </Button>
-                          </div>
-                          <AttachmentPanel
-                            movementId={null}
-                            url={null}
-                            onChange={() => {}}
-                          />
+                          })}
                         </div>
-
-                      </FragmentRow>
+                      </div>
                     );
                   })()}
+
                 </div>
-
-                {compareResult && (
-                  <div className={`mt-3 p-3 rounded border ${compareResult.missing.length === 0 && compareResult.extra.length === 0 ? "bg-emerald-50 border-emerald-300" : "bg-amber-50 border-amber-300"}`}>
-                    <div className="flex items-center gap-2 font-medium text-sm">
-                      {compareResult.missing.length === 0 && compareResult.extra.length === 0
-                        ? <><CheckCircle2 className="w-5 h-5 text-emerald-600" />เอกสารฝาก {activeShipment.origin_codes.length} / เทียบ {destCodes.length} — ครบ</>
-                        : <><AlertCircle className="w-5 h-5 text-amber-600" />ขาด {compareResult.missing.length}{compareResult.extra.length > 0 ? `, เกิน ${compareResult.extra.length}` : ""}</>}
-                    </div>
-                    {isAdmin && (
-                      <Button size="sm" variant="outline" className="mt-2" onClick={downloadDiff}>
-                        <Download className="w-4 h-4 mr-1" />ดาวน์โหลด list ส่วนต่าง
-                      </Button>
-                    )}
-                  </div>
-                )}
               </div>
-            );
-          })()}
-
-        </div>
-      )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Adjust doc dialog — เคลียร์เอกสารส่วนต่างจากจุด arrived ไปยังจุดอื่น */}
       <Dialog open={adjustOpen} onOpenChange={setAdjustOpen}>
