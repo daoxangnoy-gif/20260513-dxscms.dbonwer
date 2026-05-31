@@ -2025,13 +2025,16 @@ export default function SRRSendDocsPage() {
 
       {/* สะแกนตรวจ (Destination) — rendered inline when scan tab active */}
       {mainTab === "scan" && activeShipment && (
-        <div className="mt-3 border rounded-lg bg-card p-4 max-h-[calc(100vh-220px)] overflow-y-auto overflow-x-auto">
+        <div className="mt-3 border rounded-lg bg-card p-3 max-h-[calc(100vh-220px)] overflow-y-auto overflow-x-auto">
 
-          <div className="mb-3">
-            <h2 className="text-lg font-semibold">บันทึกจุดเอกสาร — {activeShipment?.doc_name}</h2>
-            <p className="text-sm text-muted-foreground">
-              ต้นทาง → ปลายทางตามลำดับ — คอลัมน์ขวาสุดเป็นจุดปัจจุบันที่ active (สะแกน + บันทึก)
-            </p>
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold">บันทึกจุดเอกสาร — {activeShipment?.doc_name}</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                ต้นทาง → ปลายทางตามลำดับ — คอลัมน์ขวาสุดคือจุดปัจจุบัน (active)
+              </p>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => setMainTab("deposit")}>กลับไปรายการ</Button>
           </div>
 
 
@@ -2088,7 +2091,7 @@ export default function SRRSendDocsPage() {
               window.addEventListener("mouseup", onUp);
             };
 
-            const getWidth = (idx: number) => colWidths[idx] || (idx === activeStepIdx ? 460 : 360);
+            const getWidth = (idx: number) => colWidths[idx] || (idx === activeStepIdx ? 420 : 300);
 
 
 
@@ -2509,7 +2512,7 @@ export default function SRRSendDocsPage() {
                           <div className="p-2">
                             <ScannerPanel codes={destCodes} setCodes={setDestCodes} otherList={expectedAtThisHop} />
                           </div>
-                          <div className="p-2 border-t bg-muted/20 flex flex-col gap-1.5">
+                          <div className="p-2 border-t bg-muted/20 flex items-center justify-end gap-2 flex-wrap">
                             <Button size="sm" variant="secondary" onClick={() => saveHop("arrived")}>
                               <CheckCircle2 className="w-4 h-4 mr-1" />บันทึกตรวจ (รับตรวจ)
                             </Button>
@@ -2547,9 +2550,6 @@ export default function SRRSendDocsPage() {
             );
           })()}
 
-          <div className="flex justify-end mt-3">
-            <Button variant="outline" onClick={() => setMainTab("deposit")}>กลับไปรายการ</Button>
-          </div>
         </div>
       )}
 
