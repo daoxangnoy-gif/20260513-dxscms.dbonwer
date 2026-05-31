@@ -15,6 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   FileSpreadsheet, Upload, Download, Loader2, AlertCircle, ClipboardPaste,
   RefreshCw, Calculator, Save, Search, Trash2, ChevronLeft, CheckCircle2,
+  ChevronDown, ChevronRight,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { cn } from "@/lib/utils";
@@ -168,6 +169,7 @@ export default function SAROrderFromStoreTab() {
   const [importDocs, setImportDocs] = useState<OfsImportDoc[]>([]);
   const [importDocsLoading, setImportDocsLoading] = useState(false);
   const [selectedDocIds, setSelectedDocIds] = useState<Set<string>>(new Set());
+  const [expandedDocIds, setExpandedDocIds] = useState<Set<string>>(new Set());
   const [hqRows, setHqRows] = useState<ProcessedRow[]>([]);
   const [hqFetched, setHqFetched] = useState(false);
   const [hqCalculated, setHqCalculated] = useState(false);
@@ -888,14 +890,15 @@ export default function SAROrderFromStoreTab() {
               )}
             </div>
 
-            {/* Doc list (compact) */}
-            <div className="shrink-0 max-h-52 overflow-y-auto border-b">
+            {/* Doc list (with expand/collapse) */}
+            <div className="shrink-0 max-h-64 overflow-y-auto border-b">
               {importDocsLoading ? (
                 <div className="flex items-center justify-center py-6"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
               ) : (
                 <table className="w-full text-xs">
                   <thead className="bg-muted sticky top-0 z-10">
                     <tr>
+                      <th className="px-1 py-1.5 w-7"></th>
                       <th className="px-2 py-1.5 w-8">
                         <Checkbox checked={importDocs.length > 0 && selectedDocIds.size === importDocs.length} onCheckedChange={c => setSelectedDocIds(c ? new Set(importDocs.map(d => d.id)) : new Set())} />
                       </th>
@@ -908,27 +911,76 @@ export default function SAROrderFromStoreTab() {
                   </thead>
                   <tbody>
                     {importDocs.length === 0
-                      ? <tr><td colSpan={6} className="text-center py-6 text-muted-foreground">ยังไม่มี Doc</td></tr>
-                      : importDocs.map(d => (
-                        <tr key={d.id} className={cn("border-t hover:bg-muted/40 cursor-pointer", selectedDocIds.has(d.id) && "bg-primary/5")} onClick={() => setSelectedDocIds(s => { const n = new Set(s); n.has(d.id) ? n.delete(d.id) : n.add(d.id); return n; })}>
-                          <td className="px-2 py-1 text-center" onClick={e => e.stopPropagation()}><Checkbox checked={selectedDocIds.has(d.id)} onCheckedChange={() => setSelectedDocIds(s => { const n = new Set(s); n.has(d.id) ? n.delete(d.id) : n.add(d.id); return n; })} /></td>
-                          <td className="px-2 py-1 font-mono">{d.doc_name}</td>
-                          <td className="px-2 py-1">{d.store_name}</td>
-                          <td className="px-2 py-1">
-                            <div className="flex items-center gap-1 justify-center flex-wrap">
-                              <Badge variant="secondary" className="text-[10px] px-1">Import {d.import_count}</Badge>
-                              <span className="text-muted-foreground text-[10px]">/</span>
-                              <Badge className="bg-emerald-100 text-emerald-700 border-emerald-300 text-[10px] px-1">ผ่าน {d.pass_count}</Badge>
-                              <span className="text-muted-foreground text-[10px]">/</span>
-                              <Badge className={cn("text-[10px] px-1 border", d.skip_count > 0 ? "bg-amber-100 text-amber-700 border-amber-300" : "bg-muted text-muted-foreground")}>Skip {d.skip_count}</Badge>
-                            </div>
-                          </td>
-                          <td className="px-2 py-1 text-muted-foreground">{new Date(d.created_at).toLocaleString()}</td>
-                          <td className="px-2 py-1 text-center" onClick={e => e.stopPropagation()}>
-                            <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" onClick={() => deleteImportDoc(d.id, d.doc_name)}><Trash2 className="w-3 h-3" /></Button>
-                          </td>
-                        </tr>
-                      ))}
+                      ? <tr><td colSpan={7} className="text-center py-6 text-muted-foreground">ยังไม่มี Doc</td></tr>
+                      : importDocs.map(d => {
+                        const isExpanded = expandedDocIds.has(d.id);
+                        const lineItems = (d.data || []) as OfsImportLine[];
+                        return (
+                          <>
+                            {/* Header row */}
+                            <tr
+                              key={d.id}
+                              className={cn("border-t hover:bg-muted/40 cursor-pointer", selectedDocIds.has(d.id) && "bg-primary/5")}
+                              onClick={() => setSelectedDocIds(s => { const n = new Set(s); n.has(d.id) ? n.delete(d.id) : n.add(d.id); return n; })}
+                            >
+                              {/* Expand toggle */}
+                              <td className="px-1 py-1 text-center" onClick={e => { e.stopPropagation(); setExpandedDocIds(s => { const n = new Set(s); n.has(d.id) ? n.delete(d.id) : n.add(d.id); return n; }); }}>
+                                <button className="p-0.5 rounded hover:bg-muted text-muted-foreground">
+                                  {isExpanded
+                                    ? <ChevronDown className="w-3.5 h-3.5" />
+                                    : <ChevronRight className="w-3.5 h-3.5" />
+                                  }
+                                </button>
+                              </td>
+                              <td className="px-2 py-1 text-center" onClick={e => e.stopPropagation()}>
+                                <Checkbox checked={selectedDocIds.has(d.id)} onCheckedChange={() => setSelectedDocIds(s => { const n = new Set(s); n.has(d.id) ? n.delete(d.id) : n.add(d.id); return n; })} />
+                              </td>
+                              <td className="px-2 py-1 font-mono">{d.doc_name}</td>
+                              <td className="px-2 py-1">{d.store_name}</td>
+                              <td className="px-2 py-1">
+                                <div className="flex items-center gap-1 justify-center flex-wrap">
+                                  <Badge variant="secondary" className="text-[10px] px-1">Import {d.import_count}</Badge>
+                                  <span className="text-muted-foreground text-[10px]">/</span>
+                                  <Badge className="bg-emerald-100 text-emerald-700 border-emerald-300 text-[10px] px-1">ผ่าน {d.pass_count}</Badge>
+                                  <span className="text-muted-foreground text-[10px]">/</span>
+                                  <Badge className={cn("text-[10px] px-1 border", d.skip_count > 0 ? "bg-amber-100 text-amber-700 border-amber-300" : "bg-muted text-muted-foreground")}>Skip {d.skip_count}</Badge>
+                                </div>
+                              </td>
+                              <td className="px-2 py-1 text-muted-foreground">{new Date(d.created_at).toLocaleString()}</td>
+                              <td className="px-2 py-1 text-center" onClick={e => e.stopPropagation()}>
+                                <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" onClick={() => deleteImportDoc(d.id, d.doc_name)}><Trash2 className="w-3 h-3" /></Button>
+                              </td>
+                            </tr>
+                            {/* Expanded line items */}
+                            {isExpanded && (
+                              <>
+                                {/* Sub-header */}
+                                <tr className="bg-muted/40 border-t">
+                                  <td colSpan={2} />
+                                  <td className="px-3 py-1 text-[10px] font-semibold text-muted-foreground">SKU Code</td>
+                                  <td className="px-2 py-1 text-[10px] font-semibold text-muted-foreground">Barcode</td>
+                                  <td className="px-2 py-1 text-[10px] font-semibold text-muted-foreground">Product Name LA</td>
+                                  <td className="px-2 py-1 text-right text-[10px] font-semibold text-muted-foreground">Qty</td>
+                                  <td />
+                                </tr>
+                                {lineItems.length === 0
+                                  ? <tr className="bg-muted/20 border-t"><td colSpan={7} className="px-3 py-1 text-[10px] text-muted-foreground italic">ไม่มีรายการ</td></tr>
+                                  : lineItems.map((item, idx) => (
+                                    <tr key={`${d.id}-${idx}`} className="bg-muted/20 border-t border-border/30">
+                                      <td colSpan={2} />
+                                      <td className="px-3 py-0.5 font-mono text-[10px]">{item.sku_code}</td>
+                                      <td className="px-2 py-0.5 text-[10px] text-muted-foreground">{item.main_barcode}</td>
+                                      <td className="px-2 py-0.5 text-[10px] truncate max-w-[200px]">{item.product_name_la}</td>
+                                      <td className="px-2 py-0.5 text-right text-[10px] font-medium">{item.qty?.toLocaleString()}</td>
+                                      <td />
+                                    </tr>
+                                  ))
+                                }
+                              </>
+                            )}
+                          </>
+                        );
+                      })}
                   </tbody>
                 </table>
               )}
