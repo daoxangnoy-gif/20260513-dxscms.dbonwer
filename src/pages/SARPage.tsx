@@ -15,6 +15,7 @@ import { buildSARFormulaRow } from "@/lib/sarExportFormulas";
 import { cn } from "@/lib/utils";
 import SAROnOrderDCTab from "@/components/SAROnOrderDCTab";
 import SARSkuNoOrderTab from "@/components/SARSkuNoOrderTab";
+import SAROrderFromStoreTab from "@/components/SAROrderFromStoreTab";
 import StorePriorityDialog from "@/components/StorePriorityDialog";
 import { SARRow, computeRow } from "@/lib/sarCalc";
 import { Percent, ListOrdered } from "lucide-react";
@@ -131,7 +132,7 @@ export default function SARPage() {
   const { toast } = useToast();
 
   // Tab state
-  const [activeTab, setActiveTab] = useState<"cal" | "on_order_dc" | "sku_no_order" | "docs">("cal");
+  const [activeTab, setActiveTab] = useState<"cal" | "on_order_dc" | "sku_no_order" | "docs" | "order_from_store">("cal");
   const [priorityOpen, setPriorityOpen] = useState(false);
 
   // Mode + filter state (restore from module cache for persistence across navigation)
@@ -1201,6 +1202,7 @@ export default function SARPage() {
             <TabsTrigger value="cal">คำนวน SAR</TabsTrigger>
             <TabsTrigger value="on_order_dc">On Order DC</TabsTrigger>
             <TabsTrigger value="sku_no_order">SKU No Order</TabsTrigger>
+            <TabsTrigger value="order_from_store">Order From Store</TabsTrigger>
             <TabsTrigger value="docs">Doc Snapshot</TabsTrigger>
           </TabsList>
         </div>
@@ -1443,6 +1445,10 @@ export default function SARPage() {
 
         <TabsContent value="sku_no_order" className="flex-1 overflow-hidden mt-0 data-[state=active]:flex flex-col">
           <SARSkuNoOrderTab />
+        </TabsContent>
+
+        <TabsContent value="order_from_store" className="flex-1 overflow-hidden mt-0 data-[state=active]:flex flex-col">
+          <SAROrderFromStoreTab />
         </TabsContent>
 
         <TabsContent value="docs" className="flex-1 overflow-hidden mt-0 data-[state=active]:flex flex-col">
