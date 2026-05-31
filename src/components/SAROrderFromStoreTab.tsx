@@ -133,13 +133,18 @@ function fmtFile(ts: Date) {
 
 // --------------- Component ---------------
 export default function SAROrderFromStoreTab() {
-  const { user, isAdmin, canDo } = useAuth();
+  const { user, isAdmin, canDo, userPermissions } = useAuth();
   const { toast } = useToast();
 
   const canImport = isAdmin || canDo("ofs_import", "view");
   const canHQ = isAdmin || canDo("ofs_hq", "view");
   const canResult = isAdmin || canDo("ofs_result", "view");
   const hasAny = canImport || canHQ || canResult;
+
+  // DEBUG
+  console.log("[OFS] isAdmin:", isAdmin, "| canImport:", canImport, "| canHQ:", canHQ);
+  console.log("[OFS] menu_crud:", userPermissions?.menu_crud);
+  console.log("[OFS] canDo(ofs_hq,view):", canDo("ofs_hq", "view"));
 
 
   const [subTab, setSubTab] = useState<OfsSubTab>("import_docs");
