@@ -133,13 +133,22 @@ function fmtFile(ts: Date) {
 
 // --------------- Component ---------------
 export default function SAROrderFromStoreTab() {
-  const { user, isAdmin, canDo } = useAuth();
+  const { user, isAdmin, canDo, userPermissions } = useAuth();
   const { toast } = useToast();
 
   const canImport = isAdmin || canDo("ofs_import", "view");
   const canHQ = isAdmin || canDo("ofs_hq", "view");
   const canResult = isAdmin || canDo("ofs_result", "view");
   const hasAny = canImport || canHQ || canResult;
+
+  // DEBUG — ลบออกหลัง debug เสร็จ
+  console.log("[OFS-PERM] isAdmin:", isAdmin);
+  console.log("[OFS-PERM] canDo ofs_import/view:", canDo("ofs_import", "view"));
+  console.log("[OFS-PERM] canDo ofs_hq/view:", canDo("ofs_hq", "view"));
+  console.log("[OFS-PERM] canDo ofs_result/view:", canDo("ofs_result", "view"));
+  console.log("[OFS-PERM] menu_crud keys:", userPermissions ? Object.keys(userPermissions.menu_crud) : "userPermissions=null");
+  console.log("[OFS-PERM] menu_crud.ofs_import:", userPermissions?.menu_crud?.["ofs_import"]);
+  console.log("[OFS-PERM] raw userPermissions:", userPermissions);
 
   const [subTab, setSubTab] = useState<OfsSubTab>("import");
   const initialSet = useRef(false);
