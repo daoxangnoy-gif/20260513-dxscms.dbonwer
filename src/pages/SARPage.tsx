@@ -128,7 +128,12 @@ function ElapsedTimer({ startedAt }: { startedAt: number }) {
 }
 
 export default function SARPage() {
-  const { user } = useAuth();
+  const { user, isAdmin, canDo } = useAuth();
+
+  const canCal      = isAdmin || canDo("read-cal",     "view");
+  const canOnOrder  = isAdmin || canDo("on-order-dc",  "view");
+  const canSkuNoOrd = isAdmin || canDo("sku-no-order", "view");
+  const canOFS      = isAdmin || canDo("ofs_import",   "view") || canDo("ofs_hq", "view") || canDo("ofs_result", "view");
   const { toast } = useToast();
 
   // Tab state
@@ -1199,15 +1204,15 @@ export default function SARPage() {
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)} className="h-full flex flex-col">
         <div className="border-b px-4 pt-2 bg-background">
           <TabsList>
-            <TabsTrigger value="cal">คำนวน SAR</TabsTrigger>
-            <TabsTrigger value="on_order_dc">On Order DC</TabsTrigger>
-            <TabsTrigger value="sku_no_order">SKU No Order</TabsTrigger>
-            <TabsTrigger value="order_from_store">Order From Store</TabsTrigger>
+            {canCal      && <TabsTrigger value="cal">คำนวน SAR</TabsTrigger>}
+            {canOnOrder  && <TabsTrigger value="on_order_dc">On Order DC</TabsTrigger>}
+            {canSkuNoOrd && <TabsTrigger value="sku_no_order">SKU No Order</TabsTrigger>}
+            {canOFS      && <TabsTrigger value="order_from_store">Order From Store</TabsTrigger>}
             <TabsTrigger value="docs">Doc Snapshot</TabsTrigger>
           </TabsList>
         </div>
 
-        <TabsContent value="cal" className="flex-1 overflow-hidden data-[state=active]:flex flex-col mt-0">
+        {canCal && <TabsContent value="cal" className="flex-1 overflow-hidden data-[state=active]:flex flex-col mt-0">
           {/* Toolbar */}
           <div className="border-b p-3 space-y-2 bg-muted/30">
             <div className="flex items-center gap-2 flex-wrap">
@@ -1437,19 +1442,25 @@ export default function SARPage() {
               </table>
             )}
           </div>
-        </TabsContent>
+        </TabsContent>}
 
-        <TabsContent value="on_order_dc" className="flex-1 overflow-hidden mt-0 data-[state=active]:flex flex-col">
-          <SAROnOrderDCTab />
-        </TabsContent>
+        {canOnOrder && (
+          <TabsContent value="on_order_dc" className="flex-1 overflow-hidden mt-0 data-[state=active]:flex flex-col">
+            <SAROnOrderDCTab />
+          </TabsContent>
+        )}
 
-        <TabsContent value="sku_no_order" className="flex-1 overflow-hidden mt-0 data-[state=active]:flex flex-col">
-          <SARSkuNoOrderTab />
-        </TabsContent>
+        {canSkuNoOrd && (
+          <TabsContent value="sku_no_order" className="flex-1 overflow-hidden mt-0 data-[state=active]:flex flex-col">
+            <SARSkuNoOrderTab />
+          </TabsContent>
+        )}
 
-        <TabsContent value="order_from_store" className="flex-1 overflow-hidden mt-0 data-[state=active]:flex flex-col">
-          <SAROrderFromStoreTab />
-        </TabsContent>
+        {canOFS && (
+          <TabsContent value="order_from_store" className="flex-1 overflow-hidden mt-0 data-[state=active]:flex flex-col">
+            <SAROrderFromStoreTab />
+          </TabsContent>
+        )}
 
         <TabsContent value="docs" className="flex-1 overflow-hidden mt-0 data-[state=active]:flex flex-col">
           <div className="px-4 py-2 flex items-center gap-2 border-b">
