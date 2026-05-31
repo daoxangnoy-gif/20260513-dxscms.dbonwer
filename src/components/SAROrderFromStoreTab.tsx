@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -916,10 +916,9 @@ export default function SAROrderFromStoreTab() {
                         const isExpanded = expandedDocIds.has(d.id);
                         const lineItems = (d.data || []) as OfsImportLine[];
                         return (
-                          <>
+                          <Fragment key={d.id}>
                             {/* Header row */}
                             <tr
-                              key={d.id}
                               className={cn("border-t hover:bg-muted/40 cursor-pointer", selectedDocIds.has(d.id) && "bg-primary/5")}
                               onClick={() => setSelectedDocIds(s => { const n = new Set(s); n.has(d.id) ? n.delete(d.id) : n.add(d.id); return n; })}
                             >
@@ -978,7 +977,7 @@ export default function SAROrderFromStoreTab() {
                                 }
                               </>
                             )}
-                          </>
+                          </Fragment>
                         );
                       })}
                   </tbody>
