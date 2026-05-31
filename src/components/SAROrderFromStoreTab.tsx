@@ -248,19 +248,33 @@ export default function SAROrderFromStoreTab() {
     setImportSaving(true);
     try {
       const codes = importRows.map(r => r.code);
-      // ไม่กรอง packing_size_qty=1 ตอน validate — barcode อาจอยู่ใน row ที่เป็น pack/box
-      // ค้น 3 ทาง: main_barcode / barcode / sku_code
-      const dmSel = "sku_code,main_barcode,barcode,product_name_la,buying_status,item_type,product_owner";
-      const [dmByMainBarcode, dmBySku, dmByBarcode] = await Promise.all([
-        queryInChunks<any>("data_master", "main_barcode", codes, dmSel),
-        queryInChunks<any>("data_master", "sku_code", codes, dmSel, q => q.eq("packing_size_qty", 1)),
-        queryInChunks<any>("data_master", "barcode", codes, dmSel),
+
+      // ขั้น 1: resolve import code (barcode/sku) → sku_code
+      // ค้นทุก row ไม่กรอง packing_size_qty เพราะ barcode อาจเป็น pack/box
+      const resSel = "sku_code,main_barcode,barcode";
+      const [resByMainBarcode, resBySku, resByBarcode] = await Promise.all([
+        queryInChunks<any>("data_master", "main_barcode", codes, resSel),
+        queryInChunks<any>("data_master", "sku_code", codes, resSel),
+        queryInChunks<any>("data_master", "barcode", codes, resSel),
       ]);
+      const codeToSku = new Map<string, string>();
+      resByMainBarcode.forEach((r: any) => { if (r.main_barcode && r.sku_code && !codeToSku.has(r.main_barcode)) codeToSku.set(r.main_barcode, r.sku_code); });
+      resBySku.forEach((r: any) => { if (r.sku_code && !codeToSku.has(r.sku_code)) codeToSku.set(r.sku_code, r.sku_code); });
+      resByBarcode.forEach((r: any) => { if (r.barcode && r.sku_code && !codeToSku.has(r.barcode)) codeToSku.set(r.barcode, r.sku_code); });
+
+      // ขั้น 2: ดึง data เฉพาะ packing_size_qty=1, distinct by sku_code
+      const resolvedSkus = [...new Set(Array.from(codeToSku.values()))];
+      const dmSel = "sku_code,main_barcode,product_name_la,buying_status,item_type,product_owner";
+      const dmRows = await queryInChunks<any>("data_master", "sku_code", resolvedSkus, dmSel, q => q.eq("packing_size_qty", 1));
+      const skuToDm = new Map<string, any>();
+      dmRows.forEach((r: any) => { if (r.sku_code && !skuToDm.has(r.sku_code)) skuToDm.set(r.sku_code, r); });
+
+      // build dmMap: import code → dm row (packing_size_qty=1)
       const dmMap: Record<string, any> = {};
-      // ลำดับความสำคัญ: main_barcode > sku_code > barcode (non-unit)
-      dmByMainBarcode.forEach((r: any) => { if (r.main_barcode && !dmMap[r.main_barcode]) dmMap[r.main_barcode] = r; });
-      dmBySku.forEach((r: any) => { if (r.sku_code && !dmMap[r.sku_code]) dmMap[r.sku_code] = r; });
-      dmByBarcode.forEach((r: any) => { if (r.barcode && !dmMap[r.barcode]) dmMap[r.barcode] = r; });
+      for (const [code, sku] of codeToSku.entries()) {
+        const dm = skuToDm.get(sku);
+        if (dm) dmMap[code] = dm;
+      }
 
       // Detect dup sku
       const skuToCode: Record<string, string[]> = {};
