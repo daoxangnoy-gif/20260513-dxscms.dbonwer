@@ -98,10 +98,13 @@ export function calcDOH(qty: number, avgSale: number): number {
 
 /** Apply all SAR formulas to a row in-place (returns new row) */
 export function computeRow(r: SARRow): SARRow {
+  const up = r.unit_pick > 0 ? r.unit_pick : 1;
   const s1 = calcSuggest1(r.stock_store, r.on_order, r.min_val, r.max_val);
   const s2 = calcSuggest2(r.stock_dc, s1);
   const tt = calcTTOrder(s2, r.stock_dc, r.unit_pick);
-  const fu = calcFinalOrderUnit(r.suggest_order_edit, tt, r.unit_pick);
+  // final_order_unit based on suggest1 (store demand, not DC-limited)
+  const s1Rounded = s1 > 0 ? Math.ceil(s1 / up) * up : 0;
+  const fu = calcFinalOrderUnit(r.suggest_order_edit, s1Rounded, r.unit_pick);
   const fuom = calcFinalOrderUOM(fu, r.unit_pick);
   return {
     ...r,

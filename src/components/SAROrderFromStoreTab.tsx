@@ -379,11 +379,11 @@ export default function SAROrderFromStoreTab() {
     for (const r of hqRows) {
       if (!byStore.has(r.store_name)) byStore.set(r.store_name, { ro: 0, po: 0 });
       const e = byStore.get(r.store_name)!;
-      // ใช้ qty_import เป็นเกณฑ์แยก RO/PO เหมือน handleHQSave
-      if (r.stock_dc >= r.qty_import) e.ro++; else e.po++;
+      const eu = getEffUnit(r);
+      if (r.stock_dc >= eu) e.ro++; else e.po++;
     }
     return Array.from(byStore.entries()).map(([store, { ro, po }]) => ({ store, ro, po }));
-  }, [hqRows, hqCalculated]);
+  }, [hqRows, hqCalculated, getEffUnit]);
 
   const handleFetchData = async () => {
     const selectedDocs = importDocs.filter(d => selectedDocIds.has(d.id));
@@ -527,13 +527,13 @@ export default function SAROrderFromStoreTab() {
       for (const r of hqRows) { if (!byStore.has(r.store_name)) byStore.set(r.store_name, []); byStore.get(r.store_name)!.push(r); }
       let saved = 0;
       for (const [storeName, rows] of byStore) {
-        const toSave = (r: ProcessedRow): ProcessedRow => {
+        const savedRows = rows.map(r => {
           const eu = getEffUnit(r);
           return { ...r, final_order_unit: eu, final_order_uom: eu / Math.max(r.unit_pick, 1) };
-        };
-        // RO = stock dc >= qty_import, PO = stock dc < qty_import
-        const roRows = rows.filter(r => r.stock_dc >= r.qty_import).map(toSave);
-        const poRows = rows.filter(r => r.stock_dc < r.qty_import).map(toSave);
+        });
+        // RO = stock_dc >= final_order_unit, PO = stock_dc < final_order_unit
+        const roRows = savedRows.filter(r => r.stock_dc >= r.final_order_unit);
+        const poRows = savedRows.filter(r => r.stock_dc < r.final_order_unit);
         if (roRows.length > 0) {
           const { error } = await (supabase as any).from("ofs_result_docs").insert({ doc_name: `${prefix}-RO-${storeName}`, doc_type: "RO", store_name: storeName, source_doc_ids: srcIds, item_count: roRows.length, data: roRows, user_id: user.id });
           if (error) throw error; saved++;
