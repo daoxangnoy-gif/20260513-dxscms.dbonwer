@@ -473,7 +473,9 @@ export default function UserManagementPage() {
       subs: subsByParent.get(main.id) || [],
     }));
     const mainIds = new Set(mains.map(m => m.id));
-    const orphans = menus.filter(m => m.parent_id && !mainIds.has(m.parent_id));
+    // subIds = ID ของ Sub ทุกตัว — ใช้กรอง orphan ไม่ให้รวม sub-sub ของ SAR
+    const subIds = new Set(mains.flatMap(main => (subsByParent.get(main.id) || []).map(s => s.id)));
+    const orphans = menus.filter(m => m.parent_id && !mainIds.has(m.parent_id) && !subIds.has(m.parent_id));
     if (orphans.length) groups.push({ main: { id: "_orphan", menu_code: "other", menu_name: "Other", menu_type: "Main", parent_id: null, sort_order: 999 } as MenuRow, subs: orphans });
     return groups;
   }, [menus]);
@@ -673,22 +675,45 @@ export default function UserManagementPage() {
                         })()}
                         {subs.map(s => {
                           const r = getRmp(s.id);
+                          const subSubs = menus.filter(m => m.parent_id === s.id).sort((a, b) => a.sort_order - b.sort_order);
                           return (
-                            <TableRow key={s.id}>
-                              <TableCell className="text-xs">
-                                <div className="font-medium pl-5 border-l-2 border-primary/20 ml-1">↳ {s.menu_name}</div>
-                                <div className="text-[10px] text-muted-foreground pl-6">{s.menu_code}</div>
-                              </TableCell>
-                              {(["can_view","can_create","can_edit","can_delete","can_export","can_import"] as const).map(f => (
-                                <TableCell key={f} className="text-center">
-                                  <Checkbox
-                                    checked={(r as any)[f]}
-                                    disabled={f !== "can_view" && !r.can_view}
-                                    onCheckedChange={(c) => setRmpField(s.id, f, !!c)}
-                                  />
+                            <Fragment key={s.id}>
+                              <TableRow>
+                                <TableCell className="text-xs">
+                                  <div className="font-medium pl-5 border-l-2 border-primary/20 ml-1">↳ {s.menu_name}</div>
+                                  <div className="text-[10px] text-muted-foreground pl-6">{s.menu_code}</div>
                                 </TableCell>
-                              ))}
-                            </TableRow>
+                                {(["can_view","can_create","can_edit","can_delete","can_export","can_import"] as const).map(f => (
+                                  <TableCell key={f} className="text-center">
+                                    <Checkbox
+                                      checked={(r as any)[f]}
+                                      disabled={f !== "can_view" && !r.can_view}
+                                      onCheckedChange={(c) => setRmpField(s.id, f, !!c)}
+                                    />
+                                  </TableCell>
+                                ))}
+                              </TableRow>
+                              {subSubs.map(ss => {
+                                const rss = getRmp(ss.id);
+                                return (
+                                  <TableRow key={ss.id} className="bg-muted/20">
+                                    <TableCell className="text-xs">
+                                      <div className="font-medium pl-10 border-l-2 border-primary/10 ml-3 text-muted-foreground">↳ {ss.menu_name}</div>
+                                      <div className="text-[10px] text-muted-foreground pl-11">{ss.menu_code}</div>
+                                    </TableCell>
+                                    {(["can_view","can_create","can_edit","can_delete","can_export","can_import"] as const).map(f => (
+                                      <TableCell key={f} className="text-center">
+                                        <Checkbox
+                                          checked={(rss as any)[f]}
+                                          disabled={f !== "can_view" && !rss.can_view}
+                                          onCheckedChange={(c) => setRmpField(ss.id, f, !!c)}
+                                        />
+                                      </TableCell>
+                                    ))}
+                                  </TableRow>
+                                );
+                              })}
+                            </Fragment>
                           );
                         })}
                       </Fragment>
