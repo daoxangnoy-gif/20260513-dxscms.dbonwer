@@ -1591,7 +1591,7 @@ export default function SRRSendDocsPage() {
             )}
           </div>
 
-          <div className="border rounded">
+          <div className="border rounded overflow-auto max-h-[calc(100vh-260px)]">
             <table className="w-full text-sm">
               <thead className="bg-muted sticky top-0 z-10">
                 <tr>
