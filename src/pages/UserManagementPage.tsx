@@ -199,57 +199,7 @@ export default function UserManagementPage() {
 
   const loadMenus = async () => {
     const { data } = await supabase.from("menus").select("id, menu_code, menu_name, menu_type, parent_id, sort_order").eq("is_active", true).order("sort_order");
-    const loaded = (data || []) as MenuRow[];
-    const changed = await ensureSarSubMenus(loaded);
-    if (changed) {
-      const { data: fresh } = await supabase.from("menus").select("id, menu_code, menu_name, menu_type, parent_id, sort_order").eq("is_active", true).order("sort_order");
-      setMenus((fresh || []) as MenuRow[]);
-    } else {
-      setMenus(loaded);
-    }
-  };
-
-  // ลำดับที่ต้องการ: read-cal(1) → on-order-dc(2) → sku-no-order(3) → ofs_import(4) → ofs_hq(5) → ofs_result(6)
-  const ensureSarSubMenus = async (loadedMenus: MenuRow[]): Promise<boolean> => {
-    const sarMenu = loadedMenus.find(m => m.menu_code === "sar");
-    if (!sarMenu) return false;
-    const children = loadedMenus.filter(m => m.parent_id === sarMenu.id);
-    const byCode = new Map(children.map(c => [c.menu_code, c]));
-
-    const desired: { menu_code: string; menu_name?: string; sort_order: number }[] = [
-      { menu_code: "read-cal",     menu_name: "Read & Cal",   sort_order: 1 },
-      { menu_code: "on-order-dc",  menu_name: "On Order DC",  sort_order: 2 },
-      { menu_code: "sku-no-order", menu_name: "SKU No Order", sort_order: 3 },
-      { menu_code: "ofs_import",                              sort_order: 4 },
-      { menu_code: "ofs_hq",                                  sort_order: 5 },
-      { menu_code: "ofs_result",                              sort_order: 6 },
-    ];
-
-    const ops: Promise<any>[] = [];
-
-    // Insert menus ที่ยังไม่มีใน DB (เฉพาะ 3 ตัวใหม่ที่มี menu_name)
-    const toInsert = desired.filter(d => d.menu_name && !byCode.has(d.menu_code));
-    if (toInsert.length) {
-      ops.push((supabase as any).from("menus").insert(
-        toInsert.map(d => ({
-          menu_code: d.menu_code, menu_name: d.menu_name,
-          menu_type: "Sub", parent_id: sarMenu.id,
-          sort_order: d.sort_order, is_active: true,
-        }))
-      ));
-    }
-
-    // แก้ sort_order ของ menus ที่มีอยู่แล้วแต่ลำดับผิด
-    for (const d of desired) {
-      const existing = byCode.get(d.menu_code);
-      if (existing && existing.sort_order !== d.sort_order) {
-        ops.push((supabase as any).from("menus").update({ sort_order: d.sort_order }).eq("id", existing.id));
-      }
-    }
-
-    if (!ops.length) return false;
-    await Promise.all(ops);
-    return true;
+    setMenus((data || []) as MenuRow[]);
   };
 
   const loadDivisions = async () => {
