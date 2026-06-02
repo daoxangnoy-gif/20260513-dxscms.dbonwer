@@ -165,6 +165,9 @@ export default function SAROrderFromStoreTab() {
   const [storeTypeCache, setStoreTypeCache] = useState<Record<string, string>>({});
   const [selectedStore, setSelectedStore] = useState("");
   const [importSaving, setImportSaving] = useState(false);
+  const [importStatus, setImportStatus] = useState<string>("");
+  const [importElapsed, setImportElapsed] = useState(0);
+  const importTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [lastSave, setLastSave] = useState<{ total: number; pass: number; skip: number } | null>(null);
   const [pendingSkips, setPendingSkips] = useState<SkipRow[]>([]);
 
@@ -253,11 +256,14 @@ export default function SAROrderFromStoreTab() {
   const handleImportSave = async () => {
     if (!selectedStore) return;
     setImportSaving(true);
+    setImportElapsed(0);
+    setImportStatus("เริ่มต้น...");
+    importTimerRef.current = setInterval(() => setImportElapsed(s => s + 1), 1000);
     try {
       const codes = importRows.map(r => r.code);
 
       // ขั้น 1: resolve import code (barcode/sku) → sku_code
-      // ค้นทุก row ไม่กรอง packing_size_qty เพราะ barcode อาจเป็น pack/box
+      setImportStatus(`1/5 · ค้นหา Barcode/SKU ${codes.length.toLocaleString()} รายการ...`);
       const resSel = "sku_code,main_barcode,barcode";
       const [resByMainBarcode, resBySku, resByBarcode] = await Promise.all([
         queryInChunks<any>("data_master", "main_barcode", codes, resSel),
@@ -271,6 +277,7 @@ export default function SAROrderFromStoreTab() {
 
       // ขั้น 2: ดึง data เฉพาะ packing_size_qty=1, distinct by sku_code
       const resolvedSkus = [...new Set(Array.from(codeToSku.values()))];
+      setImportStatus(`2/5 · ดึงข้อมูลสินค้า ${resolvedSkus.length.toLocaleString()} SKU...`);
       const dmSel = "sku_code,main_barcode,product_name_la,buying_status,item_type,product_owner";
       const dmRows = await queryInChunks<any>("data_master", "sku_code", resolvedSkus, dmSel, q => q.eq("packing_size_qty", 1));
       const skuToDm = new Map<string, any>();
@@ -290,10 +297,12 @@ export default function SAROrderFromStoreTab() {
 
       // Range store
       const allSkus = [...new Set(Object.values(dmMap).map((r: any) => r.sku_code).filter(Boolean) as string[])];
+      setImportStatus(`3/5 · ตรวจสอบ Range Store ${allSkus.length.toLocaleString()} SKU...`);
       const storeCode = selectedStore.split("-")[0];
       const rsRows = await queryInChunks<any>("range_store", "sku_code", allSkus, "sku_code", q => q.eq("apply_yn", "Y").like("store_name", storeCode + "%"));
       const rangeSet = new Set(rsRows.map((r: any) => r.sku_code));
 
+      setImportStatus(`4/5 · ตรวจเงื่อนไข ${importRows.length.toLocaleString()} รายการ...`);
       const skips: SkipRow[] = [];
       const valid: OfsImportLine[] = [];
 
@@ -310,6 +319,7 @@ export default function SAROrderFromStoreTab() {
         valid.push({ sku_code: dm.sku_code, main_barcode: dm.main_barcode ?? null, product_name_la: pnLa, qty: r.qty });
       }
 
+      setImportStatus(`5/5 · บันทึก Doc (ผ่าน ${valid.length.toLocaleString()} / skip ${skips.length.toLocaleString()})...`);
       const docName = `OFS-${selectedStore}-${fmtFile(new Date())}`;
       const { error } = await (supabase as any).from("ofs_import_docs").insert({
         doc_name: docName, store_name: selectedStore,
@@ -325,7 +335,11 @@ export default function SAROrderFromStoreTab() {
       await loadImportDocs();
     } catch (e: any) {
       toast({ title: "เกิดข้อผิดพลาด", description: e.message, variant: "destructive" });
-    } finally { setImportSaving(false); }
+    } finally {
+      setImportSaving(false);
+      setImportStatus("");
+      if (importTimerRef.current) { clearInterval(importTimerRef.current); importTimerRef.current = null; }
+    }
   };
 
   const downloadSkipList = () => {
@@ -893,6 +907,17 @@ export default function SAROrderFromStoreTab() {
               </PopoverContent>
             </Popover>
           </div>
+          {importSaving && (
+            <div className="py-2 space-y-1.5">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span className="truncate">{importStatus}</span>
+                <span className="ml-2 font-mono shrink-0">{importElapsed}s</span>
+              </div>
+              <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                <div className="h-full bg-primary rounded-full animate-pulse w-full" />
+              </div>
+            </div>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setStoreSelectOpen(false)} disabled={importSaving}>ยกเลิก</Button>
             <Button onClick={handleImportSave} disabled={importSaving || !selectedStore}>
