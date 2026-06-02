@@ -290,7 +290,8 @@ export default function SAROrderFromStoreTab() {
 
       // Range store
       const allSkus = [...new Set(Object.values(dmMap).map((r: any) => r.sku_code).filter(Boolean) as string[])];
-      const rsRows = await queryInChunks<any>("range_store", "sku_code", allSkus, "sku_code", q => q.eq("apply_yn", "Y").eq("store_name", selectedStore));
+      const storeCode = selectedStore.split("-")[0];
+      const rsRows = await queryInChunks<any>("range_store", "sku_code", allSkus, "sku_code", q => q.eq("apply_yn", "Y").like("store_name", storeCode + "%"));
       const rangeSet = new Set(rsRows.map((r: any) => r.sku_code));
 
       const skips: SkipRow[] = [];
