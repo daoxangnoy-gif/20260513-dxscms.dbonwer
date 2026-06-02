@@ -1310,6 +1310,16 @@ export default function RangeStorePage() {
         cache.stores = cache.storeList.map(s => ({ name: s.store_name, type_store: s.type_store })).sort((a, b) => a.name.localeCompare(b.name));
         cache.loaded.stores = true;
       }
+      // Ensure storeList loaded (for range kind validation)
+      if (kind === "range" && cache.storeList.length === 0) await loadStoreList();
+      // Build store name lookup: exact + by store code prefix (e.g. "121010003")
+      const validStoreNames = new Set(cache.storeList.map(s => s.store_name));
+      const storeCodeToName = new Map<string, string>();
+      for (const s of cache.storeList) {
+        const code = s.store_name.split("-")[0];
+        if (code) storeCodeToName.set(code, s.store_name);
+      }
+      const remappedStores = new Map<string, string>(); // original → canonical
       let rowIdx = 0;
       for (const r of rows) {
         rowIdx++;
@@ -1327,10 +1337,23 @@ export default function RangeStorePage() {
         if (kind === "range") {
           const ynRaw = String(readImportValue(r, ["Y/N", "YN", "Apply YN", "Apply", "apply_yn"]) ?? "").trim().toUpperCase();
           const yn = ynRaw === "Y" || ynRaw === "YES" || ynRaw === "1" || ynRaw === "TRUE" ? "Y" : "N";
-          const store = normalizeImportKey(readImportValue(r, ["StoreName", "Store Name", "Store", "store_name"]));
-          if (!store) {
+          const storeRaw = normalizeImportKey(readImportValue(r, ["StoreName", "Store Name", "Store", "store_name"]));
+          if (!storeRaw) {
             skipped.push({ rowNum: rowIdx + 1, raw, reason: "StoreName ว่าง", detail: "ช่อง StoreName ไม่มีค่า", product_name_en: nameBySku.get(sku) || nameFromCache, original: r });
             continue;
+          }
+          let store = storeRaw;
+          if (!validStoreNames.has(storeRaw)) {
+            // ลองหาจากรหัสสาขา (prefix ก่อน "-")
+            const code = storeRaw.split("-")[0];
+            const canonical = storeCodeToName.get(code);
+            if (canonical) {
+              store = canonical;
+              remappedStores.set(storeRaw, canonical);
+            } else {
+              skipped.push({ rowNum: rowIdx + 1, raw, reason: "StoreName ไม่พบในระบบ", detail: `"${storeRaw}" ไม่มีในตาราง Store — ชื่อที่ถูกต้องในระบบ: ${[...validStoreNames].filter(n => n.includes(code)).join(", ") || "ไม่พบรหัสสาขานี้เลย"}`, product_name_en: nameBySku.get(sku) || nameFromCache, original: r });
+              continue;
+            }
           }
           const minV = Number(readImportValue(r, ["Min", "Min Display", "min", "min_display"]) ?? 0) || 0;
           upserts.push({ sku_code: sku, store_name: store, apply_yn: yn, min_display: minV });
@@ -1452,6 +1475,10 @@ export default function RangeStorePage() {
       }
       if (recoveredCount > 0) {
         toast.success(`กู้คืน ${recoveredCount.toLocaleString()} รายการ จาก data_master (cache เก่า/secondary barcode)`);
+      }
+      if (remappedStores.size > 0) {
+        const details = [...remappedStores.entries()].map(([o, c]) => `"${o}" → "${c}"`).join(", ");
+        toast.warning(`⚠️ Auto-correct StoreName ${remappedStores.size} ชื่อ: ${details}`, { duration: 10000 });
       }
 
       // Dedupe upserts by (sku_code, store_name) — last entry wins.
