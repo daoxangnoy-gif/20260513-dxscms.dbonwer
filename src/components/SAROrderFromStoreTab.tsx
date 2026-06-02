@@ -176,6 +176,10 @@ export default function SAROrderFromStoreTab() {
   const [importDocsLoading, setImportDocsLoading] = useState(false);
   const [selectedDocIds, setSelectedDocIds] = useState<Set<string>>(new Set());
   const [expandedDocIds, setExpandedDocIds] = useState<Set<string>>(new Set());
+  const [openDoc, setOpenDoc] = useState<OfsImportDoc | null>(null);
+  const [docTimings, setDocTimings] = useState<Record<string, number>>(() => {
+    try { return JSON.parse(localStorage.getItem("ofs_doc_timings") || "{}"); } catch { return {}; }
+  });
   const [hqRows, setHqRows] = useState<ProcessedRow[]>([]);
   const [hqFetched, setHqFetched] = useState(false);
   const [hqCalculated, setHqCalculated] = useState(false);
@@ -333,6 +337,21 @@ export default function SAROrderFromStoreTab() {
       setStoreSelectOpen(false);
       toast({ title: "บันทึกสำเร็จ", description: `${docName}` });
       await loadImportDocs();
+      // บันทึกเวลาคำนวณ (ใช้ elapsed ณ ตอนนี้) ลง localStorage
+      setDocTimings(prev => {
+        const elapsed = importTimerRef.current ? importElapsed : importElapsed;
+        const next = { ...prev };
+        // ค้นหา doc id ที่เพิ่งบันทึก (ล่าสุด) แล้วบันทึก timing
+        setTimeout(async () => {
+          const { data } = await (supabase as any).from("ofs_import_docs").select("id").eq("doc_name", docName).single();
+          if (data?.id) {
+            const updated = { ...next, [data.id]: importElapsed };
+            localStorage.setItem("ofs_doc_timings", JSON.stringify(updated));
+            setDocTimings(updated);
+          }
+        }, 500);
+        return next;
+      });
     } catch (e: any) {
       toast({ title: "เกิดข้อผิดพลาด", description: e.message, variant: "destructive" });
     } finally {
@@ -878,6 +897,61 @@ export default function SAROrderFromStoreTab() {
         </DialogContent>
       </Dialog>
 
+      {/* Doc Detail Dialog */}
+      <Dialog open={!!openDoc} onOpenChange={o => { if (!o) setOpenDoc(null); }}>
+        <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="font-mono text-sm">{openDoc?.doc_name}</DialogTitle>
+            <DialogDescription className="flex gap-2 flex-wrap">
+              <Badge variant="secondary">Import {openDoc?.import_count}</Badge>
+              <Badge className="bg-emerald-100 text-emerald-700 border-emerald-300">ผ่าน {openDoc?.pass_count}</Badge>
+              <Badge className={openDoc?.skip_count ? "bg-amber-100 text-amber-700 border-amber-300" : "bg-muted text-muted-foreground"}>Skip {openDoc?.skip_count}</Badge>
+              {openDoc && docTimings[openDoc.id] != null && (
+                <Badge variant="outline">⏱ {docTimings[openDoc.id] >= 60 ? `${Math.floor(docTimings[openDoc.id]/60)}m ${docTimings[openDoc.id]%60}s` : `${docTimings[openDoc.id]}s`}</Badge>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end">
+            <Button size="sm" variant="outline" onClick={() => {
+              if (!openDoc) return;
+              const items = (openDoc.data || []) as OfsImportLine[];
+              const ws = XLSX.utils.json_to_sheet(items.map((r, i) => ({
+                "#": i + 1, "SKU Code": r.sku_code, "Barcode": r.main_barcode, "Product Name LA": r.product_name_la, "Qty": r.qty,
+              })));
+              const wb = XLSX.utils.book_new();
+              XLSX.utils.book_append_sheet(wb, ws, "Items");
+              XLSX.writeFile(wb, `${openDoc.doc_name}.xlsx`);
+            }}>
+              <FileSpreadsheet className="w-3.5 h-3.5 mr-1" />Export Excel
+            </Button>
+          </div>
+          <div className="overflow-auto flex-1 border rounded">
+            <table className="w-full text-xs">
+              <thead className="bg-muted sticky top-0">
+                <tr>
+                  <th className="px-2 py-1.5 text-left">#</th>
+                  <th className="px-2 py-1.5 text-left">SKU Code</th>
+                  <th className="px-2 py-1.5 text-left">Barcode</th>
+                  <th className="px-2 py-1.5 text-left">Product Name LA</th>
+                  <th className="px-2 py-1.5 text-right">Qty</th>
+                </tr>
+              </thead>
+              <tbody>
+                {((openDoc?.data || []) as OfsImportLine[]).map((item, idx) => (
+                  <tr key={idx} className="border-t hover:bg-muted/30">
+                    <td className="px-2 py-1 text-muted-foreground">{idx + 1}</td>
+                    <td className="px-2 py-1 font-mono">{item.sku_code}</td>
+                    <td className="px-2 py-1 text-muted-foreground">{item.main_barcode}</td>
+                    <td className="px-2 py-1">{item.product_name_la}</td>
+                    <td className="px-2 py-1 text-right font-medium">{item.qty?.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={storeSelectOpen} onOpenChange={setStoreSelectOpen}>
         <DialogContent className="max-w-sm">
           <DialogHeader><DialogTitle>เลือก Store Name</DialogTitle><DialogDescription>Import {importRows.length} รายการ</DialogDescription></DialogHeader>
@@ -1037,24 +1111,23 @@ export default function SAROrderFromStoreTab() {
                         const lineItems = (d.data || []) as OfsImportLine[];
                         return (
                           <Fragment key={d.id}>
-                            {/* Header row */}
                             <tr
                               className={cn("border-t hover:bg-muted/40 cursor-pointer", selectedDocIds.has(d.id) && "bg-primary/5")}
                               onClick={() => setSelectedDocIds(s => { const n = new Set(s); n.has(d.id) ? n.delete(d.id) : n.add(d.id); return n; })}
                             >
-                              {/* Expand toggle */}
-                              <td className="px-1 py-1 text-center" onClick={e => { e.stopPropagation(); setExpandedDocIds(s => { const n = new Set(s); n.has(d.id) ? n.delete(d.id) : n.add(d.id); return n; }); }}>
-                                <button className="p-0.5 rounded hover:bg-muted text-muted-foreground">
-                                  {isExpanded
-                                    ? <ChevronDown className="w-3.5 h-3.5" />
-                                    : <ChevronRight className="w-3.5 h-3.5" />
-                                  }
-                                </button>
-                              </td>
                               <td className="px-2 py-1 text-center" onClick={e => e.stopPropagation()}>
                                 <Checkbox checked={selectedDocIds.has(d.id)} onCheckedChange={() => setSelectedDocIds(s => { const n = new Set(s); n.has(d.id) ? n.delete(d.id) : n.add(d.id); return n; })} />
                               </td>
-                              <td className="px-2 py-1 font-mono">{d.doc_name}</td>
+                              <td className="px-2 py-1 font-mono">
+                                <div>{d.doc_name}</div>
+                                {docTimings[d.id] != null && (
+                                  <div className="text-[10px] text-muted-foreground mt-0.5">
+                                    ⏱ {docTimings[d.id] >= 60
+                                      ? `${Math.floor(docTimings[d.id] / 60)}m ${docTimings[d.id] % 60}s`
+                                      : `${docTimings[d.id]}s`}
+                                  </div>
+                                )}
+                              </td>
                               <td className="px-2 py-1">{d.store_name}</td>
                               <td className="px-2 py-1">
                                 <div className="flex items-center gap-1 justify-center flex-wrap">
@@ -1067,43 +1140,12 @@ export default function SAROrderFromStoreTab() {
                               </td>
                               <td className="px-2 py-1 text-muted-foreground">{new Date(d.created_at).toLocaleString()}</td>
                               <td className="px-2 py-1 text-center" onClick={e => e.stopPropagation()}>
-                                {canHQ && <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" onClick={() => deleteImportDoc(d.id, d.doc_name)}><Trash2 className="w-3 h-3" /></Button>}
+                                <div className="flex items-center gap-1 justify-center">
+                                  <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={() => setOpenDoc(d)}>Open</Button>
+                                  {canHQ && <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" onClick={() => deleteImportDoc(d.id, d.doc_name)}><Trash2 className="w-3 h-3" /></Button>}
+                                </div>
                               </td>
                             </tr>
-                            {/* Expanded line items */}
-                            {isExpanded && (
-                              <tr>
-                                <td colSpan={7} className="p-0 border-t bg-muted/10">
-                                  <div className="px-8 py-2">
-                                    {lineItems.length === 0
-                                      ? <div className="text-[10px] text-muted-foreground italic">ไม่มีรายการ</div>
-                                      : (
-                                        <table className="text-[10px] border-collapse">
-                                          <thead>
-                                            <tr>
-                                              <th className="px-2 py-1 text-left font-semibold bg-muted/60 border border-border/40">SKU Code</th>
-                                              <th className="px-2 py-1 text-left font-semibold bg-muted/60 border border-border/40">Barcode</th>
-                                              <th className="px-2 py-1 text-left font-semibold bg-muted/60 border border-border/40">Product Name LA</th>
-                                              <th className="px-2 py-1 text-right font-semibold bg-muted/60 border border-border/40">Qty</th>
-                                            </tr>
-                                          </thead>
-                                          <tbody>
-                                            {lineItems.map((item, idx) => (
-                                              <tr key={`${d.id}-item-${idx}`}>
-                                                <td className="px-2 py-0.5 font-mono border border-border/30">{item.sku_code}</td>
-                                                <td className="px-2 py-0.5 text-muted-foreground border border-border/30">{item.main_barcode}</td>
-                                                <td className="px-2 py-0.5 border border-border/30 max-w-[200px]">{item.product_name_la}</td>
-                                                <td className="px-2 py-0.5 text-right font-medium border border-border/30">{item.qty?.toLocaleString()}</td>
-                                              </tr>
-                                            ))}
-                                          </tbody>
-                                        </table>
-                                      )
-                                    }
-                                  </div>
-                                </td>
-                              </tr>
-                            )}
                           </Fragment>
                         );
                       })}
