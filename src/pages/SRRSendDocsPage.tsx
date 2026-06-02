@@ -239,12 +239,15 @@ async function openPrintWindow(s: Shipment, poMap: Record<string, PoInfo>) {
   if (!w) { alert("กรุณาอนุญาต popup"); return; }
   w.document.write(html); w.document.close();
 }
+interface ConflictInfo { code: string; docName: string; location: string; }
+
 function ScannerPanel({
-  codes, setCodes, otherList = [],
+  codes, setCodes, otherList = [], onCheckConflict,
 }: {
   codes: string[];
   setCodes: (next: string[]) => void;
   otherList?: string[];
+  onCheckConflict?: (code: string) => ConflictInfo | null;
 }) {
   const { toast } = useToast();
   const [manual, setManual] = useState("");
@@ -252,6 +255,10 @@ function ScannerPanel({
   const camRef = useRef<Html5Qrcode | null>(null);
   const containerId = useRef(`qr-${Math.random().toString(36).slice(2)}`).current;
   const lastScanRef = useRef<{ code: string; at: number }>({ code: "", at: 0 });
+  const [conflictPending, setConflictPending] = useState<{
+    nonConflict: string[];
+    conflicts: ConflictInfo[];
+  } | null>(null);
 
   const addCode = (raw: string) => {
     // Allow multiple codes separated by comma / newline / tab / semicolon / spaces
@@ -267,11 +274,26 @@ function ScannerPanel({
       if (existing.has(p) || fresh.includes(p)) dup.push(p);
       else fresh.push(p);
     }
-    if (fresh.length > 0) setCodes([...codes, ...fresh]);
     if (dup.length > 0) {
       toast({ title: "พบรายการซ้ำ", description: `ข้าม ${dup.length} รายการ: ${dup.slice(0, 3).join(", ")}${dup.length > 3 ? "..." : ""}`, variant: "destructive" });
     }
-    return fresh.length > 0;
+    if (fresh.length === 0) return false;
+    // Check conflicts: codes already in another shipment
+    if (onCheckConflict) {
+      const conflicts: ConflictInfo[] = [];
+      const nonConflict: string[] = [];
+      for (const c of fresh) {
+        const hit = onCheckConflict(c);
+        if (hit) conflicts.push(hit);
+        else nonConflict.push(c);
+      }
+      if (conflicts.length > 0) {
+        setConflictPending({ nonConflict, conflicts });
+        return true;
+      }
+    }
+    setCodes([...codes, ...fresh]);
+    return true;
   };
 
   const handleManualKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -377,6 +399,53 @@ function ScannerPanel({
           </ul>
         )}
       </ScrollArea>
+
+      {/* Conflict warning dialog */}
+      <Dialog open={!!conflictPending} onOpenChange={open => { if (!open) setConflictPending(null); }}>
+        <DialogContent className="max-w-lg z-[60000]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-amber-600">
+              <AlertCircle className="w-5 h-5" />
+              พบเอกสารซ้ำในระบบ
+            </DialogTitle>
+            <DialogDescription>
+              รายการ PO ต่อไปนี้มีอยู่แล้วในเอกสารอื่น กรุณาเลือกว่าจะดำเนินการอย่างไร
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 max-h-60 overflow-auto">
+            {conflictPending?.conflicts.map(cf => (
+              <div key={cf.code} className="flex items-start gap-2 p-2 bg-amber-50 border border-amber-200 rounded text-sm">
+                <AlertCircle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+                <div>
+                  <div className="font-mono font-semibold">{cf.code}</div>
+                  <div className="text-xs text-muted-foreground">มีอยู่แล้วในเอกสาร <b>{cf.docName}</b> ที่จุด <b>{cf.location}</b></div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => {
+              // ข้ามรายการซ้ำ — เพิ่มเฉพาะที่ไม่ conflict
+              if (conflictPending && conflictPending.nonConflict.length > 0) {
+                setCodes([...codes, ...conflictPending.nonConflict]);
+              }
+              setConflictPending(null);
+            }}>
+              ข้ามรายการนี้ — สะแกนต่อ
+            </Button>
+            <Button onClick={() => {
+              // ยืนยันฝาก — เพิ่มทั้งหมดรวม conflict
+              if (conflictPending) {
+                const allNew = [...conflictPending.nonConflict, ...conflictPending.conflicts.map(c => c.code)];
+                setCodes([...codes, ...allNew]);
+              }
+              setConflictPending(null);
+            }}>
+              ยืนยันฝาก — ย้ายมาจุดใหม่
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -1935,7 +2004,19 @@ export default function SRRSendDocsPage() {
               <LocationCombobox value={destinationLocation} onChange={setDestinationLocation} options={locations} placeholder="เลือกจุดปลายทาง..." />
             </div>
           </div>
-          <ScannerPanel codes={originCodes} setCodes={setOriginCodes} />
+          <ScannerPanel codes={originCodes} setCodes={setOriginCodes} onCheckConflict={(code) => {
+            for (const s of items) {
+              if (s.id === editingId) continue;
+              if (s.status === "finalized") continue;
+              if ((s.origin_codes || []).includes(code)) {
+                const mvs = movements.filter(m => m.shipment_id === s.id)
+                  .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+                const location = mvs[0]?.location_name || s.origin_location || "(ไม่ระบุจุด)";
+                return { code, docName: s.doc_name, location };
+              }
+            }
+            return null;
+          }} />
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>ยกเลิก</Button>
             <Button onClick={handleSaveDoc}><Save className="w-4 h-4 mr-1" />{editingId ? "บันทึกการแก้ไข" : `Save เป็น Doc (${originCodes.length})`}</Button>
