@@ -859,135 +859,136 @@ function ReportTab({ items, movements, poInfoMap, ensurePoInfo, canExport, final
                             <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setPartnerDocSearch(prev => ({ ...prev, [p]: "" }))}>ล้าง</Button>
                           )}
                         </div>
+                        <div className="overflow-auto">
                         <table className="w-full text-xs border">
-                          <thead className="bg-muted">
+                          <thead className="bg-muted sticky top-0">
                             <tr>
-                              <th className="w-6 p-1.5 border"></th>
+                              <th className="p-1.5 border text-center">#</th>
                               <th className="p-1.5 border text-left">Doc</th>
                               <th className="p-1.5 border text-left">ผู้ฝาก</th>
                               <th className="p-1.5 border text-left">ผู้รับ</th>
                               <th className="p-1.5 border text-left">จุดปัจจุบัน</th>
-                              <th className="p-1.5 border text-center">PO Partner นี้</th>
-                              <th className="p-1.5 border text-center">PO ทั้งหมด</th>
-                              <th className="p-1.5 border text-left">สถานะ</th>
+                              <th className="p-1.5 border text-left">PO / Order Ref</th>
+                              <th className="p-1.5 border text-left">Source</th>
+                              <th className="p-1.5 border text-left">Document</th>
+                              <th className="p-1.5 border text-left">Status</th>
+                              <th className="p-1.5 border text-right">Total</th>
+                              <th className="p-1.5 border text-left">Currency</th>
+                              <th className="p-1.5 border text-left">Delivery To1</th>
+                              <th className="p-1.5 border text-left">Delivery To2</th>
                               <th className="p-1.5 border text-center">จัดการ</th>
                               <th className="p-1.5 border text-left">ประวัติ</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {grouped[p].filter(r => {
+                            {(() => {
                               const sq = (partnerDocSearch[p] || "").toLowerCase();
-                              if (!sq) return true;
-                              return (
-                                r.doc.doc_name.toLowerCase().includes(sq) ||
-                                (r.doc.depositor_name || "").toLowerCase().includes(sq) ||
-                                (r.doc.receiver_name || "").toLowerCase().includes(sq) ||
-                                (r.doc.origin_codes || []).some(c => c.toLowerCase().includes(sq))
-                              );
-                            }).map((r, i) => {
-                              const hist = (movementsByShipment[r.doc.id] || []).slice().reverse();
-                              const isFin = finalizedIds.has(r.doc.id);
-                              const isDocExpanded = expandedDocId === r.doc.id;
-                              // PO codes ของ partner นี้ในเอกสารนี้
-                              const partnerCodes = (r.doc.origin_codes || []).filter(c => (poInfoMap[c]?.partner || "(ไม่พบ Partner)") === p);
-                              return (
-                                <FragmentRow key={r.doc.id + "_" + i}>
-                                  <tr className={isFin ? "bg-muted/60" : ""}>
-                                    <td className="p-1 border text-center">
-                                      <Button
-                                        size="icon"
-                                        variant="ghost"
-                                        className="h-5 w-5"
-                                        onClick={() => setExpandedDocId(isDocExpanded ? null : r.doc.id)}
-                                        title="ดูรายการ PO"
-                                      >
-                                        {isDocExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                                      </Button>
-                                    </td>
-                                    <td className="p-1.5 border font-mono">
-                                      {r.doc.doc_name}
-                                      {isFin && <Badge className="ml-1 bg-slate-500">สิ้นสุดแล้ว</Badge>}
-                                    </td>
-                                    <td className="p-1.5 border">{r.doc.depositor_name || "-"}</td>
-                                    <td className="p-1.5 border">{r.doc.receiver_name || "-"}</td>
-                                    <td className="p-1.5 border">
-                                      {isFin ? <span className="text-muted-foreground italic">(ตัดออกจากการนับ)</span> : (
-                                        <div className="flex flex-wrap gap-1">
-                                          {Object.entries(r.locCounts).map(([l, c]) => (
-                                            <Badge key={l} variant="outline">{l}: {c}</Badge>
-                                          ))}
-                                        </div>
-                                      )}
-                                    </td>
-                                    <td className="p-1.5 border text-center">{r.count}</td>
-                                    <td className="p-1.5 border text-center">{(r.doc.origin_codes || []).length}</td>
-                                    <td className="p-1.5 border">{r.doc.status}</td>
-                                    <td className="p-1.5 border text-center">
-                                      <Button
-                                        size="sm"
-                                        variant={isFin ? "outline" : "destructive"}
-                                        className="h-6 text-[11px] px-2"
-                                        onClick={() => toggleFinalize(r.doc.id, r.doc.doc_name)}
-                                      >
-                                        {isFin ? "ยกเลิกสิ้นสุด" : "สิ้นสุด"}
-                                      </Button>
-                                    </td>
-                                    <td className="p-1.5 border text-[10px]">
-                                      {hist.length === 0 ? "-" : hist.map((m, mi) => (
-                                        <div key={m.id}>{mi + 1}. {ACTION_LABELS[m.action] || m.action} → <b>{m.location_name}</b> <span className="text-muted-foreground">({new Date(m.created_at).toLocaleString("th-TH")})</span></div>
-                                      ))}
-                                    </td>
-                                  </tr>
-                                  {isDocExpanded && (
-                                    <tr className="bg-blue-50">
-                                      <td colSpan={10} className="p-2 border-b">
-                                        <div className="text-[10px] font-semibold text-blue-700 mb-1.5">รายการ PO ของ {p} ในเอกสารนี้ ({partnerCodes.length} รายการ)</div>
-                                        <table className="w-full text-[10px] border bg-white">
-                                          <thead className="bg-blue-100">
-                                            <tr>
-                                              <th className="p-1 border text-center">#</th>
-                                              <th className="p-1 border text-left">PO / Order Ref</th>
-                                              <th className="p-1 border text-left">Partner</th>
-                                              <th className="p-1 border text-left">Source</th>
-                                              <th className="p-1 border text-left">Document</th>
-                                              <th className="p-1 border text-left">Status</th>
-                                              <th className="p-1 border text-right">Total</th>
-                                              <th className="p-1 border text-left">Currency</th>
-                                              <th className="p-1 border text-left">Delivery To1</th>
-                                              <th className="p-1 border text-left">Delivery To2</th>
-                                            </tr>
-                                          </thead>
-                                          <tbody>
-                                            {partnerCodes.length === 0 ? (
-                                              <tr><td colSpan={10} className="p-2 text-center text-muted-foreground">ไม่พบรายการ PO — กด "ดึงข้อมูล PO" ในแท็บฝากเอกสารก่อน</td></tr>
-                                            ) : partnerCodes.map((code, ci) => {
-                                              const info = poInfoMap[code];
-                                              return (
-                                                <tr key={code} className={!info ? "bg-amber-50" : ""}>
-                                                  <td className="p-1 border text-center">{ci + 1}</td>
-                                                  <td className="p-1 border font-mono">{code}</td>
-                                                  <td className="p-1 border">{info?.partner || <span className="text-amber-600">ไม่พบ</span>}</td>
-                                                  <td className="p-1 border">{info?.source || "-"}</td>
-                                                  <td className="p-1 border">{info?.document || "-"}</td>
-                                                  <td className="p-1 border">{info?.status || "-"}</td>
-                                                  <td className="p-1 border text-right">{info?.total != null ? Number(info.total).toLocaleString() : "-"}</td>
-                                                  <td className="p-1 border">{info?.currency_name || "-"}</td>
-                                                  <td className="p-1 border">{info?.delivery_to1 || "-"}</td>
-                                                  <td className="p-1 border">{info?.delivery_to2 || "-"}</td>
-                                                </tr>
-                                              );
-                                            })}
-                                          </tbody>
-                                        </table>
+                              const filteredRows = grouped[p].filter(r => {
+                                if (!sq) return true;
+                                return (
+                                  r.doc.doc_name.toLowerCase().includes(sq) ||
+                                  (r.doc.depositor_name || "").toLowerCase().includes(sq) ||
+                                  (r.doc.receiver_name || "").toLowerCase().includes(sq) ||
+                                  (r.doc.origin_codes || []).some(c => c.toLowerCase().includes(sq))
+                                );
+                              });
+                              let rowIdx = 0;
+                              return filteredRows.map((r) => {
+                                const hist = (movementsByShipment[r.doc.id] || []).slice().reverse();
+                                const isFin = finalizedIds.has(r.doc.id);
+                                const partnerCodes = (r.doc.origin_codes || []).filter(c => (poInfoMap[c]?.partner || "(ไม่พบ Partner)") === p);
+                                const rowSpan = Math.max(partnerCodes.length, 1);
+                                const rowBg = isFin ? "bg-muted/60" : "";
+                                if (partnerCodes.length === 0) {
+                                  rowIdx++;
+                                  return (
+                                    <tr key={r.doc.id} className={rowBg}>
+                                      <td className="p-1.5 border text-center text-muted-foreground">{rowIdx}</td>
+                                      <td className="p-1.5 border font-mono whitespace-nowrap">
+                                        {r.doc.doc_name}
+                                        {isFin && <Badge className="ml-1 bg-slate-500">สิ้นสุดแล้ว</Badge>}
+                                      </td>
+                                      <td className="p-1.5 border">{r.doc.depositor_name || "-"}</td>
+                                      <td className="p-1.5 border">{r.doc.receiver_name || "-"}</td>
+                                      <td className="p-1.5 border">
+                                        {isFin ? <span className="text-muted-foreground italic">(ตัดออกจากการนับ)</span> : (
+                                          <div className="flex flex-wrap gap-1">
+                                            {Object.entries(r.locCounts).map(([l, c]) => (
+                                              <Badge key={l} variant="outline">{l}: {c}</Badge>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </td>
+                                      <td className="p-1.5 border text-muted-foreground italic" colSpan={8}>ไม่พบรายการ PO — กด "ดึงข้อมูล PO" ก่อน</td>
+                                      <td className="p-1.5 border text-center">
+                                        <Button size="sm" variant={isFin ? "outline" : "destructive"} className="h-6 text-[11px] px-2" onClick={() => toggleFinalize(r.doc.id, r.doc.doc_name)}>
+                                          {isFin ? "ยกเลิกสิ้นสุด" : "สิ้นสุด"}
+                                        </Button>
+                                      </td>
+                                      <td className="p-1.5 border text-[10px]">
+                                        {hist.length === 0 ? "-" : hist.map((m, mi) => (
+                                          <div key={m.id}>{mi + 1}. {ACTION_LABELS[m.action] || m.action} → <b>{m.location_name}</b> <span className="text-muted-foreground">({new Date(m.created_at).toLocaleString("th-TH")})</span></div>
+                                        ))}
                                       </td>
                                     </tr>
-                                  )}
-                                </FragmentRow>
-                              );
-                            })}
+                                  );
+                                }
+                                return partnerCodes.map((code, ci) => {
+                                  const info = poInfoMap[code];
+                                  const isFirst = ci === 0;
+                                  rowIdx++;
+                                  return (
+                                    <tr key={r.doc.id + "_" + code} className={`${rowBg} ${!info ? "bg-amber-50" : ""}`}>
+                                      {isFirst && (
+                                        <>
+                                          <td className="p-1.5 border text-center align-top text-muted-foreground" rowSpan={rowSpan}>{rowIdx}</td>
+                                          <td className="p-1.5 border font-mono align-top whitespace-nowrap" rowSpan={rowSpan}>
+                                            {r.doc.doc_name}
+                                            {isFin && <Badge className="ml-1 bg-slate-500">สิ้นสุดแล้ว</Badge>}
+                                          </td>
+                                          <td className="p-1.5 border align-top" rowSpan={rowSpan}>{r.doc.depositor_name || "-"}</td>
+                                          <td className="p-1.5 border align-top" rowSpan={rowSpan}>{r.doc.receiver_name || "-"}</td>
+                                          <td className="p-1.5 border align-top" rowSpan={rowSpan}>
+                                            {isFin ? <span className="text-muted-foreground italic">(ตัดออกจากการนับ)</span> : (
+                                              <div className="flex flex-wrap gap-1">
+                                                {Object.entries(r.locCounts).map(([l, c]) => (
+                                                  <Badge key={l} variant="outline">{l}: {c}</Badge>
+                                                ))}
+                                              </div>
+                                            )}
+                                          </td>
+                                        </>
+                                      )}
+                                      <td className="p-1.5 border font-mono">{code}</td>
+                                      <td className="p-1.5 border">{info?.source || "-"}</td>
+                                      <td className="p-1.5 border">{info?.document || "-"}</td>
+                                      <td className="p-1.5 border">{info?.status || "-"}</td>
+                                      <td className="p-1.5 border text-right">{info?.total != null ? Number(info.total).toLocaleString() : "-"}</td>
+                                      <td className="p-1.5 border">{info?.currency_name || "-"}</td>
+                                      <td className="p-1.5 border">{info?.delivery_to1 || "-"}</td>
+                                      <td className="p-1.5 border">{info?.delivery_to2 || "-"}</td>
+                                      {isFirst && (
+                                        <>
+                                          <td className="p-1.5 border text-center align-top" rowSpan={rowSpan}>
+                                            <Button size="sm" variant={isFin ? "outline" : "destructive"} className="h-6 text-[11px] px-2" onClick={() => toggleFinalize(r.doc.id, r.doc.doc_name)}>
+                                              {isFin ? "ยกเลิกสิ้นสุด" : "สิ้นสุด"}
+                                            </Button>
+                                          </td>
+                                          <td className="p-1.5 border text-[10px] align-top" rowSpan={rowSpan}>
+                                            {hist.length === 0 ? "-" : hist.map((m, mi) => (
+                                              <div key={m.id}>{mi + 1}. {ACTION_LABELS[m.action] || m.action} → <b>{m.location_name}</b> <span className="text-muted-foreground">({new Date(m.created_at).toLocaleString("th-TH")})</span></div>
+                                            ))}
+                                          </td>
+                                        </>
+                                      )}
+                                    </tr>
+                                  );
+                                });
+                              });
+                            })()}
                           </tbody>
                         </table>
-
+                        </div>
                       </td>
                     </tr>
                   )}
