@@ -27,96 +27,6 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 
 const SCROLL_CONTAINER_ID = "send-docs-scroll-container";
 
-// Floating custom vertical scrollbar: drag thumb or use mouse wheel to scroll the page
-function FloatingScrollSlider() {
-  const trackRef = useRef<HTMLDivElement>(null);
-  const [pct, setPct] = useState(0);
-  const [thumbPct, setThumbPct] = useState(10);
-  const draggingRef = useRef<{ startY: number; startScroll: number } | null>(null);
-
-  const getEl = () => document.getElementById(SCROLL_CONTAINER_ID);
-
-  useEffect(() => {
-    const update = () => {
-      const el = getEl();
-      if (!el) return;
-      const max = (el.scrollHeight - el.clientHeight) || 1;
-      setPct(Math.min(100, Math.max(0, (el.scrollTop / max) * 100)));
-      setThumbPct(Math.min(100, Math.max(8, (el.clientHeight / el.scrollHeight) * 100)));
-    };
-    update();
-    const el = getEl();
-    el?.addEventListener("scroll", update, { passive: true });
-    window.addEventListener("resize", update);
-    return () => {
-      el?.removeEventListener("scroll", update);
-      window.removeEventListener("resize", update);
-    };
-  }, []);
-
-  const scrollToPct = (p: number) => {
-    const el = getEl();
-    if (!el) return;
-    const max = el.scrollHeight - el.clientHeight;
-    el.scrollTop = Math.max(0, Math.min(max, (p / 100) * max));
-  };
-
-  const onTrackClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!trackRef.current) return;
-    const rect = trackRef.current.getBoundingClientRect();
-    const p = ((e.clientY - rect.top) / rect.height) * 100;
-    scrollToPct(p);
-  };
-
-  const onThumbMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const el = getEl();
-    if (!el) return;
-    draggingRef.current = { startY: e.clientY, startScroll: el.scrollTop };
-    const onMove = (ev: MouseEvent) => {
-      if (!draggingRef.current || !trackRef.current) return;
-      const el2 = getEl();
-      if (!el2) return;
-      const rect = trackRef.current.getBoundingClientRect();
-      const max = el2.scrollHeight - el2.clientHeight;
-      const dy = ev.clientY - draggingRef.current.startY;
-      const ratio = dy / rect.height;
-      el2.scrollTop = Math.max(0, Math.min(max, draggingRef.current.startScroll + ratio * max));
-    };
-    const onUp = () => {
-      draggingRef.current = null;
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-  };
-
-  const onWheel = (e: React.WheelEvent) => {
-    const el = getEl();
-    if (el) el.scrollTop += e.deltaY;
-  };
-
-  const thumbTop = ((100 - thumbPct) * pct) / 100;
-
-  return (
-    <div
-      ref={trackRef}
-      onClick={onTrackClick}
-      onWheel={onWheel}
-      className="fixed right-3 top-1/2 -translate-y-1/2 z-50 h-[60vh] w-3 rounded-full bg-muted/70 border shadow-lg cursor-pointer"
-      title="เลื่อนหน้าจอ"
-    >
-      <div
-        onMouseDown={onThumbMouseDown}
-        className="absolute left-0 right-0 mx-auto w-2.5 rounded-full bg-primary/80 hover:bg-primary cursor-grab active:cursor-grabbing"
-        style={{ top: `${thumbTop}%`, height: `${thumbPct}%` }}
-      />
-    </div>
-  );
-}
-
 // Searchable combobox: typing is free, dropdown filters locations
 function LocationCombobox({
   value, onChange, options, placeholder, disabled = false,
@@ -2631,8 +2541,6 @@ export default function SRRSendDocsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      {/* Floating vertical scroll slider */}
-      <FloatingScrollSlider />
 
     </div>
   );
