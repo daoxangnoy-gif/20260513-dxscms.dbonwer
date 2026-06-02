@@ -1037,7 +1037,7 @@ export default function SAROrderFromStoreTab() {
 
         {/* ============ IMPORT DOCS TAB ============ */}
         {(canImport || canHQ) && (
-          <TabsContent value="import_docs" className="flex-1 overflow-hidden mt-0 data-[state=active]:flex flex-col">
+          <TabsContent value="import_docs" className={cn("overflow-hidden mt-0 data-[state=active]:flex flex-col", hqFetched ? "flex-1" : "")}>
             {/* Import section */}
             <div className="border-b px-4 py-2 flex items-center gap-2 flex-wrap shrink-0 bg-background">
               <span className="text-xs font-medium text-muted-foreground">Import:</span>
