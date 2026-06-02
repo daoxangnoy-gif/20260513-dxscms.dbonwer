@@ -598,7 +598,7 @@ function ReportTab({ items, movements, poInfoMap, ensurePoInfo, canExport, final
   ensurePoInfo: () => Promise<void>;
   canExport: boolean;
   finalizedIds: Set<string>;
-  toggleFinalize: (docId: string, docName: string) => void;
+  toggleFinalize: (docId: string, docName: string) => Promise<void>;
 }) {
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
@@ -1014,28 +1014,21 @@ export default function SRRSendDocsPage() {
   const [items, setItems] = useState<Shipment[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // ===== Finalized docs (shared with ReportTab via props, persisted in localStorage) =====
-  const FINALIZED_KEY = "srr_send_docs_finalized_v1";
-  const [finalizedIds, setFinalizedIds] = useState<Set<string>>(() => {
-    try {
-      const raw = localStorage.getItem(FINALIZED_KEY);
-      return new Set(raw ? JSON.parse(raw) : []);
-    } catch { return new Set(); }
-  });
-  const toggleFinalize = (docId: string, docName: string) => {
+  // ===== Finalized docs — derived from Supabase status field (shared across all users) =====
+  const finalizedIds = new Set(items.filter(i => i.status === "finalized").map(i => i.id));
+  const toggleFinalize = async (docId: string, docName: string) => {
     if (finalizedIds.has(docId)) {
       if (!window.confirm(`ยกเลิกสถานะ "สิ้นสุด" ของเอกสาร ${docName}?`)) return;
-      const next = new Set(finalizedIds); next.delete(docId);
-      setFinalizedIds(next);
-      try { localStorage.setItem(FINALIZED_KEY, JSON.stringify(Array.from(next))); } catch {}
+      const { error } = await supabase.from("document_shipments").update({ status: "pending" }).eq("id", docId);
+      if (error) { toast({ title: "ยกเลิกไม่สำเร็จ", description: error.message, variant: "destructive" }); return; }
       toast({ title: "ยกเลิกสถานะสิ้นสุดแล้ว" });
     } else {
       if (!window.confirm(`ยืนยันสิ้นสุดการเดินเอกสาร ${docName}?\nจำนวน PO ที่จุดปัจจุบันของเอกสารนี้จะถูกตัดออกจากการนับ Report`)) return;
-      const next = new Set(finalizedIds); next.add(docId);
-      setFinalizedIds(next);
-      try { localStorage.setItem(FINALIZED_KEY, JSON.stringify(Array.from(next))); } catch {}
+      const { error } = await supabase.from("document_shipments").update({ status: "finalized" }).eq("id", docId);
+      if (error) { toast({ title: "บันทึกไม่สำเร็จ", description: error.message, variant: "destructive" }); return; }
       toast({ title: "สิ้นสุดการเดินเอกสารแล้ว" });
     }
+    await load();
   };
 
   // create / edit dialog state
