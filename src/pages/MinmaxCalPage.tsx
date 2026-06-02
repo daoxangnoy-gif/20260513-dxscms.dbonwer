@@ -827,14 +827,39 @@ export default function MinmaxCalPage() {
       });
       setSavePct(10);
 
-      // STEP 1.5 — ลบค่าเก่าของสาขาที่กำลังบันทึก ป้องกัน SKU ค้างจากรอบก่อน
-      const storeSet = Array.from(new Set(payload.map(p => p.store_name).filter(Boolean))) as string[];
-      if (storeSet.length > 0) {
-        step(2, `ลบค่าเก่าของ ${storeSet.length.toLocaleString()} สาขาก่อนบันทึก`, 12);
-        const { data: delCnt, error: delErr } = await (supabase as any)
-          .rpc("delete_minmax_by_stores", { p_store_names: storeSet });
-        if (delErr) throw delErr;
-        console.log(`[saveDoc] deleted ${delCnt} stale rows from ${storeSet.length} stores`);
+      // STEP 1.5 — ลบค่าเก่าตาม scope ที่ใช้ Cal จริง ป้องกัน SKU ค้างจากรอบก่อน
+      // - ไม่มี filter → ลบทั้งหมด (full recalc)
+      // - มี typeStoreFilter → ลบทุกสาขาใน type นั้น (ครอบคลุม SKU ที่หลุดออกจาก range)
+      // - มี storeFilter → ลบเฉพาะสาขาที่เลือก
+      {
+        const hasStoreScope = storeFilter.length > 0 || typeStoreFilter.length > 0;
+        step(2, `ลบค่าเก่าตาม scope ก่อนบันทึก`, 12);
+        let delCnt = 0;
+        if (!hasStoreScope) {
+          // ไม่มี filter = full recalc → ลบทั้งหมด
+          const { data, error: delErr } = await (supabase as any)
+            .rpc("delete_minmax_by_filter", {});
+          if (delErr) throw delErr;
+          delCnt = Number(data) || 0;
+        } else if (typeStoreFilter.length > 0) {
+          // มี type filter → ลบทุกสาขาใน type (ไม่จำกัดแค่ที่อยู่ใน payload)
+          const scopeStores = (cache.storeList as { store_name: string; type_store: string }[])
+            .filter(s => typeStoreFilter.includes(s.type_store))
+            .map(s => s.store_name);
+          if (scopeStores.length > 0) {
+            const { data, error: delErr } = await (supabase as any)
+              .rpc("delete_minmax_by_stores", { p_store_names: scopeStores });
+            if (delErr) throw delErr;
+            delCnt = Number(data) || 0;
+          }
+        } else {
+          // มีแค่ storeFilter → ลบเฉพาะสาขาที่เลือก
+          const { data, error: delErr } = await (supabase as any)
+            .rpc("delete_minmax_by_stores", { p_store_names: storeFilter });
+          if (delErr) throw delErr;
+          delCnt = Number(data) || 0;
+        }
+        console.log(`[saveDoc] deleted ${delCnt} stale rows`);
       }
 
       // STEP 2/3 — UPSERT เข้าตาราง minmax แบบ chunk
