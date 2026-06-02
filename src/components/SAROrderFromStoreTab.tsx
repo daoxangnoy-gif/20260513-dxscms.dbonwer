@@ -168,6 +168,7 @@ export default function SAROrderFromStoreTab() {
   const [importStatus, setImportStatus] = useState<string>("");
   const [importElapsed, setImportElapsed] = useState(0);
   const importTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const importElapsedRef = useRef(0);
   const [lastSave, setLastSave] = useState<{ total: number; pass: number; skip: number } | null>(null);
   const [pendingSkips, setPendingSkips] = useState<SkipRow[]>([]);
 
@@ -261,8 +262,12 @@ export default function SAROrderFromStoreTab() {
     if (!selectedStore) return;
     setImportSaving(true);
     setImportElapsed(0);
+    importElapsedRef.current = 0;
     setImportStatus("เริ่มต้น...");
-    importTimerRef.current = setInterval(() => setImportElapsed(s => s + 1), 1000);
+    importTimerRef.current = setInterval(() => {
+      importElapsedRef.current += 1;
+      setImportElapsed(importElapsedRef.current);
+    }, 1000);
     try {
       const codes = importRows.map(r => r.code);
 
@@ -337,21 +342,16 @@ export default function SAROrderFromStoreTab() {
       setStoreSelectOpen(false);
       toast({ title: "บันทึกสำเร็จ", description: `${docName}` });
       await loadImportDocs();
-      // บันทึกเวลาคำนวณ (ใช้ elapsed ณ ตอนนี้) ลง localStorage
-      setDocTimings(prev => {
-        const elapsed = importTimerRef.current ? importElapsed : importElapsed;
-        const next = { ...prev };
-        // ค้นหา doc id ที่เพิ่งบันทึก (ล่าสุด) แล้วบันทึก timing
-        setTimeout(async () => {
-          const { data } = await (supabase as any).from("ofs_import_docs").select("id").eq("doc_name", docName).single();
-          if (data?.id) {
-            const updated = { ...next, [data.id]: importElapsed };
-            localStorage.setItem("ofs_doc_timings", JSON.stringify(updated));
-            setDocTimings(updated);
-          }
-        }, 500);
-        return next;
-      });
+      // บันทึกเวลาคำนวณลง localStorage (ใช้ ref เพื่อค่าปัจจุบันที่แน่นอน)
+      const elapsedNow = importElapsedRef.current;
+      const { data: savedDoc } = await (supabase as any).from("ofs_import_docs").select("id").eq("doc_name", docName).single();
+      if (savedDoc?.id) {
+        setDocTimings(prev => {
+          const updated = { ...prev, [savedDoc.id]: elapsedNow };
+          localStorage.setItem("ofs_doc_timings", JSON.stringify(updated));
+          return updated;
+        });
+      }
     } catch (e: any) {
       toast({ title: "เกิดข้อผิดพลาด", description: e.message, variant: "destructive" });
     } finally {
@@ -1091,16 +1091,15 @@ export default function SAROrderFromStoreTab() {
               ) : (
                 <table className="w-full text-xs">
                   <thead className="bg-muted sticky top-0 z-10">
-                    <tr>
-                      <th className="px-1 py-1.5 w-7"></th>
-                      <th className="px-2 py-1.5 w-8">
+                    <tr className="border-b">
+                      <th className="px-2 py-1.5 w-8 border-r">
                         <Checkbox checked={importDocs.length > 0 && selectedDocIds.size === importDocs.length} onCheckedChange={c => setSelectedDocIds(c ? new Set(importDocs.map(d => d.id)) : new Set())} />
                       </th>
-                      <th className="px-2 py-1.5 text-left">Doc Name</th>
-                      <th className="px-2 py-1.5 text-left">Store</th>
-                      <th className="px-2 py-1.5 text-center">สถานะ Import</th>
-                      <th className="px-2 py-1.5 text-left">วันที่</th>
-                      <th className="px-2 py-1.5 w-16"></th>
+                      <th className="px-2 py-1.5 text-left border-r">Doc Name</th>
+                      <th className="px-2 py-1.5 text-left border-r">Store</th>
+                      <th className="px-2 py-1.5 text-center border-r">สถานะ Import</th>
+                      <th className="px-2 py-1.5 text-left border-r">วันที่</th>
+                      <th className="px-2 py-1.5 w-20 text-center"></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1115,10 +1114,10 @@ export default function SAROrderFromStoreTab() {
                               className={cn("border-t hover:bg-muted/40 cursor-pointer", selectedDocIds.has(d.id) && "bg-primary/5")}
                               onClick={() => setSelectedDocIds(s => { const n = new Set(s); n.has(d.id) ? n.delete(d.id) : n.add(d.id); return n; })}
                             >
-                              <td className="px-2 py-1 text-center" onClick={e => e.stopPropagation()}>
+                              <td className="px-2 py-1 text-center border-r" onClick={e => e.stopPropagation()}>
                                 <Checkbox checked={selectedDocIds.has(d.id)} onCheckedChange={() => setSelectedDocIds(s => { const n = new Set(s); n.has(d.id) ? n.delete(d.id) : n.add(d.id); return n; })} />
                               </td>
-                              <td className="px-2 py-1 font-mono">
+                              <td className="px-2 py-1 font-mono border-r">
                                 <div>{d.doc_name}</div>
                                 {docTimings[d.id] != null && (
                                   <div className="text-[10px] text-muted-foreground mt-0.5">
@@ -1128,8 +1127,8 @@ export default function SAROrderFromStoreTab() {
                                   </div>
                                 )}
                               </td>
-                              <td className="px-2 py-1">{d.store_name}</td>
-                              <td className="px-2 py-1">
+                              <td className="px-2 py-1 border-r">{d.store_name}</td>
+                              <td className="px-2 py-1 border-r">
                                 <div className="flex items-center gap-1 justify-center flex-wrap">
                                   <Badge variant="secondary" className="text-[10px] px-1">Import {d.import_count}</Badge>
                                   <span className="text-muted-foreground text-[10px]">/</span>
@@ -1138,7 +1137,7 @@ export default function SAROrderFromStoreTab() {
                                   <Badge className={cn("text-[10px] px-1 border", d.skip_count > 0 ? "bg-amber-100 text-amber-700 border-amber-300" : "bg-muted text-muted-foreground")}>Skip {d.skip_count}</Badge>
                                 </div>
                               </td>
-                              <td className="px-2 py-1 text-muted-foreground">{new Date(d.created_at).toLocaleString()}</td>
+                              <td className="px-2 py-1 text-muted-foreground border-r">{new Date(d.created_at).toLocaleString()}</td>
                               <td className="px-2 py-1 text-center" onClick={e => e.stopPropagation()}>
                                 <div className="flex items-center gap-1 justify-center">
                                   <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={() => setOpenDoc(d)}>Open</Button>
@@ -1173,7 +1172,7 @@ export default function SAROrderFromStoreTab() {
             )}
 
             {!hqFetched && !hqLoading && (
-              <div className="flex-1 flex items-center justify-center text-muted-foreground text-sm">
+              <div className="py-4 flex items-center justify-center text-muted-foreground text-sm shrink-0">
                 {selectedDocIds.size > 0 ? "กด ดึงข้อมูล เพื่อโหลด" : "เลือก Doc แล้วกด ดึงข้อมูล"}
               </div>
             )}
