@@ -11,6 +11,8 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   FileSpreadsheet, Upload, Download, Loader2, AlertCircle, ClipboardPaste,
@@ -158,6 +160,7 @@ export default function SAROrderFromStoreTab() {
   // ---- IMPORT TAB ----
   const [importRows, setImportRows] = useState<ImportRow[]>([]);
   const [storeSelectOpen, setStoreSelectOpen] = useState(false);
+  const [storeComboOpen, setStoreComboOpen] = useState(false);
   const [storeList, setStoreList] = useState<string[]>([]);
   const [storeTypeCache, setStoreTypeCache] = useState<Record<string, string>>({});
   const [selectedStore, setSelectedStore] = useState("");
@@ -865,10 +868,29 @@ export default function SAROrderFromStoreTab() {
           <DialogHeader><DialogTitle>เลือก Store Name</DialogTitle><DialogDescription>Import {importRows.length} รายการ</DialogDescription></DialogHeader>
           <div className="py-2 space-y-1">
             <Label className="text-xs">Store Name</Label>
-            <Select value={selectedStore} onValueChange={setSelectedStore}>
-              <SelectTrigger><SelectValue placeholder="เลือก Store..." /></SelectTrigger>
-              <SelectContent>{storeList.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
-            </Select>
+            <Popover open={storeComboOpen} onOpenChange={setStoreComboOpen}>
+              <PopoverTrigger asChild>
+                <Button variant="outline" className="w-full justify-between font-normal">
+                  <span className={selectedStore ? "" : "text-muted-foreground"}>{selectedStore || "เลือก Store..."}</span>
+                  <ChevronDown className="w-4 h-4 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="p-0 w-full min-w-[280px]" align="start">
+                <Command>
+                  <CommandInput placeholder="ค้นหาสาขา..." />
+                  <CommandList className="max-h-60">
+                    <CommandEmpty>ไม่พบสาขา</CommandEmpty>
+                    <CommandGroup>
+                      {storeList.map(s => (
+                        <CommandItem key={s} value={s} onSelect={() => { setSelectedStore(s); setStoreComboOpen(false); }}>
+                          {s}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setStoreSelectOpen(false)} disabled={importSaving}>ยกเลิก</Button>
