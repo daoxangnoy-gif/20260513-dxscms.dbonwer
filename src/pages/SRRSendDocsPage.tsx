@@ -687,6 +687,11 @@ function ReportTab({ items, movements, poInfoMap, ensurePoInfo, canExport, final
     totalPoByPartner[p] = total;
   });
 
+  // กรองเฉพาะจุดที่มี PO อยู่จริง (มีค่า > 0 ในอย่างน้อย 1 partner)
+  const activeLocations = locationsUsed.filter(l =>
+    partnerList.some(p => (pivot[p]?.[l] || 0) > 0)
+  );
+
   const exportExcel = () => {
     const sheet1: any[] = [];
     partnerList.forEach(p => {
@@ -792,7 +797,7 @@ function ReportTab({ items, movements, poInfoMap, ensurePoInfo, canExport, final
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="text-sm text-muted-foreground">
-          {loading ? "กำลังโหลดข้อมูล PO..." : `${partnerList.length}${q ? `/${partnerListAll.length}` : ""} partner, ${items.length} doc, ${locationsUsed.length} จุด`}
+          {loading ? "กำลังโหลดข้อมูล PO..." : `${partnerList.length}${q ? `/${partnerListAll.length}` : ""} partner, ${items.length} doc, ${activeLocations.length} จุด`}
         </div>
         <div className="flex items-center gap-2 flex-1 max-w-md">
           <Input
@@ -818,14 +823,14 @@ function ReportTab({ items, movements, poInfoMap, ensurePoInfo, canExport, final
               <th className="w-6 p-2"></th>
               <th className="text-left p-2">Partner</th>
               <th className="text-center p-2">Total PO</th>
-              {locationsUsed.map(l => (
+              {activeLocations.map(l => (
                 <th key={l} className="text-center p-2 whitespace-nowrap">{l}</th>
               ))}
             </tr>
           </thead>
           <tbody>
             {partnerList.length === 0 ? (
-              <tr><td colSpan={3 + locationsUsed.length} className="text-center p-6 text-muted-foreground">ไม่มีข้อมูล — กด "ดึงข้อมูล PO" ในแท็บฝากเอกสารก่อน</td></tr>
+              <tr><td colSpan={3 + activeLocations.length} className="text-center p-6 text-muted-foreground">ไม่มีข้อมูล — กด "ดึงข้อมูล PO" ในแท็บฝากเอกสารก่อน</td></tr>
             ) : partnerList.map(p => {
               const isOpen = !!expanded[p];
               return (
@@ -838,7 +843,7 @@ function ReportTab({ items, movements, poInfoMap, ensurePoInfo, canExport, final
                     </td>
                     <td className="p-2 font-medium">{p}</td>
                     <td className="p-2 text-center"><Badge variant="secondary">{totalPoByPartner[p] || 0}</Badge></td>
-                    {locationsUsed.map(l => (
+                    {activeLocations.map(l => (
                       <td key={l} className="p-2 text-center">
                         {pivot[p][l] > 0 ? <Badge>{pivot[p][l]}</Badge> : <span className="text-muted-foreground">-</span>}
                       </td>
@@ -846,7 +851,7 @@ function ReportTab({ items, movements, poInfoMap, ensurePoInfo, canExport, final
                   </tr>
                   {isOpen && (
                     <tr className="bg-muted/30">
-                      <td colSpan={3 + locationsUsed.length} className="p-3">
+                      <td colSpan={3 + activeLocations.length} className="p-3">
                         {/* ช่องค้นหาภายใน partner */}
                         <div className="mb-2 flex items-center gap-2">
                           <Input
