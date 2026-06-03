@@ -1,4 +1,4 @@
-import { useState, ReactNode } from "react";
+import { useState, ReactNode, useEffect, useRef } from "react";
 import { Loader2 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ interface Props {
   emptyHint?: string;
   counts?: Record<string, number>;
   loading?: boolean;
+  loadingLabel?: string;
 }
 
 function fmtCount(n: number) {
@@ -26,8 +27,22 @@ function fmtCount(n: number) {
   return String(n);
 }
 
-export function MultiSelectFilter({ label, icon, options, selected, onChange, width = "w-72", renderOption, emptyHint, counts, loading }: Props) {
+export function MultiSelectFilter({ label, icon, options, selected, onChange, width = "w-72", renderOption, emptyHint, counts, loading, loadingLabel }: Props) {
   const [q, setQ] = useState("");
+
+  // Timer: นับวินาทีตั้งแต่เริ่ม loading
+  const [elapsed, setElapsed] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (loading) {
+      setElapsed(0);
+      timerRef.current = setInterval(() => setElapsed(s => s + 1), 1000);
+    } else {
+      if (timerRef.current) clearInterval(timerRef.current);
+      setElapsed(0);
+    }
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [loading]);
   const filtered = (counts
     ? [...options].sort((a, b) => (counts[b] || 0) - (counts[a] || 0))
     : options
@@ -57,8 +72,14 @@ export function MultiSelectFilter({ label, icon, options, selected, onChange, wi
           <Button size="sm" variant="ghost" className="h-6 text-[10px] px-1.5" onClick={() => onChange([])}>Clear</Button>
         </div>
         {loading && options.length === 0 && (
-          <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground py-3 px-1 justify-center">
-            <Loader2 className="h-3 w-3 animate-spin" /> กำลังโหลด...
+          <div className="flex flex-col items-center gap-1 py-4 px-2">
+            <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              <span>{loadingLabel || "กำลังโหลด..."}</span>
+            </div>
+            <span className="text-[13px] font-mono font-semibold text-primary tabular-nums">
+              {elapsed} วินาที
+            </span>
           </div>
         )}
         {!loading && emptyHint && options.length === 0 && (

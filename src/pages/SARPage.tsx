@@ -1064,14 +1064,14 @@ export default function SARPage() {
 
               {mode === "filter" ? (
                 <>
-                  <MultiSelectFilter label="Store" options={filterOpts.stores} selected={storeFilter} onChange={setStoreFilter} width="w-80" counts={filterCounts.stores} loading={rawDocLoading} />
-                  <MultiSelectFilter label="Type Store" options={filterOpts.types} selected={typeStoreFilter} onChange={setTypeStoreFilter} counts={filterCounts.types} loading={rawDocLoading} />
-                  <MultiSelectFilter label="Item Type" options={filterOpts.itemTypes} selected={itemTypeFilter} onChange={setItemTypeFilter} counts={filterCounts.itemTypes} loading={rawDocLoading} />
-                  <MultiSelectFilter label="Buying Status" options={filterOpts.buyings} selected={buyingFilter} onChange={setBuyingFilter} counts={filterCounts.buyings} loading={rawDocLoading} />
-                  <MultiSelectFilter label="Division" options={filterOpts.divisions} selected={divisionFilter} onChange={setDivisionFilter} counts={filterCounts.divisions} loading={rawDocLoading} />
-                  <MultiSelectFilter label="Department" options={filterOpts.departments} selected={departmentFilter} onChange={setDepartmentFilter} counts={filterCounts.departments} loading={rawDocLoading} />
-                  <MultiSelectFilter label="Sub-Department" options={filterOpts.subDepartments} selected={subDeptFilter} onChange={setSubDeptFilter} counts={filterCounts.subDepartments} loading={rawDocLoading} />
-                  <MultiSelectFilter label="Class" options={filterOpts.classes} selected={classFilter} onChange={setClassFilter} counts={filterCounts.classes} loading={rawDocLoading} />
+                  <MultiSelectFilter label="Store" options={filterOpts.stores} selected={storeFilter} onChange={setStoreFilter} width="w-80" counts={filterCounts.stores} loading={rawDocLoading} loadingLabel="กำลังโหลดข้อมูล Store..." />
+                  <MultiSelectFilter label="Type Store" options={filterOpts.types} selected={typeStoreFilter} onChange={setTypeStoreFilter} counts={filterCounts.types} loading={rawDocLoading} loadingLabel="กำลังโหลด Type Store..." />
+                  <MultiSelectFilter label="Item Type" options={filterOpts.itemTypes} selected={itemTypeFilter} onChange={setItemTypeFilter} counts={filterCounts.itemTypes} loading={rawDocLoading} loadingLabel="กำลังโหลด Item Type..." />
+                  <MultiSelectFilter label="Buying Status" options={filterOpts.buyings} selected={buyingFilter} onChange={setBuyingFilter} counts={filterCounts.buyings} loading={rawDocLoading} loadingLabel="กำลังโหลด Buying Status..." />
+                  <MultiSelectFilter label="Division" options={filterOpts.divisions} selected={divisionFilter} onChange={setDivisionFilter} counts={filterCounts.divisions} loading={rawDocLoading} loadingLabel="กำลังโหลด Division..." />
+                  <MultiSelectFilter label="Department" options={filterOpts.departments} selected={departmentFilter} onChange={setDepartmentFilter} counts={filterCounts.departments} loading={rawDocLoading} loadingLabel="กำลังโหลด Department..." />
+                  <MultiSelectFilter label="Sub-Department" options={filterOpts.subDepartments} selected={subDeptFilter} onChange={setSubDeptFilter} counts={filterCounts.subDepartments} loading={rawDocLoading} loadingLabel="กำลังโหลด Sub-Department..." />
+                  <MultiSelectFilter label="Class" options={filterOpts.classes} selected={classFilter} onChange={setClassFilter} counts={filterCounts.classes} loading={rawDocLoading} loadingLabel="กำลังโหลด Class..." />
                   <Input
                     placeholder="SKU (คั่นด้วย ,)"
                     className="h-8 text-xs w-40"
