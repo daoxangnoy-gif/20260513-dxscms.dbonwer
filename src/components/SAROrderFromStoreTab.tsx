@@ -63,6 +63,9 @@ interface ProcessedRow extends SARRow {
   qty_import: number; division_group: string;
   _doc_type?: string;
   stock_store_orig?: number;
+  vendor_code?: string;
+  vendor_name?: string;
+  currency?: string;
 }
 
 // --------------- Columns ---------------
@@ -72,6 +75,7 @@ const COLS: { key: string; label: string; w: number; right?: boolean }[] = [
   { key: "division", label: "Division", w: 100 },
   { key: "department", label: "Department", w: 110 },
   { key: "sub_department", label: "Sub-Department", w: 130 },
+  { key: "vendor_info", label: "Vendor", w: 230 },
   { key: "sku_code", label: "SKU Code", w: 100 },
   { key: "main_barcode", label: "Barcode", w: 120 },
   { key: "product_name_la", label: "Product Name (LA)", w: 200 },
@@ -619,6 +623,19 @@ export default function SAROrderFromStoreTab() {
       const stTypeMap = new Map<string, string>();
       for (const r of (calcData?.store_types || []) as any[]) stTypeMap.set(r.store_name, r.type_store || "");
 
+      // Fetch vendor info: vendor_code + name from data_master, then currency from vendor_master
+      setProgressPct(88); setProgressLabel("ดึงข้อมูล Vendor...");
+      const dmVendorRows = await queryInChunks<any>("data_master", "sku_code", allSkus, "sku_code,vendor_code,vendor_display_name", q => q.eq("packing_size_qty", 1));
+      const skuToVendorCode = new Map<string, string>();
+      const skuToVendorName = new Map<string, string>();
+      for (const r of dmVendorRows) {
+        if (r.sku_code) { skuToVendorCode.set(r.sku_code, r.vendor_code || ""); skuToVendorName.set(r.sku_code, r.vendor_display_name || ""); }
+      }
+      const allVendorCodes = [...new Set(Array.from(skuToVendorCode.values()).filter(Boolean))];
+      const vendorMasterRows = allVendorCodes.length ? await queryInChunks<any>("vendor_master", "vendor_code", allVendorCodes, "vendor_code,currency") : [];
+      const vendorCurrencyMap = new Map<string, string>();
+      for (const r of vendorMasterRows) { if (r.vendor_code) vendorCurrencyMap.set(r.vendor_code, r.currency || ""); }
+
       const rows: ProcessedRow[] = [];
       for (const [key, { qty, main_barcode: mb, product_name_la: pnLa }] of storeSkuMap) {
         const [storeName, sku] = key.split("\x00");
@@ -646,7 +663,10 @@ export default function SAROrderFromStoreTab() {
           sar_suggest1: 0, sar_suggest2: 0, tt_order: 0, suggest_order_edit: null,
           final_order_unit: 0, final_order_uom: 0, doh_min: 0, doh_max: 0, doh_stock: 0, doh_tobe: 0, calculated: false,
         };
-        rows.push({ ...sarRow, qty_import: qty, division_group: dm?.division_group ?? "", stock_store_orig: sarRow.stock_store });
+        const vCode = skuToVendorCode.get(sku) || "";
+        const vName = skuToVendorName.get(sku) || "";
+        const vCurr = vendorCurrencyMap.get(vCode) || "";
+        rows.push({ ...sarRow, qty_import: qty, division_group: dm?.division_group ?? "", stock_store_orig: sarRow.stock_store, vendor_code: vCode, vendor_name: vName, currency: vCurr });
       }
 
       setHqRows(rows); setHqFetched(true); setProgressPct(100);
@@ -665,7 +685,7 @@ export default function SAROrderFromStoreTab() {
     setCalcElapsed(0);
     const start = Date.now();
     await new Promise(r => setTimeout(r, 10)); // ให้ UI update ก่อน
-    const next = hqRows.map(r => ({ ...computeRow(r), qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig }));
+    const next = hqRows.map(r => ({ ...computeRow(r), qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency }));
     const elapsed = Math.round((Date.now() - start) / 100) / 10;
     setCalcElapsed(elapsed);
     setHqRows(next); setHqCalculated(true);
@@ -677,7 +697,7 @@ export default function SAROrderFromStoreTab() {
     setHqRows(ofsCalCache.hqRows.map(r => {
       if (r.sku_code !== skuCode || r.store_name !== storeName) return r;
       const updated = computeRow({ ...r, suggest_order_edit: val });
-      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig };
+      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency };
     }));
   };
 
@@ -685,14 +705,14 @@ export default function SAROrderFromStoreTab() {
     setHqRows(ofsCalCache.hqRows.map(r => {
       if (r.sku_code !== skuCode || r.store_name !== storeName) return r;
       const updated = computeRow({ ...r, stock_store: val });
-      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig };
+      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency };
     }));
   };
 
   const clearAllStockStore = () => {
     setHqRows(ofsCalCache.hqRows.map(r => {
       const updated = computeRow({ ...r, stock_store: 0 });
-      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig };
+      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency };
     }));
   };
 
@@ -700,8 +720,29 @@ export default function SAROrderFromStoreTab() {
     setHqRows(ofsCalCache.hqRows.map(r => {
       const orig = r.stock_store_orig ?? 0;
       const updated = computeRow({ ...r, stock_store: orig });
-      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig };
+      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency };
     }));
+  };
+
+  const handleClearCalTable = () => {
+    setHqRows([]); setHqFetched(false); setHqCalculated(false);
+    setCalPage(0); setHqSearch(""); setCalcElapsed(0);
+  };
+
+  const exportCalTableExcel = () => {
+    if (!filteredHqRows.length) { toast({ title: "ไม่มีข้อมูล", variant: "destructive" }); return; }
+    const ws = XLSX.utils.json_to_sheet(filteredHqRows.map(r => {
+      const obj: Record<string, any> = {};
+      for (const col of COLS) {
+        if (col.key === "vendor_info") obj["Vendor"] = [r.currency, r.vendor_code, r.vendor_name].filter(Boolean).join(" - ");
+        else obj[col.label] = (r as any)[col.key];
+      }
+      return obj;
+    }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Cal Table");
+    XLSX.writeFile(wb, `OFS_CalTable_${fmtFile(new Date())}.xlsx`);
+    toast({ title: "Export สำเร็จ", description: `${filteredHqRows.length.toLocaleString()} แถว` });
   };
 
   const handleHQSave = async () => {
@@ -874,7 +915,7 @@ export default function SAROrderFromStoreTab() {
 
   // helper: build SRR-format row (ใช้กับทั้ง DC และ D2S PO)
   const toSrrPoRow = (r: ProcessedRow, qty: number, isFirst: boolean, groupKey: string, partnerId: string) => ({
-    "partner_id": isFirst ? partnerId : "",
+    "partner_id": isFirst ? (r.vendor_code || partnerId) : "",
     "Picking Type / Database ID": isFirst ? "" : "",
     "Inter Transfer": isFirst ? "" : "",
     "PO Group": isFirst ? groupKey : "",
@@ -1040,6 +1081,17 @@ export default function SAROrderFromStoreTab() {
                               >✕</button>
                             )}
                           </div>
+                        </td>
+                      );
+                    }
+
+                    // vendor_info — combined display
+                    if (col.key === "vendor_info") {
+                      const parts = [r.currency, r.vendor_code, r.vendor_name].filter(Boolean);
+                      const display = parts.join(" - ");
+                      return (
+                        <td key={col.key} className="px-2 py-1 border-r border-r-border/40" style={{ width: col.w, minWidth: col.w, maxWidth: col.w }}>
+                          <div className="truncate text-xs" title={display}>{display || "-"}</div>
                         </td>
                       );
                     }
@@ -1435,6 +1487,16 @@ export default function SAROrderFromStoreTab() {
               )}
               {hqCalculated && (
                 <Button size="sm" onClick={() => setSaveOpen(true)}><Save className="w-4 h-4 mr-1" />Save</Button>
+              )}
+              {hqFetched && (
+                <Button size="sm" variant="outline" className="text-emerald-700 border-emerald-300 hover:bg-emerald-50" onClick={exportCalTableExcel} disabled={!filteredHqRows.length}>
+                  <FileSpreadsheet className="w-4 h-4 mr-1" />Export Excel
+                </Button>
+              )}
+              {hqFetched && (
+                <Button size="sm" variant="outline" className="text-destructive border-destructive/30 hover:bg-destructive/5" onClick={handleClearCalTable}>
+                  <Trash2 className="w-4 h-4 mr-1" />Clear
+                </Button>
               )}
               {hqFetched && (
                 <>
