@@ -272,6 +272,7 @@ export default function SAROrderFromStoreTab() {
   const [viewTitle, setViewTitle] = useState("");
   const [viewDocType, setViewDocType] = useState<"RO" | "PO" | "MIXED" | null>(null);
   const [viewLoading, setViewLoading] = useState(false);
+  const [viewPage, setViewPage] = useState(0);
   const [perROChunk, setPerROChunk] = useState(50);
   const [perPOChunk, setPerPOChunk] = useState(50);
 
@@ -571,6 +572,12 @@ export default function SAROrderFromStoreTab() {
   );
   const totalCalPages = Math.max(1, Math.ceil(filteredHqRows.length / CAL_PAGE_SIZE));
 
+  const pagedViewItems = useMemo(() =>
+    viewItems ? viewItems.slice(viewPage * CAL_PAGE_SIZE, (viewPage + 1) * CAL_PAGE_SIZE) : [],
+    [viewItems, viewPage]
+  );
+  const totalViewPages = viewItems ? Math.max(1, Math.ceil(viewItems.length / CAL_PAGE_SIZE)) : 1;
+
   const filteredImportDocs = useMemo(() => {
     if (!importDocsSearch.trim()) return importDocs;
     const q = importDocsSearch.toLowerCase();
@@ -867,7 +874,7 @@ export default function SAROrderFromStoreTab() {
       const { data, error } = await (supabase as any).from("ofs_result_docs").select("data,doc_name,doc_type").eq("id", doc.id).single();
       if (error) throw error;
       setViewItems((data.data || []) as ProcessedRow[]);
-      setViewTitle(data.doc_name); setViewDocType(data.doc_type as "RO" | "PO");
+      setViewTitle(data.doc_name); setViewDocType(data.doc_type as "RO" | "PO"); setViewPage(0);
     } catch (e: any) { toast({ title: "Load error", description: e.message, variant: "destructive" }); }
     finally { setViewLoading(false); }
   };
@@ -886,6 +893,7 @@ export default function SAROrderFromStoreTab() {
       setViewItems(merged);
       setViewTitle(`${ids.length} docs selected`);
       setViewDocType(types.size === 1 ? (types.values().next().value as "RO" | "PO") : "MIXED");
+      setViewPage(0);
     } catch (e: any) { toast({ title: "Load error", description: e.message, variant: "destructive" }); }
     finally { setViewLoading(false); }
   };
@@ -1688,7 +1696,7 @@ export default function SAROrderFromStoreTab() {
                   <div className="text-sm font-semibold truncate max-w-xs">{viewTitle}</div>
                   {viewDocType && viewDocType !== "MIXED" && <Badge className={cn("text-[10px] px-1.5 border", viewDocType === "RO" ? "bg-emerald-100 text-emerald-700 border-emerald-300" : "bg-blue-100 text-blue-700 border-blue-300")}>{viewDocType}</Badge>}
                   <span className="text-xs text-muted-foreground">{viewItems.length.toLocaleString()} แถว</span>
-                  <div className="ml-auto flex gap-1.5 flex-wrap">
+                  <div className="ml-auto flex gap-1.5 flex-wrap items-center">
                     <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => exportExcelItems(viewItems, "Result")}><FileSpreadsheet className="w-3.5 h-3.5 mr-1" />Export Excel</Button>
                     {(viewDocType === "RO" || viewDocType === "MIXED") && (
                       <Button size="sm" variant="outline" className="h-7 text-xs text-emerald-700" onClick={() => exportTemplateRO(viewItems)}><FileSpreadsheet className="w-3.5 h-3.5 mr-1" />Template RO</Button>
@@ -1701,7 +1709,17 @@ export default function SAROrderFromStoreTab() {
                     )}
                   </div>
                 </div>
-                {renderTable(viewItems, false)}
+                <div className="px-4 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/30 border-b shrink-0 select-none flex items-center justify-between">
+                  <span>แสดง {CAL_PAGE_SIZE}/หน้า (แถวที่ {(viewPage * CAL_PAGE_SIZE + 1).toLocaleString()}–{Math.min((viewPage + 1) * CAL_PAGE_SIZE, viewItems!.length).toLocaleString()} จาก {viewItems!.length.toLocaleString()})</span>
+                  <div className="flex items-center gap-2">
+                    <button disabled={viewPage === 0} onClick={() => setViewPage(0)} className="px-1.5 py-0.5 rounded border text-[10px] disabled:opacity-30">«</button>
+                    <button disabled={viewPage === 0} onClick={() => setViewPage(p => Math.max(0, p - 1))} className="px-1.5 py-0.5 rounded border text-[10px] disabled:opacity-30">‹</button>
+                    <span className="tabular-nums text-[11px]">{viewPage + 1} / {totalViewPages}</span>
+                    <button disabled={viewPage >= totalViewPages - 1} onClick={() => setViewPage(p => Math.min(totalViewPages - 1, p + 1))} className="px-1.5 py-0.5 rounded border text-[10px] disabled:opacity-30">›</button>
+                    <button disabled={viewPage >= totalViewPages - 1} onClick={() => setViewPage(totalViewPages - 1)} className="px-1.5 py-0.5 rounded border text-[10px] disabled:opacity-30">»</button>
+                  </div>
+                </div>
+                {renderTable(pagedViewItems, false)}
               </>
             )}
           </TabsContent>
