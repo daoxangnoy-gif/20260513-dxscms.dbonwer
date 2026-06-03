@@ -1305,6 +1305,12 @@ export default function SRRSendDocsPage() {
     setDepositorName(""); setReceiverName(""); setOriginLocation(""); setDestinationLocation(""); setOriginCodes([]);
   };
 
+  // ปิด dialog พร้อม confirm ถ้ายังมีรายการสแกนค้างอยู่
+  const handleCloseCreate = () => {
+    if (originCodes.length > 0 && !window.confirm(`มีรายการสแกนค้างอยู่ ${originCodes.length} รายการ\nต้องการออกโดยไม่บันทึกใช่ไหม?`)) return;
+    clearDraft(); resetCreate(); setCreateOpen(false);
+  };
+
   const openEdit = (s: Shipment) => {
     setEditingId(s.id);
     setDepositorName(s.depositor_name || "");
@@ -2042,7 +2048,7 @@ export default function SRRSendDocsPage() {
       </Dialog>
 
       {/* Create Dialog */}
-      <Dialog open={createOpen} onOpenChange={(open) => { if (open) setCreateOpen(true); /* ห้ามปิดจาก outside — ต้องกด X หรือ ยกเลิก เท่านั้น */ }}>
+      <Dialog open={createOpen} onOpenChange={(open) => { if (open) setCreateOpen(true); else handleCloseCreate(); }}>
         <DialogContent
           className="max-w-2xl"
           onInteractOutside={(e) => e.preventDefault()}
@@ -2084,7 +2090,7 @@ export default function SRRSendDocsPage() {
             return null;
           }} />
           <DialogFooter>
-            <Button variant="outline" onClick={() => { clearDraft(); resetCreate(); setCreateOpen(false); }}>ยกเลิก</Button>
+            <Button variant="outline" onClick={handleCloseCreate}>ยกเลิก</Button>
             <Button onClick={handleSaveDoc}><Save className="w-4 h-4 mr-1" />{editingId ? "บันทึกการแก้ไข" : `Save เป็น Doc (${originCodes.length})`}</Button>
           </DialogFooter>
         </DialogContent>
