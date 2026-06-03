@@ -195,6 +195,10 @@ export default function SAROrderFromStoreTab() {
   const [hqCalculating, setHqCalculating] = useState(false);
   const [progressPct, setProgressPct] = useState(0);
   const [progressLabel, setProgressLabel] = useState("");
+  const [fetchElapsed, setFetchElapsed] = useState(0);
+  const fetchTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const fetchElapsedRef = useRef(0);
+  const [calcElapsed, setCalcElapsed] = useState(0);
   const [useQtyImport, setUseQtyImport] = useState(false);
   const [hqSearch, setHqSearch] = useState("");
   const [saveOpen, setSaveOpen] = useState(false);
@@ -504,7 +508,9 @@ export default function SAROrderFromStoreTab() {
     const selectedDocs = importDocs.filter(d => selectedDocIds.has(d.id));
     if (!selectedDocs.length) return;
     setHqLoading(true); setHqFetched(false); setHqCalculated(false); setHqRows([]);
-    setProgressPct(5); setProgressLabel("รวบรวมรายการ...");
+    fetchElapsedRef.current = 0; setFetchElapsed(0);
+    fetchTimerRef.current = setInterval(() => { fetchElapsedRef.current += 1; setFetchElapsed(fetchElapsedRef.current); }, 1000);
+    setProgressPct(10); setProgressLabel("รวบรวมรายการ...");
     try {
       // Group by (store, sku), sum qty
       const storeSkuMap = new Map<string, { qty: number; main_barcode: string | null; product_name_la: string | null }>();
@@ -518,69 +524,38 @@ export default function SAROrderFromStoreTab() {
       const allSkus = [...new Set(Array.from(storeSkuMap.keys()).map(k => k.split("\x00")[1]))];
       const allStores = [...new Set(selectedDocs.map(d => d.store_name))];
 
-      setProgressPct(10); setProgressLabel("ดึง Data master...");
+      setProgressPct(30); setProgressLabel(`ดึงข้อมูล ${allSkus.length.toLocaleString()} SKU × ${allStores.length} store...`);
+      const { data: calcData, error: rpcError } = await (supabase as any).rpc("get_ofs_calc_data", {
+        p_sku_codes: allSkus,
+        p_store_names: allStores,
+      });
+      if (rpcError) throw rpcError;
+
+      setProgressPct(85); setProgressLabel("สร้าง rows...");
       const dmMap = new Map<string, any>();
-      for (let i = 0; i < allSkus.length; i += 200) {
-        const slice = allSkus.slice(i, i + 200);
-        const { data } = await (supabase.from("data_master") as any)
-          .select("sku_code,main_barcode,product_name_la,product_name_en,unit_of_measure,division_group,division,department,sub_department,item_type,buying_status,standard_price,list_price,jmart_price")
-          .in("sku_code", slice).eq("packing_size_qty", 1);
-        for (const r of (data || []) as any[]) { if (r.sku_code && !dmMap.has(r.sku_code)) dmMap.set(r.sku_code, r); }
-      }
+      for (const r of (calcData?.dm || []) as any[]) { if (r.sku_code && !dmMap.has(r.sku_code)) dmMap.set(r.sku_code, r); }
 
-      setProgressPct(25); setProgressLabel("โหลด Min/Max doc...");
-      const { data: mmDoc } = await supabase.from("minmax_cal_documents").select("data").order("created_at", { ascending: false }).limit(1).maybeSingle();
-      const allMm = ((mmDoc?.data || []) as unknown as DocRowRaw[]);
       const mmMap = new Map<string, DocRowRaw>();
-      for (const r of allMm) { const k = `${r.sku_code}\x00${r.store_name}`; if (!mmMap.has(k)) mmMap.set(k, r); }
+      for (const r of (calcData?.mm || []) as any[]) { const k = `${r.sku_code}\x00${r.store_name}`; if (!mmMap.has(k)) mmMap.set(k, r as DocRowRaw); }
 
-      setProgressPct(40); setProgressLabel("โหลด Stock...");
       const stockDCMap = new Map<string, number>();
+      for (const r of (calcData?.stock_dc || []) as any[]) stockDCMap.set(r.item_id, Number(r.qty) || 0);
+
       const stockStoreMap = new Map<string, number>();
-      const PAGE = 1000;
-      for (let i = 0; i < allSkus.length; i += 500) {
-        const slice = allSkus.slice(i, i + 500); let off = 0;
-        while (true) {
-          const { data, error } = await supabase.from("stock").select("item_id,type_store,company,quantity").in("item_id", slice).range(off, off + PAGE - 1);
-          if (error) break;
-          const batch = (data || []) as any[];
-          for (const s of batch) {
-            const qty = Number(s.quantity) || 0;
-            if (s.type_store === "DC") stockDCMap.set(s.item_id, (stockDCMap.get(s.item_id) || 0) + qty);
-            const co = String(s.company || "").trim();
-            if (allStores.includes(co)) stockStoreMap.set(`${s.item_id}\x00${co}`, (stockStoreMap.get(`${s.item_id}\x00${co}`) || 0) + qty);
-          }
-          if (batch.length < PAGE) break; off += PAGE;
-        }
-      }
+      for (const r of (calcData?.stock_store || []) as any[]) stockStoreMap.set(`${r.item_id}\x00${r.company}`, Number(r.qty) || 0);
 
-      setProgressPct(60); setProgressLabel("โหลด On Order...");
       const onOrderMap = new Map<string, number>();
-      for (let i = 0; i < allSkus.length; i += 500) {
-        const slice = allSkus.slice(i, i + 500); let off = 0;
-        while (true) {
-          const { data, error } = await supabase.from("on_order_dc").select("sku_code,store_name,qty").in("sku_code", slice).range(off, off + PAGE - 1);
-          if (error) break;
-          const batch = (data || []) as any[];
-          for (const o of batch) { if (allStores.includes(o.store_name)) onOrderMap.set(`${o.sku_code}\x00${o.store_name}`, (onOrderMap.get(`${o.sku_code}\x00${o.store_name}`) || 0) + (Number(o.qty) || 0)); }
-          if (batch.length < PAGE) break; off += PAGE;
-        }
-      }
+      for (const r of (calcData?.on_order || []) as any[]) onOrderMap.set(`${r.sku_code}\x00${r.store_name}`, Number(r.qty) || 0);
 
-      setProgressPct(75); setProgressLabel("โหลด Pack/Box + Store type...");
       const rsvMap = new Map<string, { pack_qty: number | null; box_qty: number | null }>();
-      const rsvRows = await queryInChunks<any>("range_store_view", "sku_code", allSkus, "sku_code,pack_qty,box_qty");
-      for (const r of rsvRows) { if (r.sku_code && !rsvMap.has(r.sku_code)) rsvMap.set(r.sku_code, { pack_qty: r.pack_qty ?? null, box_qty: r.box_qty ?? null }); }
+      for (const r of (calcData?.pack_box || []) as any[]) { if (!rsvMap.has(r.sku_code)) rsvMap.set(r.sku_code, { pack_qty: r.pack_qty ?? null, box_qty: r.box_qty ?? null }); }
 
-      const { data: stTypeData } = await (supabase.from("store_type") as any).select("store_name,type_store").in("store_name", allStores);
       const stTypeMap = new Map<string, string>();
-      for (const r of (stTypeData || []) as any[]) stTypeMap.set(r.store_name, r.type_store || "");
+      for (const r of (calcData?.store_types || []) as any[]) stTypeMap.set(r.store_name, r.type_store || "");
 
-      setProgressPct(90); setProgressLabel("สร้าง rows...");
       const rows: ProcessedRow[] = [];
       for (const [key, { qty, main_barcode: mb, product_name_la: pnLa }] of storeSkuMap) {
         const [storeName, sku] = key.split("\x00");
-        // mmMap / stockStoreMap / onOrderMap ใช้ key เป็น sku\x00store ต้อง construct ใหม่
         const lookupKey = `${sku}\x00${storeName}`;
         const dm = dmMap.get(sku);
         const mm = mmMap.get(lookupKey);
@@ -609,18 +584,27 @@ export default function SAROrderFromStoreTab() {
       }
 
       setHqRows(rows); setHqFetched(true); setProgressPct(100);
-      toast({ title: "ดึงข้อมูลสำเร็จ", description: `${rows.length} รายการ จาก ${allStores.length} store` });
+      toast({ title: "ดึงข้อมูลสำเร็จ", description: `${rows.length} รายการ · ${fetchElapsedRef.current}s` });
     } catch (e: any) { toast({ title: "Error", description: e.message, variant: "destructive" }); }
-    finally { setHqLoading(false); setTimeout(() => { setProgressPct(0); setProgressLabel(""); }, 800); }
+    finally {
+      setHqLoading(false);
+      if (fetchTimerRef.current) { clearInterval(fetchTimerRef.current); fetchTimerRef.current = null; }
+      setTimeout(() => { setProgressPct(0); setProgressLabel(""); }, 800);
+    }
   };
 
-  const handleCalculate = () => {
+  const handleCalculate = async () => {
     if (!hqFetched || !hqRows.length) return;
     setHqCalculating(true);
+    setCalcElapsed(0);
+    const start = Date.now();
+    await new Promise(r => setTimeout(r, 10)); // ให้ UI update ก่อน
     const next = hqRows.map(r => ({ ...computeRow(r), qty_import: r.qty_import, division_group: r.division_group }));
+    const elapsed = Math.round((Date.now() - start) / 100) / 10;
+    setCalcElapsed(elapsed);
     setHqRows(next); setHqCalculated(true);
     setHqCalculating(false);
-    toast({ title: "คำนวณเสร็จ", description: `${next.length} แถว` });
+    toast({ title: "คำนวณเสร็จ", description: `${next.length} แถว · ${elapsed}s` });
   };
 
   const updateSuggestEdit = (storeName: string, skuCode: string, val: number | null) => {
@@ -1201,7 +1185,27 @@ export default function SAROrderFromStoreTab() {
                   <span className="text-xs text-muted-foreground">{filteredHqRows.length.toLocaleString()} แถว</span>
                 </>
               )}
+              {/* Status + timer — ดึงข้อมูล / คำนวณ */}
+              {(hqLoading || hqCalculating) && (
+                <div className="ml-auto flex items-center gap-2 shrink-0">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
+                  <span className="text-xs text-muted-foreground truncate max-w-[200px]">
+                    {hqLoading ? progressLabel : "กำลังคำนวณ..."}
+                  </span>
+                  {hqLoading && (
+                    <span className="text-xs font-mono tabular-nums text-primary font-semibold">{fetchElapsed}s</span>
+                  )}
+                </div>
+              )}
+              {/* แสดงผลสุดท้ายหลัง fetch/cal เสร็จ */}
+              {!hqLoading && !hqCalculating && hqCalculated && calcElapsed > 0 && (
+                <span className="ml-auto text-[10px] text-muted-foreground shrink-0">คำนวณ {calcElapsed}s</span>
+              )}
             </div>
+            {/* thin progress bar ใต้ toolbar */}
+            {(hqLoading || progressPct > 0) && (
+              <Progress value={progressPct} className="h-1 rounded-none shrink-0" />
+            )}
 
             {/* Doc list (with expand/collapse) */}
             <div className={cn("overflow-y-auto border-b", hqFetched ? "shrink-0 max-h-64" : "flex-1")}>
@@ -1286,14 +1290,6 @@ export default function SAROrderFromStoreTab() {
                 </table>
               )}
             </div>
-
-            {/* Progress */}
-            {(hqLoading || progressPct > 0) && (
-              <div className="px-4 py-2 space-y-1 shrink-0">
-                <div className="flex justify-between text-xs"><span className="text-muted-foreground">{progressLabel}</span><span>{progressPct}%</span></div>
-                <Progress value={progressPct} className="h-1.5" />
-              </div>
-            )}
 
             {/* SAR Table */}
             {hqFetched && (
