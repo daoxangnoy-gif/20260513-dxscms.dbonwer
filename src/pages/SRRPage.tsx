@@ -1989,18 +1989,29 @@ function SRRDCItemPage() {
 
   const clearAllOnOrder = () => {
     setShowData(prev => prev.map(r => recalcRow({ ...r, on_order: 0 })));
-    setVendorDocs(prev => prev.map(doc => ({
-      ...doc,
-      data: doc.data.map(r => recalcRow({ ...r, on_order: 0 })),
-    })));
+    setVendorDocs(prev => prev.map(doc => ({ ...doc, data: doc.data.map(r => recalcRow({ ...r, on_order: 0 })) })));
   };
-
   const restoreAllOnOrder = () => {
     setShowData(prev => prev.map(r => recalcRow({ ...r, on_order: r.orig_on_order })));
-    setVendorDocs(prev => prev.map(doc => ({
-      ...doc,
-      data: doc.data.map(r => recalcRow({ ...r, on_order: r.orig_on_order })),
-    })));
+    setVendorDocs(prev => prev.map(doc => ({ ...doc, data: doc.data.map(r => recalcRow({ ...r, on_order: r.orig_on_order })) })));
+  };
+
+  const clearAllStockDc = () => {
+    setShowData(prev => prev.map(r => recalcRow({ ...r, stock_dc: 0 })));
+    setVendorDocs(prev => prev.map(doc => ({ ...doc, data: doc.data.map(r => recalcRow({ ...r, stock_dc: 0 })) })));
+  };
+  const restoreAllStockDc = () => {
+    setShowData(prev => prev.map(r => recalcRow({ ...r, stock_dc: r.orig_stock_dc })));
+    setVendorDocs(prev => prev.map(doc => ({ ...doc, data: doc.data.map(r => recalcRow({ ...r, stock_dc: r.orig_stock_dc })) })));
+  };
+
+  const clearAllTTStockStore = () => {
+    setShowData(prev => prev.map(r => recalcRow({ ...r, stock_jmart: 0, stock_kokkok: 0, stock_kokkok_fc: 0, stock_udee: 0 })));
+    setVendorDocs(prev => prev.map(doc => ({ ...doc, data: doc.data.map(r => recalcRow({ ...r, stock_jmart: 0, stock_kokkok: 0, stock_kokkok_fc: 0, stock_udee: 0 })) })));
+  };
+  const restoreAllTTStockStore = () => {
+    setShowData(prev => prev.map(r => recalcRow({ ...r, stock_jmart: r.orig_stock_jmart, stock_kokkok: r.orig_stock_kokkok, stock_kokkok_fc: r.orig_stock_kokkok_fc, stock_udee: r.orig_stock_udee })));
+    setVendorDocs(prev => prev.map(doc => ({ ...doc, data: doc.data.map(r => recalcRow({ ...r, stock_jmart: r.orig_stock_jmart, stock_kokkok: r.orig_stock_kokkok, stock_kokkok_fc: r.orig_stock_kokkok_fc, stock_udee: r.orig_stock_udee })) })));
   };
 
   const updateOrderUomEdit = (rowId: string, value: string) => {
@@ -2648,6 +2659,21 @@ function SRRDCItemPage() {
                             >Restore</button>
                           )}
                         </div>
+                      ) : showEditColumns && col.key === "stock_dc" ? (
+                        <div className="flex items-center gap-0.5">
+                          <span className="text-xs flex-1">{formatCellValue(val, col.key)}</span>
+                          {(val as number) !== 0 ? (
+                            <button className="text-[9px] text-destructive hover:underline px-0.5" onClick={e => { e.stopPropagation(); updateNumericField(row.id, "stock_dc", "0"); }} title="Clear Stock DC เป็น 0">Clear</button>
+                          ) : (
+                            <button className="text-[9px] text-primary hover:underline px-0.5" onClick={e => { e.stopPropagation(); updateNumericField(row.id, "stock_dc", String(row.orig_stock_dc)); }} title="คืนค่า Stock DC เดิม">Restore</button>
+                          )}
+                        </div>
+                      ) : showEditColumns && col.key === "tt_stock_store" ? (
+                        <div className="flex items-center gap-0.5">
+                          <span className="text-xs flex-1">{formatCellValue(val, col.key)}</span>
+                          <button className="text-[9px] text-destructive hover:underline px-0.5" onClick={e => { e.stopPropagation(); updateNumericField(row.id, "stock_jmart", "0"); updateNumericField(row.id, "stock_kokkok", "0"); updateNumericField(row.id, "stock_kokkok_fc", "0"); updateNumericField(row.id, "stock_udee", "0"); }} title="Clear Store Stocks ทั้งหมดเป็น 0">Clear</button>
+                          <button className="text-[9px] text-primary hover:underline px-0.5" onClick={e => { e.stopPropagation(); updateNumericField(row.id, "stock_jmart", String(row.orig_stock_jmart)); updateNumericField(row.id, "stock_kokkok", String(row.orig_stock_kokkok)); updateNumericField(row.id, "stock_kokkok_fc", String(row.orig_stock_kokkok_fc)); updateNumericField(row.id, "stock_udee", String(row.orig_stock_udee)); }} title="คืนค่า Store Stocks เดิมทั้งหมด">Restore</button>
+                        </div>
                       ) : showEditColumns && (col.key === "min_jmart" || col.key === "min_kokkok" || col.key === "min_kokkok_fc" || col.key === "min_udee" || col.key === "stock_jmart" || col.key === "stock_kokkok" || col.key === "stock_kokkok_fc" || col.key === "stock_udee") ? (
                         <div className="flex items-center gap-0.5">
                           <span className="text-xs flex-1">{formatCellValue(val, col.key)}</span>
@@ -3290,12 +3316,28 @@ function SRRDCItemPage() {
                       Reset
                     </Button>
                   </div>
-                  <Button size="sm" variant="outline" onClick={clearAllOnOrder} className="text-xs gap-1">
-                    <XCircle className="w-3.5 h-3.5" /> Clear All ON ORDER
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={restoreAllOnOrder} className="text-xs gap-1">
-                    <RefreshCw className="w-3.5 h-3.5" /> Restore All ON ORDER
-                  </Button>
+                  {/* Bulk Clear/Restore dropdowns */}
+                  {[
+                    { label: "ON ORDER", clear: clearAllOnOrder, restore: restoreAllOnOrder },
+                    { label: "Stock DC", clear: clearAllStockDc, restore: restoreAllStockDc },
+                    { label: "TT Stock Store", clear: clearAllTTStockStore, restore: restoreAllTTStockStore },
+                  ].map(({ label, clear, restore }) => (
+                    <DropdownMenu key={label}>
+                      <DropdownMenuTrigger asChild>
+                        <Button size="sm" variant="outline" className="text-xs gap-1 h-7 px-2">
+                          {label} <ChevronDown className="w-3 h-3" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" className="min-w-[160px]">
+                        <DropdownMenuItem className="text-destructive gap-2 text-xs" onClick={clear}>
+                          <XCircle className="w-3.5 h-3.5" /> Clear All
+                        </DropdownMenuItem>
+                        <DropdownMenuItem className="text-primary gap-2 text-xs" onClick={restore}>
+                          <RefreshCw className="w-3.5 h-3.5" /> Restore All
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  ))}
 
                   <Popover>
                     <PopoverTrigger asChild>

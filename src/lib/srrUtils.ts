@@ -316,6 +316,7 @@ export function buildSRRRows(rawRows: any[], vendorInfoList: VendorInfo[]): SRRR
       orig_min_kokkok: Number(r.min_kokkok) || 0,
       orig_min_kokkok_fc: Number(r.min_kokkok_fc) || 0,
       orig_min_udee: Number(r.min_udee) || 0,
+      orig_stock_dc: Number(r.stock_dc) || 0,
       orig_stock_jmart: Number(r.stock_jmart) || 0,
       orig_stock_kokkok: Number(r.stock_kokkok) || 0,
       orig_stock_kokkok_fc: Number(r.stock_kokkok_fc) || 0,

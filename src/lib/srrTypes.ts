@@ -53,6 +53,7 @@ export interface SRRRow {
   orig_min_kokkok: number;
   orig_min_kokkok_fc: number;
   orig_min_udee: number;
+  orig_stock_dc: number;
   orig_stock_jmart: number;
   orig_stock_kokkok: number;
   orig_stock_kokkok_fc: number;
