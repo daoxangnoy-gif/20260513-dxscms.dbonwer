@@ -42,7 +42,7 @@ interface OfsImportLine {
 interface OfsImportDoc {
   id: string; doc_name: string; store_name: string;
   import_count: number; pass_count: number; skip_count: number;
-  data: OfsImportLine[]; user_id: string | null; created_at: string;
+  data: OfsImportLine[]; skip_data: SkipRow[] | null; user_id: string | null; created_at: string;
 }
 
 interface OfsResultDoc {
@@ -333,7 +333,7 @@ export default function SAROrderFromStoreTab() {
       const { error } = await (supabase as any).from("ofs_import_docs").insert({
         doc_name: docName, store_name: selectedStore,
         import_count: importRows.length, pass_count: valid.length, skip_count: skips.length,
-        data: valid, user_id: user?.id,
+        data: valid, skip_data: skips, user_id: user?.id,
       });
       if (error) throw error;
 
@@ -372,6 +372,18 @@ export default function SAROrderFromStoreTab() {
     XLSX.writeFile(wb, `OFS_Skip_${Date.now()}.xlsx`);
   };
 
+  const downloadSkipListFromDoc = (d: OfsImportDoc) => {
+    const skips = (d.skip_data || []) as SkipRow[];
+    if (!skips.length) { toast({ title: "ไม่มี Skip List", description: "Doc นี้ไม่มีรายการที่ถูก Skip หรือข้อมูลเก่าก่อนอัปเดตระบบ", variant: "destructive" }); return; }
+    const ws = XLSX.utils.json_to_sheet(skips.map(r => ({
+      "Barcode Import": r.barcode, "Product Name LA": r.product_name_la,
+      "Qty": r.qty, "Reason": r.reason, "Store Name": r.store_name,
+    })));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Skip List");
+    XLSX.writeFile(wb, `OFS_Skip_${d.doc_name}.xlsx`);
+  };
+
 
   // ============================================================
   // HQ TAB — logic
@@ -381,7 +393,7 @@ export default function SAROrderFromStoreTab() {
     setImportDocsLoading(true);
     try {
       const { data, error } = await (supabase as any).from("ofs_import_docs")
-        .select("id, doc_name, store_name, import_count, pass_count, skip_count, user_id, created_at, data")
+        .select("id, doc_name, store_name, import_count, pass_count, skip_count, user_id, created_at, data, skip_data")
         .order("created_at", { ascending: false }).limit(200);
       if (error) throw error;
       setImportDocs(data || []);
@@ -1037,7 +1049,7 @@ export default function SAROrderFromStoreTab() {
 
         {/* ============ IMPORT DOCS TAB ============ */}
         {(canImport || canHQ) && (
-          <TabsContent value="import_docs" className={cn("overflow-hidden mt-0 data-[state=active]:flex flex-col", hqFetched ? "flex-1" : "")}>
+          <TabsContent value="import_docs" className="flex-1 overflow-hidden mt-0 data-[state=active]:flex flex-col">
             {/* Import section */}
             <div className="border-b px-4 py-2 flex items-center gap-2 flex-wrap shrink-0 bg-background">
               <span className="text-xs font-medium text-muted-foreground">Import:</span>
@@ -1085,7 +1097,7 @@ export default function SAROrderFromStoreTab() {
             </div>
 
             {/* Doc list (with expand/collapse) */}
-            <div className="shrink-0 max-h-64 overflow-y-auto border-b">
+            <div className={cn("overflow-y-auto border-b", hqFetched ? "shrink-0 max-h-64" : "flex-1")}>
               {importDocsLoading ? (
                 <div className="flex items-center justify-center py-6"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
               ) : (
@@ -1134,7 +1146,15 @@ export default function SAROrderFromStoreTab() {
                                   <span className="text-muted-foreground text-[10px]">/</span>
                                   <Badge className="bg-emerald-100 text-emerald-700 border-emerald-300 text-[10px] px-1">ผ่าน {d.pass_count}</Badge>
                                   <span className="text-muted-foreground text-[10px]">/</span>
-                                  <Badge className={cn("text-[10px] px-1 border", d.skip_count > 0 ? "bg-amber-100 text-amber-700 border-amber-300" : "bg-muted text-muted-foreground")}>Skip {d.skip_count}</Badge>
+                                  {d.skip_count > 0 ? (
+                                    <Badge
+                                      className="text-[10px] px-1 border bg-amber-100 text-amber-700 border-amber-300 cursor-pointer hover:bg-amber-200"
+                                      onClick={e => { e.stopPropagation(); downloadSkipListFromDoc(d); }}
+                                      title="คลิกเพื่อ Download Skip List"
+                                    >Skip {d.skip_count} ↓</Badge>
+                                  ) : (
+                                    <Badge className="text-[10px] px-1 border bg-muted text-muted-foreground">Skip {d.skip_count}</Badge>
+                                  )}
                                 </div>
                               </td>
                               <td className="px-2 py-1 text-muted-foreground border-r">{new Date(d.created_at).toLocaleString()}</td>
@@ -1171,11 +1191,6 @@ export default function SAROrderFromStoreTab() {
               </>
             )}
 
-            {!hqFetched && !hqLoading && (
-              <div className="py-4 flex items-center justify-center text-muted-foreground text-sm shrink-0">
-                {selectedDocIds.size > 0 ? "กด ดึงข้อมูล เพื่อโหลด" : "เลือก Doc แล้วกด ดึงข้อมูล"}
-              </div>
-            )}
           </TabsContent>
         )}
 
