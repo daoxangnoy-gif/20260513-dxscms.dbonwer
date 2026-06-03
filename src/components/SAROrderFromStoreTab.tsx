@@ -134,6 +134,16 @@ function fmtFile(ts: Date) {
   return `${ts.getFullYear()}${p(ts.getMonth() + 1)}${p(ts.getDate())}${p(ts.getHours())}${p(ts.getMinutes())}`;
 }
 
+// --------------- Module-level cache (survives tab navigation) ---------------
+const ofsCalCache: {
+  hqRows: ProcessedRow[];
+  hqFetched: boolean;
+  hqCalculated: boolean;
+  selectedDocIds: string[];
+} = { hqRows: [], hqFetched: false, hqCalculated: false, selectedDocIds: [] };
+
+const CAL_PAGE_SIZE = 100;
+
 // --------------- Component ---------------
 export default function SAROrderFromStoreTab() {
   const { user, isAdmin, canDo } = useAuth();
@@ -206,9 +216,15 @@ export default function SAROrderFromStoreTab() {
   const [docTimings, setDocTimings] = useState<Record<string, number>>(() => {
     try { return JSON.parse(localStorage.getItem("ofs_doc_timings") || "{}"); } catch { return {}; }
   });
-  const [hqRows, setHqRows] = useState<ProcessedRow[]>([]);
-  const [hqFetched, setHqFetched] = useState(false);
-  const [hqCalculated, setHqCalculated] = useState(false);
+  // Init from module-level cache → survives tab navigation
+  const [hqRows, setHqRowsRaw] = useState<ProcessedRow[]>(ofsCalCache.hqRows);
+  const [hqFetched, setHqFetchedRaw] = useState(ofsCalCache.hqFetched);
+  const [hqCalculated, setHqCalculatedRaw] = useState(ofsCalCache.hqCalculated);
+  const [calPage, setCalPage] = useState(0);
+  // Wrappers that update both state and cache
+  const setHqRows = (rows: ProcessedRow[]) => { ofsCalCache.hqRows = rows; setHqRowsRaw(rows); };
+  const setHqFetched = (v: boolean) => { ofsCalCache.hqFetched = v; setHqFetchedRaw(v); };
+  const setHqCalculated = (v: boolean) => { ofsCalCache.hqCalculated = v; setHqCalculatedRaw(v); };
   const [hqLoading, setHqLoading] = useState(false);
   const [hqCalculating, setHqCalculating] = useState(false);
   const [progressPct, setProgressPct] = useState(0);
@@ -513,6 +529,7 @@ export default function SAROrderFromStoreTab() {
   }, [useQtyImport]);
 
   const filteredHqRows = useMemo(() => {
+    setCalPage(0); // reset page on filter change
     if (!hqSearch.trim()) return hqRows;
     const q = hqSearch.toLowerCase();
     return hqRows.filter(r =>
@@ -522,6 +539,12 @@ export default function SAROrderFromStoreTab() {
       r.store_name.toLowerCase().includes(q)
     );
   }, [hqRows, hqSearch]);
+
+  const pagedHqRows = useMemo(() =>
+    filteredHqRows.slice(calPage * CAL_PAGE_SIZE, (calPage + 1) * CAL_PAGE_SIZE),
+    [filteredHqRows, calPage]
+  );
+  const totalCalPages = Math.max(1, Math.ceil(filteredHqRows.length / CAL_PAGE_SIZE));
 
   const saveSummary = useMemo(() => {
     if (!hqCalculated || !hqRows.length) return [];
@@ -639,7 +662,7 @@ export default function SAROrderFromStoreTab() {
   };
 
   const updateSuggestEdit = (storeName: string, skuCode: string, val: number | null) => {
-    setHqRows(prev => prev.map(r => {
+    setHqRows(ofsCalCache.hqRows.map(r => {
       if (r.sku_code !== skuCode || r.store_name !== storeName) return r;
       const updated = computeRow({ ...r, suggest_order_edit: val });
       return { ...updated, qty_import: r.qty_import, division_group: r.division_group };
@@ -1355,10 +1378,17 @@ export default function SAROrderFromStoreTab() {
             )}
             {hqFetched && (
               <>
-                <div className="px-4 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/30 border-b shrink-0 select-none">
-                  ตารางคำนวณ — {filteredHqRows.length.toLocaleString()} รายการ
+                <div className="px-4 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/30 border-b shrink-0 select-none flex items-center justify-between">
+                  <span>ตารางคำนวณ — {filteredHqRows.length.toLocaleString()} รายการ (แสดง {CAL_PAGE_SIZE}/หน้า)</span>
+                  <div className="flex items-center gap-2">
+                    <button disabled={calPage === 0} onClick={() => setCalPage(0)} className="px-1.5 py-0.5 rounded border text-[10px] disabled:opacity-30">«</button>
+                    <button disabled={calPage === 0} onClick={() => setCalPage(p => Math.max(0, p - 1))} className="px-1.5 py-0.5 rounded border text-[10px] disabled:opacity-30">‹</button>
+                    <span className="tabular-nums text-[11px]">{calPage + 1} / {totalCalPages}</span>
+                    <button disabled={calPage >= totalCalPages - 1} onClick={() => setCalPage(p => Math.min(totalCalPages - 1, p + 1))} className="px-1.5 py-0.5 rounded border text-[10px] disabled:opacity-30">›</button>
+                    <button disabled={calPage >= totalCalPages - 1} onClick={() => setCalPage(totalCalPages - 1)} className="px-1.5 py-0.5 rounded border text-[10px] disabled:opacity-30">»</button>
+                  </div>
                 </div>
-                {renderTable(filteredHqRows, true)}
+                {renderTable(pagedHqRows, true)}
               </>
             )}
           </TabsContent>
