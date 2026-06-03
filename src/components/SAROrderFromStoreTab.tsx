@@ -62,6 +62,7 @@ interface DocRowRaw {
 interface ProcessedRow extends SARRow {
   qty_import: number; division_group: string;
   _doc_type?: string;
+  stock_store_orig?: number;
 }
 
 // --------------- Columns ---------------
@@ -90,7 +91,7 @@ const COLS: { key: string; label: string; w: number; right?: boolean }[] = [
   { key: "min_val", label: "Min", w: 70, right: true },
   { key: "max_val", label: "Max", w: 70, right: true },
   { key: "stock_dc", label: "Stock DC", w: 80, right: true },
-  { key: "stock_store", label: "Store Stock", w: 90, right: true },
+  { key: "stock_store", label: "Store Stock", w: 130, right: true },
   { key: "sar_suggest1", label: "SAR Suggest1", w: 100, right: true },
   { key: "sar_suggest2", label: "SAR Suggest2", w: 100, right: true },
   { key: "on_order", label: "On Order", w: 80, right: true },
@@ -634,7 +635,7 @@ export default function SAROrderFromStoreTab() {
           sar_suggest1: 0, sar_suggest2: 0, tt_order: 0, suggest_order_edit: null,
           final_order_unit: 0, final_order_uom: 0, doh_min: 0, doh_max: 0, doh_stock: 0, doh_tobe: 0, calculated: false,
         };
-        rows.push({ ...sarRow, qty_import: qty, division_group: dm?.division_group ?? "" });
+        rows.push({ ...sarRow, qty_import: qty, division_group: dm?.division_group ?? "", stock_store_orig: sarRow.stock_store });
       }
 
       setHqRows(rows); setHqFetched(true); setProgressPct(100);
@@ -653,7 +654,7 @@ export default function SAROrderFromStoreTab() {
     setCalcElapsed(0);
     const start = Date.now();
     await new Promise(r => setTimeout(r, 10)); // ให้ UI update ก่อน
-    const next = hqRows.map(r => ({ ...computeRow(r), qty_import: r.qty_import, division_group: r.division_group }));
+    const next = hqRows.map(r => ({ ...computeRow(r), qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig }));
     const elapsed = Math.round((Date.now() - start) / 100) / 10;
     setCalcElapsed(elapsed);
     setHqRows(next); setHqCalculated(true);
@@ -665,7 +666,30 @@ export default function SAROrderFromStoreTab() {
     setHqRows(ofsCalCache.hqRows.map(r => {
       if (r.sku_code !== skuCode || r.store_name !== storeName) return r;
       const updated = computeRow({ ...r, suggest_order_edit: val });
-      return { ...updated, qty_import: r.qty_import, division_group: r.division_group };
+      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig };
+    }));
+  };
+
+  const updateStockStore = (storeName: string, skuCode: string, val: number) => {
+    setHqRows(ofsCalCache.hqRows.map(r => {
+      if (r.sku_code !== skuCode || r.store_name !== storeName) return r;
+      const updated = computeRow({ ...r, stock_store: val });
+      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig };
+    }));
+  };
+
+  const clearAllStockStore = () => {
+    setHqRows(ofsCalCache.hqRows.map(r => {
+      const updated = computeRow({ ...r, stock_store: 0 });
+      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig };
+    }));
+  };
+
+  const restoreAllStockStore = () => {
+    setHqRows(ofsCalCache.hqRows.map(r => {
+      const orig = r.stock_store_orig ?? 0;
+      const updated = computeRow({ ...r, stock_store: orig });
+      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig };
     }));
   };
 
@@ -949,6 +973,14 @@ export default function SAROrderFromStoreTab() {
                       {useQtyImport ? "▶ Qty Import" : "▶ Calculated"}
                     </button>
                   </div>
+                ) : showToggle && col.key === "stock_store" ? (
+                  <div className="flex flex-col items-end gap-0.5">
+                    <span>{col.label}</span>
+                    <div className="flex gap-0.5">
+                      <button onClick={clearAllStockStore} className="text-[9px] px-1 py-0.5 rounded border font-normal leading-none bg-red-50 text-red-700 border-red-200 hover:bg-red-100" title="Clear Stock Store ทุกแถว">Clear All</button>
+                      <button onClick={restoreAllStockStore} className="text-[9px] px-1 py-0.5 rounded border font-normal leading-none bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100" title="Restore Stock Store ทุกแถว">Restore All</button>
+                    </div>
+                  </div>
                 ) : col.label}
               </th>
             ))}
@@ -968,6 +1000,38 @@ export default function SAROrderFromStoreTab() {
                     const isHL = HIGHLIGHT_COLS.has(col.key);
                     const isQA = showToggle && useQtyImport && col.key === "qty_import";
                     const isFA = showToggle && useQtyImport && col.key === "final_order_unit";
+
+                    // stock_store — editable + Clear/Restore เฉพาะ HQ tab (showToggle=true)
+                    if (showToggle && col.key === "stock_store") {
+                      const isModified = r.stock_store_orig !== undefined && r.stock_store !== r.stock_store_orig;
+                      return (
+                        <td key={col.key} className="px-1 py-0.5 border-r border-r-border/40" style={{ width: col.w, minWidth: col.w }}>
+                          <div className="flex items-center gap-0.5">
+                            <input
+                              type="number"
+                              step="any"
+                              value={r.stock_store}
+                              onChange={e => updateStockStore(r.store_name, r.sku_code, Number(e.target.value) || 0)}
+                              onFocus={e => e.currentTarget.select()}
+                              className={cn("w-full h-6 px-1 text-right border rounded text-xs bg-background", isModified && "border-orange-400 bg-orange-50")}
+                            />
+                            {isModified ? (
+                              <button
+                                onClick={() => updateStockStore(r.store_name, r.sku_code, r.stock_store_orig ?? 0)}
+                                className="shrink-0 text-[10px] px-1 h-5 rounded border bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100"
+                                title="Restore"
+                              >↺</button>
+                            ) : (
+                              <button
+                                onClick={() => updateStockStore(r.store_name, r.sku_code, 0)}
+                                className="shrink-0 text-[10px] px-1 h-5 rounded border bg-red-50 text-red-600 border-red-200 hover:bg-red-100"
+                                title="Clear"
+                              >✕</button>
+                            )}
+                          </div>
+                        </td>
+                      );
+                    }
 
                     // suggest_order_edit — editable เฉพาะ HQ tab (showToggle=true)
                     if (showToggle && col.key === "suggest_order_edit") {
