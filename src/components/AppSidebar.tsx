@@ -243,7 +243,7 @@ export default function AppSidebar({
                   {visibleSrrSubs.map((sub) => (
                     <button
                       key={sub.key}
-                      onClick={() => setActiveSrrSub(sub.key)}
+                      onClick={() => { setCurrentPage("srr"); setActiveSrrSub(sub.key); }}
                       className={cn(
                         "w-full flex items-center gap-2 py-1.5 rounded-md text-xs transition-all border-l-[2px]",
                         activeSrrSub === sub.key
