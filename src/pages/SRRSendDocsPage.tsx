@@ -54,19 +54,24 @@ function LocationCombobox({
       <PopoverContent className="p-0 w-72 z-[70000]" align="start">
         <Command>
           <CommandInput placeholder="ค้นหาจุด..." />
-          <CommandList style={{ maxHeight: "240px", overflowY: "auto" }}>
-            <CommandEmpty>ไม่พบจุด</CommandEmpty>
-            <CommandGroup>
-              {options.map((o) => (
-                <CommandItem key={o.name} value={o.name} onSelect={() => { onChange(o.name); setOpen(false); }}>
-                  <div>
-                    <div>{o.name}</div>
-                    {o.description && <div className="text-xs text-muted-foreground">{o.description}</div>}
-                  </div>
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </CommandList>
+          <div
+            style={{ maxHeight: "240px", overflowY: "auto" }}
+            onWheel={(e) => e.stopPropagation()}
+          >
+            <CommandList>
+              <CommandEmpty>ไม่พบจุด</CommandEmpty>
+              <CommandGroup>
+                {options.map((o) => (
+                  <CommandItem key={o.name} value={o.name} onSelect={() => { onChange(o.name); setOpen(false); }}>
+                    <div>
+                      <div>{o.name}</div>
+                      {o.description && <div className="text-xs text-muted-foreground">{o.description}</div>}
+                    </div>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </div>
         </Command>
       </PopoverContent>
     </Popover>
