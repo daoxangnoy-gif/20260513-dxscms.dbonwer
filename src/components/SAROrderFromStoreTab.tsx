@@ -66,6 +66,9 @@ interface ProcessedRow extends SARRow {
   vendor_code?: string;
   vendor_name?: string;
   currency?: string;
+  unit_barcode?: string;
+  unit_uom?: string;
+  ship_to?: string;
 }
 
 // --------------- Columns ---------------
@@ -639,18 +642,37 @@ export default function SAROrderFromStoreTab() {
       const stTypeMap = new Map<string, string>();
       for (const r of (calcData?.store_types || []) as any[]) stTypeMap.set(r.store_name, r.type_store || "");
 
-      // Fetch vendor info: vendor_code + name from data_master, then currency from vendor_master
+      // Fetch vendor info + unit barcode/UoM from data_master (packing_size_qty=1)
       setProgressPct(88); setProgressLabel("ดึงข้อมูล Vendor...");
-      const dmVendorRows = await queryInChunks<any>("data_master", "sku_code", allSkus, "sku_code,vendor_code,vendor_display_name", q => q.eq("packing_size_qty", 1));
+      const dmVendorRows = await queryInChunks<any>("data_master", "sku_code", allSkus, "sku_code,vendor_code,vendor_display_name,main_barcode,unit_of_measure", q => q.eq("packing_size_qty", 1));
       const skuToVendorCode = new Map<string, string>();
       const skuToVendorName = new Map<string, string>();
+      const skuToUnitBarcode = new Map<string, string>();
+      const skuToUnitUom = new Map<string, string>();
       for (const r of dmVendorRows) {
-        if (r.sku_code) { skuToVendorCode.set(r.sku_code, r.vendor_code || ""); skuToVendorName.set(r.sku_code, r.vendor_display_name || ""); }
+        if (r.sku_code) {
+          skuToVendorCode.set(r.sku_code, r.vendor_code || "");
+          skuToVendorName.set(r.sku_code, r.vendor_display_name || "");
+          skuToUnitBarcode.set(r.sku_code, r.main_barcode || "");
+          skuToUnitUom.set(r.sku_code, r.unit_of_measure || "");
+        }
       }
       const allVendorCodes = [...new Set(Array.from(skuToVendorCode.values()).filter(Boolean))];
       const vendorMasterRows = allVendorCodes.length ? await queryInChunks<any>("vendor_master", "vendor_code", allVendorCodes, "vendor_code,currency") : [];
       const vendorCurrencyMap = new Map<string, string>();
       for (const r of vendorMasterRows) { if (r.vendor_code) vendorCurrencyMap.set(r.vendor_code, r.currency || ""); }
+
+      // Fetch ship_to from store_type for D2S Picking Type
+      const shipToRows = allStores.length
+        ? await (async () => {
+            const chunks: string[][] = [];
+            for (let i = 0; i < allStores.length; i += 500) chunks.push(allStores.slice(i, i + 500));
+            const results = await Promise.all(chunks.map(ch => (supabase.from("store_type" as any) as any).select("store_name,ship_to").in("store_name", ch).then(({ data }: any) => data || [])));
+            return results.flat();
+          })()
+        : [];
+      const storeShipToMap = new Map<string, string>();
+      for (const r of shipToRows as any[]) { if (r.store_name) storeShipToMap.set(r.store_name, r.ship_to || ""); }
 
       const rows: ProcessedRow[] = [];
       for (const [key, { qty, main_barcode: mb, product_name_la: pnLa }] of storeSkuMap) {
@@ -682,7 +704,10 @@ export default function SAROrderFromStoreTab() {
         const vCode = skuToVendorCode.get(sku) || "";
         const vName = skuToVendorName.get(sku) || "";
         const vCurr = vendorCurrencyMap.get(vCode) || "";
-        rows.push({ ...sarRow, qty_import: qty, division_group: dm?.division_group ?? "", stock_store_orig: sarRow.stock_store, vendor_code: vCode, vendor_name: vName, currency: vCurr });
+        const uBarcode = skuToUnitBarcode.get(sku) || dm?.main_barcode || mb || "";
+        const uUom = skuToUnitUom.get(sku) || dm?.unit_of_measure || "";
+        const shipTo = storeShipToMap.get(storeName) || "";
+        rows.push({ ...sarRow, qty_import: qty, division_group: dm?.division_group ?? "", stock_store_orig: sarRow.stock_store, vendor_code: vCode, vendor_name: vName, currency: vCurr, unit_barcode: uBarcode, unit_uom: uUom, ship_to: shipTo });
       }
 
       setHqRows(rows); setHqFetched(true); setProgressPct(100);
@@ -701,7 +726,7 @@ export default function SAROrderFromStoreTab() {
     setCalcElapsed(0);
     const start = Date.now();
     await new Promise(r => setTimeout(r, 10)); // ให้ UI update ก่อน
-    const next = hqRows.map(r => ({ ...computeRow(r), qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency }));
+    const next = hqRows.map(r => ({ ...computeRow(r), qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to }));
     const elapsed = Math.round((Date.now() - start) / 100) / 10;
     setCalcElapsed(elapsed);
     setHqRows(next); setHqCalculated(true);
@@ -713,7 +738,7 @@ export default function SAROrderFromStoreTab() {
     setHqRows(ofsCalCache.hqRows.map(r => {
       if (r.sku_code !== skuCode || r.store_name !== storeName) return r;
       const updated = computeRow({ ...r, suggest_order_edit: val });
-      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency };
+      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to };
     }));
   };
 
@@ -721,14 +746,14 @@ export default function SAROrderFromStoreTab() {
     setHqRows(ofsCalCache.hqRows.map(r => {
       if (r.sku_code !== skuCode || r.store_name !== storeName) return r;
       const updated = computeRow({ ...r, stock_store: val });
-      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency };
+      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to };
     }));
   };
 
   const clearAllStockStore = () => {
     setHqRows(ofsCalCache.hqRows.map(r => {
       const updated = computeRow({ ...r, stock_store: 0 });
-      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency };
+      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to };
     }));
   };
 
@@ -736,7 +761,7 @@ export default function SAROrderFromStoreTab() {
     setHqRows(ofsCalCache.hqRows.map(r => {
       const orig = r.stock_store_orig ?? 0;
       const updated = computeRow({ ...r, stock_store: orig });
-      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency };
+      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to };
     }));
   };
 
@@ -946,21 +971,29 @@ export default function SAROrderFromStoreTab() {
   };
 
   // helper: build SRR-format row (ใช้กับทั้ง DC และ D2S PO)
-  const toSrrPoRow = (r: ProcessedRow, qty: number, isFirst: boolean, groupKey: string, partnerId: string) => ({
-    "partner_id": isFirst ? (r.vendor_code || partnerId) : "",
-    "Picking Type / Database ID": isFirst ? "" : "",
-    "Inter Transfer": isFirst ? "" : "",
-    "PO Group": isFirst ? groupKey : "",
-    "Products to Purchase/barcode": r.main_barcode || "",
-    "Products to Purchase/Product": r.main_barcode || "",
-    "Product name": r.product_name_la || "",
-    "Products to Purchase/UoM": r.unit_of_measure || "Unit",
-    "Products to Purchase/Exclude In Package": "True",
-    "Products to Purchase/Quantity": qty,
-    "Products to Purchase/Unit Price": r.cost || 0,
-    "assigned_to": isFirst ? "" : "",
-    "description": isFirst ? "" : "",
-  });
+  const toSrrPoRow = (r: ProcessedRow, qty: number, isFirst: boolean, groupKey: string, isD2S: boolean) => {
+    const barcode = r.unit_barcode || r.main_barcode || "";
+    const uom = r.unit_uom || r.unit_of_measure || "Unit";
+    const pickingId = isD2S ? (r.ship_to || "") : "2540";
+    const interTransfer = isD2S ? "true" : "";
+    const row: Record<string, any> = {
+      "partner_id": isFirst ? (r.vendor_code || "") : "",
+      "Picking Type / Database ID": isFirst ? pickingId : "",
+      "Inter Transfer": isFirst ? interTransfer : "",
+      "PO Group": isFirst ? groupKey : "",
+      "Products to Purchase/barcode": barcode,
+      "Products to Purchase/Product": barcode,
+      "Product name": r.product_name_la || "",
+      "Products to Purchase/UoM": uom,
+      "Products to Purchase/Exclude In Package": "True",
+      "Products to Purchase/Quantity": qty,
+      "Products to Purchase/Unit Price": r.cost || 0,
+      "assigned_to": isFirst ? "SPC manager01" : "",
+      "description": isFirst ? "" : "",
+    };
+    if (isD2S) row["Store Name"] = r.store_name;
+    return row;
+  };
 
   // PO DC — group by sub_department, sum qty by SKU, split by perPOChunk → srr_dc_po template
   const exportPODC = async (rows: ProcessedRow[]) => {
@@ -982,7 +1015,7 @@ export default function SAROrderFromStoreTab() {
         const items = Array.from(skuMap.values());
         for (let start = 0; start < items.length; start += perChunk) {
           items.slice(start, start + perChunk).forEach(({ qty, row }, idx) => {
-            out.push(toSrrPoRow(row, qty, idx === 0, sd, ""));
+            out.push(toSrrPoRow(row, qty, idx === 0, sd, false));
           });
         }
       }
@@ -1015,7 +1048,7 @@ export default function SAROrderFromStoreTab() {
           for (let start = 0; start < items.length; start += perChunk) {
             items.slice(start, start + perChunk).forEach((r, idx) => {
               const qty = r.final_order_unit > 0 ? r.final_order_unit : r.qty_import;
-              out.push(toSrrPoRow(r, qty, idx === 0, sd, store));
+              out.push(toSrrPoRow(r, qty, idx === 0, sd, true));
             });
           }
         }
