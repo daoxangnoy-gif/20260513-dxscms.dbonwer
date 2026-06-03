@@ -1944,7 +1944,7 @@ function SRRDCItemPage() {
   // Generic numeric field updater for Min/Stock (Clear/Restore)
   const updateNumericField = (
     rowId: string,
-    field: "min_jmart" | "min_kokkok" | "min_kokkok_fc" | "min_udee" | "stock_jmart" | "stock_kokkok" | "stock_kokkok_fc" | "stock_udee",
+    field: "min_jmart" | "min_kokkok" | "min_kokkok_fc" | "min_udee" | "stock_dc" | "stock_jmart" | "stock_kokkok" | "stock_kokkok_fc" | "stock_udee",
     value: string,
   ) => {
     const numVal = parseFloat(value);
@@ -1968,6 +1968,23 @@ function SRRDCItemPage() {
       };
     }));
   };
+  // Update multiple stock fields in one recalcRow call (for TT Stock Store row-level Clear/Restore)
+  const updateStoreStocks = (rowId: string, patch: Partial<Pick<SRRRow, "stock_jmart" | "stock_kokkok" | "stock_kokkok_fc" | "stock_udee">>) => {
+    setShowData(prev => prev.map(r => r.id !== rowId ? r : recalcRow({ ...r, ...patch })));
+    setVendorDocs(prev => prev.map(doc => {
+      const hasRow = doc.data.some(r => r.id === rowId);
+      if (!hasRow) return doc;
+      const editedCols = new Set(doc.edited_columns);
+      Object.keys(patch).forEach(k => editedCols.add(k));
+      return {
+        ...doc,
+        data: doc.data.map(r => r.id === rowId ? recalcRow({ ...r, ...patch }) : r),
+        edit_count: doc.edit_count + 1,
+        edited_columns: [...editedCols],
+      };
+    }));
+  };
+
   const updateOnOrder = (rowId: string, value: number) => {
     const updater = (rows: SRRRow[]) => rows.map(r =>
       r.id !== rowId ? r : recalcRow({ ...r, on_order: value })
@@ -2671,8 +2688,8 @@ function SRRDCItemPage() {
                       ) : showEditColumns && col.key === "tt_stock_store" ? (
                         <div className="flex items-center gap-0.5">
                           <span className="text-xs flex-1">{formatCellValue(val, col.key)}</span>
-                          <button className="text-[9px] text-destructive hover:underline px-0.5" onClick={e => { e.stopPropagation(); updateNumericField(row.id, "stock_jmart", "0"); updateNumericField(row.id, "stock_kokkok", "0"); updateNumericField(row.id, "stock_kokkok_fc", "0"); updateNumericField(row.id, "stock_udee", "0"); }} title="Clear Store Stocks ทั้งหมดเป็น 0">Clear</button>
-                          <button className="text-[9px] text-primary hover:underline px-0.5" onClick={e => { e.stopPropagation(); updateNumericField(row.id, "stock_jmart", String(row.orig_stock_jmart)); updateNumericField(row.id, "stock_kokkok", String(row.orig_stock_kokkok)); updateNumericField(row.id, "stock_kokkok_fc", String(row.orig_stock_kokkok_fc)); updateNumericField(row.id, "stock_udee", String(row.orig_stock_udee)); }} title="คืนค่า Store Stocks เดิมทั้งหมด">Restore</button>
+                          <button className="text-[9px] text-destructive hover:underline px-0.5" onClick={e => { e.stopPropagation(); updateStoreStocks(row.id, { stock_jmart: 0, stock_kokkok: 0, stock_kokkok_fc: 0, stock_udee: 0 }); }} title="Clear Store Stocks ทั้งหมดเป็น 0">Clear</button>
+                          <button className="text-[9px] text-primary hover:underline px-0.5" onClick={e => { e.stopPropagation(); updateStoreStocks(row.id, { stock_jmart: row.orig_stock_jmart, stock_kokkok: row.orig_stock_kokkok, stock_kokkok_fc: row.orig_stock_kokkok_fc, stock_udee: row.orig_stock_udee }); }} title="คืนค่า Store Stocks เดิมทั้งหมด">Restore</button>
                         </div>
                       ) : showEditColumns && (col.key === "min_jmart" || col.key === "min_kokkok" || col.key === "min_kokkok_fc" || col.key === "min_udee" || col.key === "stock_jmart" || col.key === "stock_kokkok" || col.key === "stock_kokkok_fc" || col.key === "stock_udee") ? (
                         <div className="flex items-center gap-0.5">
