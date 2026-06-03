@@ -243,6 +243,22 @@ export default function SAROrderFromStoreTab() {
   const [importDocsSearch, setImportDocsSearch] = useState("");
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveName, setSaveName] = useState("");
+  const [saveProgress, setSaveProgress] = useState({ current: 0, total: 0, label: "" });
+  const [saveElapsedMs, setSaveElapsedMs] = useState(0);
+  const saveStartRef = useRef<number | null>(null);
+  const saveTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startSaveTimer = () => {
+    saveStartRef.current = performance.now();
+    setSaveElapsedMs(0);
+    if (saveTimerRef.current) clearInterval(saveTimerRef.current);
+    saveTimerRef.current = setInterval(() => {
+      setSaveElapsedMs(saveStartRef.current ? Math.round(performance.now() - saveStartRef.current) : 0);
+    }, 100);
+  };
+  const stopSaveTimer = () => {
+    if (saveTimerRef.current) { clearInterval(saveTimerRef.current); saveTimerRef.current = null; }
+  };
+  useEffect(() => () => stopSaveTimer(), []);
   const [hqSaving, setHqSaving] = useState(false);
 
   // ---- RESULT DOCS TAB ----
@@ -748,12 +764,22 @@ export default function SAROrderFromStoreTab() {
   const handleHQSave = async () => {
     if (!user) return;
     setHqSaving(true);
+    setSaveProgress({ current: 0, total: 0, label: "เตรียมข้อมูล..." });
+    startSaveTimer();
     try {
       const ts = fmtFile(new Date());
       const prefix = saveName.trim() || ts;
       const srcIds = Array.from(selectedDocIds);
       const byStore = new Map<string, ProcessedRow[]>();
       for (const r of hqRows) { if (!byStore.has(r.store_name)) byStore.set(r.store_name, []); byStore.get(r.store_name)!.push(r); }
+      // count total docs to insert
+      let totalDocs = 0;
+      for (const [, rows] of byStore) {
+        const savedRows = rows.map(r => { const eu = getEffUnit(r); return { ...r, final_order_unit: eu }; });
+        if (savedRows.some(r => r.stock_dc >= r.final_order_unit)) totalDocs++;
+        if (savedRows.some(r => r.stock_dc < r.final_order_unit)) totalDocs++;
+      }
+      setSaveProgress({ current: 0, total: totalDocs, label: `เตรียม 0 / ${totalDocs} doc...` });
       let saved = 0;
       for (const [storeName, rows] of byStore) {
         const savedRows = rows.map(r => {
@@ -764,19 +790,25 @@ export default function SAROrderFromStoreTab() {
         const roRows = savedRows.filter(r => r.stock_dc >= r.final_order_unit);
         const poRows = savedRows.filter(r => r.stock_dc < r.final_order_unit);
         if (roRows.length > 0) {
+          setSaveProgress(p => ({ ...p, label: `บันทึก RO-${storeName} (${roRows.length} รายการ)...` }));
           const { error } = await (supabase as any).from("ofs_result_docs").insert({ doc_name: `${prefix}-RO-${storeName}`, doc_type: "RO", store_name: storeName, source_doc_ids: srcIds, item_count: roRows.length, data: roRows, user_id: user.id });
-          if (error) throw error; saved++;
+          if (error) throw error;
+          saved++;
+          setSaveProgress(p => ({ ...p, current: saved, label: `บันทึก RO-${storeName} สำเร็จ ✓` }));
         }
         if (poRows.length > 0) {
+          setSaveProgress(p => ({ ...p, label: `บันทึก PO-${storeName} (${poRows.length} รายการ)...` }));
           const { error } = await (supabase as any).from("ofs_result_docs").insert({ doc_name: `${prefix}-PO-${storeName}`, doc_type: "PO", store_name: storeName, source_doc_ids: srcIds, item_count: poRows.length, data: poRows, user_id: user.id });
-          if (error) throw error; saved++;
+          if (error) throw error;
+          saved++;
+          setSaveProgress(p => ({ ...p, current: saved, label: `บันทึก PO-${storeName} สำเร็จ ✓` }));
         }
       }
       toast({ title: "บันทึกสำเร็จ", description: `${saved} Doc` });
       setSaveOpen(false); setSaveName(""); setHqRows([]); setHqFetched(false); setHqCalculated(false);
       setSelectedDocIds(new Set()); setUseQtyImport(false); await loadImportDocs();
     } catch (e: any) { toast({ title: "บันทึกไม่สำเร็จ", description: e.message, variant: "destructive" }); }
-    finally { setHqSaving(false); }
+    finally { setHqSaving(false); stopSaveTimer(); setSaveProgress({ current: 0, total: 0, label: "" }); }
   };
 
   const deleteImportDoc = async (id: string, name: string) => {
@@ -1300,7 +1332,7 @@ export default function SAROrderFromStoreTab() {
         <DialogContent>
           <DialogHeader><DialogTitle>บันทึก RO/PO</DialogTitle><DialogDescription>{useQtyImport ? "ใช้ Qty Import" : "ใช้ Calculated"}</DialogDescription></DialogHeader>
           <div className="space-y-3">
-            <div><Label className="text-xs">ชื่อ prefix (ไม่ใส่ = auto timestamp)</Label><Input className="mt-1" value={saveName} onChange={e => setSaveName(e.target.value)} placeholder={fmtFile(new Date())} /></div>
+            <div><Label className="text-xs">ชื่อ prefix (ไม่ใส่ = auto timestamp)</Label><Input className="mt-1" value={saveName} onChange={e => setSaveName(e.target.value)} placeholder={fmtFile(new Date())} disabled={hqSaving} /></div>
             <div className="text-xs font-medium">สรุปที่จะบันทึก:</div>
             <div className="text-xs space-y-1 max-h-40 overflow-y-auto">
               {saveSummary.map(({ store, ro, po }) => (
@@ -1311,9 +1343,28 @@ export default function SAROrderFromStoreTab() {
                 </div>
               ))}
             </div>
+            {hqSaving && saveProgress.total > 0 && (
+              <div className="space-y-1.5 pt-1">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground truncate flex-1">{saveProgress.label}</span>
+                  <span className="ml-3 font-mono font-semibold text-primary tabular-nums shrink-0">
+                    {(saveElapsedMs / 1000).toFixed(1)} s
+                  </span>
+                </div>
+                <div className="h-2 w-full bg-muted rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-primary rounded-full transition-all duration-200"
+                    style={{ width: `${Math.round((saveProgress.current / saveProgress.total) * 100)}%` }}
+                  />
+                </div>
+                <div className="text-[10px] text-muted-foreground text-right">
+                  {saveProgress.current} / {saveProgress.total} doc · {Math.round((saveProgress.current / saveProgress.total) * 100)}%
+                </div>
+              </div>
+            )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setSaveOpen(false)}>ยกเลิก</Button>
+            <Button variant="outline" onClick={() => setSaveOpen(false)} disabled={hqSaving}>ยกเลิก</Button>
             <Button onClick={handleHQSave} disabled={hqSaving}>{hqSaving && <Loader2 className="w-4 h-4 mr-1 animate-spin" />}<Save className="w-4 h-4 mr-1" />บันทึก</Button>
           </DialogFooter>
         </DialogContent>
