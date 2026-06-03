@@ -171,6 +171,13 @@ export default function SAROrderFromStoreTab() {
   const importElapsedRef = useRef(0);
   const [lastSave, setLastSave] = useState<{ total: number; pass: number; skip: number } | null>(null);
   const [pendingSkips, setPendingSkips] = useState<SkipRow[]>([]);
+  // multi-store
+  const [multiStoreOpen, setMultiStoreOpen] = useState(false);
+  const [multiStoreGroups, setMultiStoreGroups] = useState<{ store: string; rows: ImportRow[]; known: boolean }[]>([]);
+  const [multiStoreSaving, setMultiStoreSaving] = useState(false);
+  const [multiStoreProgress, setMultiStoreProgress] = useState({ current: 0, total: 0 });
+  // user profile map
+  const [userProfileMap, setUserProfileMap] = useState<Record<string, string>>({});
 
   // ---- HQ TAB ----
   const [importDocs, setImportDocs] = useState<OfsImportDoc[]>([]);
@@ -210,7 +217,10 @@ export default function SAROrderFromStoreTab() {
   // ============================================================
 
   const downloadTemplate = () => {
-    const ws = XLSX.utils.json_to_sheet([{ "Barcode/SKUCode": "8857123456789", "Qty": 5 }]);
+    const ws = XLSX.utils.json_to_sheet([
+      { "Store Name": "121010003-Phonetong", "Barcode/SKUCode": "8857123456789", "Qty": 5 },
+      { "Store Name": "121010006-Vangxaiy", "Barcode/SKUCode": "8857987654321", "Qty": 3 },
+    ]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Template");
     XLSX.writeFile(wb, "OFS_Template.xlsx");
@@ -237,11 +247,131 @@ export default function SAROrderFromStoreTab() {
       const headers = (rawRows[0] as string[]).map(h => String(h ?? "").toLowerCase().trim());
       const cIdx = headers.findIndex(h => h.includes("barcode") || h.includes("sku") || h.includes("code"));
       const qIdx = headers.findIndex(h => h.includes("qty") || h.includes("quantity") || h.includes("จำนวน"));
+      const sIdx = headers.findIndex(h => h.includes("store"));
       if (cIdx < 0 || qIdx < 0) { toast({ title: "ไม่พบคอลัมน์ barcode/qty", variant: "destructive" }); return; }
-      const rows = rawRows.slice(1).map(r => ({ code: String(r[cIdx] ?? "").trim(), qty: Number(r[qIdx]) || 0 })).filter(r => r.code && r.qty > 0);
-      if (!rows.length) { toast({ title: "ไม่พบข้อมูล", variant: "destructive" }); return; }
-      await openStoreSelect(rows);
+
+      if (sIdx >= 0) {
+        // multi-store mode: group by store name
+        const groups: Record<string, ImportRow[]> = {};
+        for (const r of rawRows.slice(1)) {
+          const storeName = String(r[sIdx] ?? "").trim();
+          const code = String(r[cIdx] ?? "").trim();
+          const qty = Number(r[qIdx]) || 0;
+          if (storeName && code && qty > 0) {
+            if (!groups[storeName]) groups[storeName] = [];
+            groups[storeName].push({ code, qty });
+          }
+        }
+        if (!Object.keys(groups).length) { toast({ title: "ไม่พบข้อมูล", variant: "destructive" }); return; }
+        await openMultiStoreConfirm(groups);
+      } else {
+        // single-store mode
+        const rows = rawRows.slice(1).map(r => ({ code: String(r[cIdx] ?? "").trim(), qty: Number(r[qIdx]) || 0 })).filter(r => r.code && r.qty > 0);
+        if (!rows.length) { toast({ title: "ไม่พบข้อมูล", variant: "destructive" }); return; }
+        await openStoreSelect(rows);
+      }
     } catch (e: any) { toast({ title: "อ่านไฟล์ไม่สำเร็จ", description: e.message, variant: "destructive" }); }
+  };
+
+  const openMultiStoreConfirm = async (groups: Record<string, ImportRow[]>) => {
+    const { data } = await (supabase.from("store_type" as any) as any).select("store_name").order("store_name");
+    const knownStores = new Set((data || []).map((r: any) => r.store_name as string));
+    const groupList = Object.entries(groups).map(([store, rows]) => ({ store, rows, known: knownStores.has(store) }));
+    setMultiStoreGroups(groupList);
+    setMultiStoreOpen(true);
+  };
+
+  const runImportForStore = async (
+    rows: ImportRow[],
+    storeName: string,
+    onStatus?: (s: string) => void
+  ): Promise<{ docName: string; pass: number; skip: number; total: number; skips: SkipRow[]; docId?: string }> => {
+    const codes = rows.map(r => r.code);
+    onStatus?.(`ค้นหา Barcode/SKU ${codes.length.toLocaleString()} รายการ...`);
+    const resSel = "sku_code,main_barcode,barcode";
+    const [resByMainBarcode, resBySku, resByBarcode] = await Promise.all([
+      queryInChunks<any>("data_master", "main_barcode", codes, resSel),
+      queryInChunks<any>("data_master", "sku_code", codes, resSel),
+      queryInChunks<any>("data_master", "barcode", codes, resSel),
+    ]);
+    const codeToSku = new Map<string, string>();
+    resByMainBarcode.forEach((r: any) => { if (r.main_barcode && r.sku_code && !codeToSku.has(r.main_barcode)) codeToSku.set(r.main_barcode, r.sku_code); });
+    resBySku.forEach((r: any) => { if (r.sku_code && !codeToSku.has(r.sku_code)) codeToSku.set(r.sku_code, r.sku_code); });
+    resByBarcode.forEach((r: any) => { if (r.barcode && r.sku_code && !codeToSku.has(r.barcode)) codeToSku.set(r.barcode, r.sku_code); });
+
+    const resolvedSkus = [...new Set(Array.from(codeToSku.values()))];
+    onStatus?.(`ดึงข้อมูลสินค้า ${resolvedSkus.length.toLocaleString()} SKU...`);
+    const dmSel = "sku_code,main_barcode,product_name_la,buying_status,item_type,product_owner";
+    const dmRows = await queryInChunks<any>("data_master", "sku_code", resolvedSkus, dmSel, q => q.eq("packing_size_qty", 1));
+    const skuToDm = new Map<string, any>();
+    dmRows.forEach((r: any) => { if (r.sku_code && !skuToDm.has(r.sku_code)) skuToDm.set(r.sku_code, r); });
+
+    const dmMap: Record<string, any> = {};
+    for (const [code, sku] of codeToSku.entries()) { const dm = skuToDm.get(sku); if (dm) dmMap[code] = dm; }
+
+    const skuToCode: Record<string, string[]> = {};
+    rows.forEach(r => { const sku = dmMap[r.code]?.sku_code; if (sku) (skuToCode[sku] ??= []).push(r.code); });
+    const dupSkus = new Set(Object.entries(skuToCode).filter(([, arr]) => arr.length > 1).map(([s]) => s));
+
+    const allSkus = [...new Set(Object.values(dmMap).map((r: any) => r.sku_code).filter(Boolean) as string[])];
+    onStatus?.(`ตรวจสอบ Range Store ${allSkus.length.toLocaleString()} SKU...`);
+    const storeCode = storeName.split("-")[0];
+    const rsRows = await queryInChunks<any>("range_store", "sku_code", allSkus, "sku_code", q => q.eq("apply_yn", "Y").like("store_name", storeCode + "%"));
+    const rangeSet = new Set(rsRows.map((r: any) => r.sku_code));
+
+    onStatus?.(`ตรวจเงื่อนไข ${rows.length.toLocaleString()} รายการ...`);
+    const skips: SkipRow[] = [];
+    const valid: OfsImportLine[] = [];
+    for (const r of rows) {
+      const dm = dmMap[r.code];
+      const pnLa = dm?.product_name_la ?? "";
+      if (!dm) { skips.push({ barcode: r.code, product_name_la: "", qty: r.qty, reason: "ไม่พบใน Data master", store_name: storeName }); continue; }
+      const bs = (dm.buying_status ?? "").trim();
+      if (bs === "Inactive" || bs === "Discontinue") { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: `Buying Status: ${bs}`, store_name: storeName }); continue; }
+      if ((dm.item_type ?? "").trim() === "Non basic") { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: "Item type: Non basic", store_name: storeName }); continue; }
+      if (!(dm.product_owner ?? "").toLowerCase().includes("lanexang green property")) { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: `Product owner: ${dm.product_owner || "-"}`, store_name: storeName }); continue; }
+      if (!rangeSet.has(dm.sku_code)) { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: `ไม่อยู่ใน Range store (${storeName})`, store_name: storeName }); continue; }
+      if (dupSkus.has(dm.sku_code)) { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: `SKU ซ้ำ (${dm.sku_code})`, store_name: storeName }); continue; }
+      valid.push({ sku_code: dm.sku_code, main_barcode: dm.main_barcode ?? null, product_name_la: pnLa, qty: r.qty });
+    }
+
+    onStatus?.(`บันทึก Doc (ผ่าน ${valid.length.toLocaleString()} / skip ${skips.length.toLocaleString()})...`);
+    const docName = `OFS-${storeName}-${fmtFile(new Date())}`;
+    const { data: inserted, error } = await (supabase as any).from("ofs_import_docs").insert({
+      doc_name: docName, store_name: storeName,
+      import_count: rows.length, pass_count: valid.length, skip_count: skips.length,
+      data: valid, skip_data: skips, user_id: user?.id,
+    }).select("id").single();
+    if (error) throw error;
+    return { docName, pass: valid.length, skip: skips.length, total: rows.length, skips, docId: inserted?.id };
+  };
+
+  const handleMultiStoreSave = async () => {
+    const validGroups = multiStoreGroups.filter(g => g.known);
+    if (!validGroups.length) return;
+    setMultiStoreSaving(true);
+    setMultiStoreProgress({ current: 0, total: validGroups.length });
+    const allSkips: SkipRow[] = [];
+    let totalPass = 0, totalTotal = 0;
+    try {
+      for (let i = 0; i < validGroups.length; i++) {
+        setMultiStoreProgress({ current: i + 1, total: validGroups.length });
+        const result = await runImportForStore(validGroups[i].rows, validGroups[i].store);
+        allSkips.push(...result.skips);
+        totalPass += result.pass;
+        totalTotal += result.total;
+      }
+      setPendingSkips(allSkips);
+      setLastSave({ total: totalTotal, pass: totalPass, skip: allSkips.length });
+      setMultiStoreOpen(false);
+      toast({ title: "บันทึกสำเร็จ", description: `${validGroups.length} สาขา · ผ่าน ${totalPass} / skip ${allSkips.length}` });
+      await loadImportDocs();
+    } catch (e: any) {
+      toast({ title: "เกิดข้อผิดพลาด", description: e.message, variant: "destructive" });
+    } finally {
+      setMultiStoreSaving(false);
+      setMultiStoreProgress({ current: 0, total: 0 });
+    }
   };
 
   const handlePasteImport = async () => {
@@ -269,85 +399,16 @@ export default function SAROrderFromStoreTab() {
       setImportElapsed(importElapsedRef.current);
     }, 1000);
     try {
-      const codes = importRows.map(r => r.code);
-
-      // ขั้น 1: resolve import code (barcode/sku) → sku_code
-      setImportStatus(`1/5 · ค้นหา Barcode/SKU ${codes.length.toLocaleString()} รายการ...`);
-      const resSel = "sku_code,main_barcode,barcode";
-      const [resByMainBarcode, resBySku, resByBarcode] = await Promise.all([
-        queryInChunks<any>("data_master", "main_barcode", codes, resSel),
-        queryInChunks<any>("data_master", "sku_code", codes, resSel),
-        queryInChunks<any>("data_master", "barcode", codes, resSel),
-      ]);
-      const codeToSku = new Map<string, string>();
-      resByMainBarcode.forEach((r: any) => { if (r.main_barcode && r.sku_code && !codeToSku.has(r.main_barcode)) codeToSku.set(r.main_barcode, r.sku_code); });
-      resBySku.forEach((r: any) => { if (r.sku_code && !codeToSku.has(r.sku_code)) codeToSku.set(r.sku_code, r.sku_code); });
-      resByBarcode.forEach((r: any) => { if (r.barcode && r.sku_code && !codeToSku.has(r.barcode)) codeToSku.set(r.barcode, r.sku_code); });
-
-      // ขั้น 2: ดึง data เฉพาะ packing_size_qty=1, distinct by sku_code
-      const resolvedSkus = [...new Set(Array.from(codeToSku.values()))];
-      setImportStatus(`2/5 · ดึงข้อมูลสินค้า ${resolvedSkus.length.toLocaleString()} SKU...`);
-      const dmSel = "sku_code,main_barcode,product_name_la,buying_status,item_type,product_owner";
-      const dmRows = await queryInChunks<any>("data_master", "sku_code", resolvedSkus, dmSel, q => q.eq("packing_size_qty", 1));
-      const skuToDm = new Map<string, any>();
-      dmRows.forEach((r: any) => { if (r.sku_code && !skuToDm.has(r.sku_code)) skuToDm.set(r.sku_code, r); });
-
-      // build dmMap: import code → dm row (packing_size_qty=1)
-      const dmMap: Record<string, any> = {};
-      for (const [code, sku] of codeToSku.entries()) {
-        const dm = skuToDm.get(sku);
-        if (dm) dmMap[code] = dm;
-      }
-
-      // Detect dup sku
-      const skuToCode: Record<string, string[]> = {};
-      importRows.forEach(r => { const sku = dmMap[r.code]?.sku_code; if (sku) (skuToCode[sku] ??= []).push(r.code); });
-      const dupSkus = new Set(Object.entries(skuToCode).filter(([, arr]) => arr.length > 1).map(([s]) => s));
-
-      // Range store
-      const allSkus = [...new Set(Object.values(dmMap).map((r: any) => r.sku_code).filter(Boolean) as string[])];
-      setImportStatus(`3/5 · ตรวจสอบ Range Store ${allSkus.length.toLocaleString()} SKU...`);
-      const storeCode = selectedStore.split("-")[0];
-      const rsRows = await queryInChunks<any>("range_store", "sku_code", allSkus, "sku_code", q => q.eq("apply_yn", "Y").like("store_name", storeCode + "%"));
-      const rangeSet = new Set(rsRows.map((r: any) => r.sku_code));
-
-      setImportStatus(`4/5 · ตรวจเงื่อนไข ${importRows.length.toLocaleString()} รายการ...`);
-      const skips: SkipRow[] = [];
-      const valid: OfsImportLine[] = [];
-
-      for (const r of importRows) {
-        const dm = dmMap[r.code];
-        const pnLa = dm?.product_name_la ?? "";
-        if (!dm) { skips.push({ barcode: r.code, product_name_la: "", qty: r.qty, reason: "ไม่พบใน Data master", store_name: selectedStore }); continue; }
-        const bs = (dm.buying_status ?? "").trim();
-        if (bs === "Inactive" || bs === "Discontinue") { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: `Buying Status: ${bs}`, store_name: selectedStore }); continue; }
-        if ((dm.item_type ?? "").trim() === "Non basic") { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: "Item type: Non basic", store_name: selectedStore }); continue; }
-        if (!(dm.product_owner ?? "").toLowerCase().includes("lanexang green property")) { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: `Product owner: ${dm.product_owner || "-"}`, store_name: selectedStore }); continue; }
-        if (!rangeSet.has(dm.sku_code)) { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: `ไม่อยู่ใน Range store (${selectedStore})`, store_name: selectedStore }); continue; }
-        if (dupSkus.has(dm.sku_code)) { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: `SKU ซ้ำ (${dm.sku_code})`, store_name: selectedStore }); continue; }
-        valid.push({ sku_code: dm.sku_code, main_barcode: dm.main_barcode ?? null, product_name_la: pnLa, qty: r.qty });
-      }
-
-      setImportStatus(`5/5 · บันทึก Doc (ผ่าน ${valid.length.toLocaleString()} / skip ${skips.length.toLocaleString()})...`);
-      const docName = `OFS-${selectedStore}-${fmtFile(new Date())}`;
-      const { error } = await (supabase as any).from("ofs_import_docs").insert({
-        doc_name: docName, store_name: selectedStore,
-        import_count: importRows.length, pass_count: valid.length, skip_count: skips.length,
-        data: valid, skip_data: skips, user_id: user?.id,
-      });
-      if (error) throw error;
-
-      setPendingSkips(skips);
-      setLastSave({ total: importRows.length, pass: valid.length, skip: skips.length });
+      const result = await runImportForStore(importRows, selectedStore, s => setImportStatus(s));
+      setPendingSkips(result.skips);
+      setLastSave({ total: result.total, pass: result.pass, skip: result.skip });
       setStoreSelectOpen(false);
-      toast({ title: "บันทึกสำเร็จ", description: `${docName}` });
+      toast({ title: "บันทึกสำเร็จ", description: result.docName });
       await loadImportDocs();
-      // บันทึกเวลาคำนวณลง localStorage (ใช้ ref เพื่อค่าปัจจุบันที่แน่นอน)
       const elapsedNow = importElapsedRef.current;
-      const { data: savedDoc } = await (supabase as any).from("ofs_import_docs").select("id").eq("doc_name", docName).single();
-      if (savedDoc?.id) {
+      if (result.docId) {
         setDocTimings(prev => {
-          const updated = { ...prev, [savedDoc.id]: elapsedNow };
+          const updated = { ...prev, [result.docId!]: elapsedNow };
           localStorage.setItem("ofs_doc_timings", JSON.stringify(updated));
           return updated;
         });
@@ -397,6 +458,14 @@ export default function SAROrderFromStoreTab() {
         .order("created_at", { ascending: false }).limit(200);
       if (error) throw error;
       setImportDocs(data || []);
+      // load profiles for importer names
+      const userIds = [...new Set((data || []).map((d: any) => d.user_id).filter(Boolean))] as string[];
+      if (userIds.length) {
+        const { data: profiles } = await (supabase as any).from("profiles").select("user_id,full_name,email").in("user_id", userIds);
+        const map: Record<string, string> = {};
+        for (const p of (profiles || []) as any[]) map[p.user_id] = p.full_name || p.email || "";
+        setUserProfileMap(map);
+      }
     } catch (e: any) { toast({ title: "Load error", description: e.message, variant: "destructive" }); }
     finally { setImportDocsLoading(false); }
   }, [toast]);
@@ -964,6 +1033,44 @@ export default function SAROrderFromStoreTab() {
         </DialogContent>
       </Dialog>
 
+      {/* Multi-store confirm dialog */}
+      <Dialog open={multiStoreOpen} onOpenChange={o => { if (!multiStoreSaving) setMultiStoreOpen(o); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Import หลายสาขา</DialogTitle>
+            <DialogDescription>ตรวจสอบรายการสาขาก่อนบันทึก</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {multiStoreGroups.map(g => (
+              <div key={g.store} className={cn("flex items-center justify-between px-3 py-2 rounded border text-xs", g.known ? "bg-background" : "bg-destructive/10 border-destructive/30")}>
+                <span className={cn("font-mono", !g.known && "text-destructive")}>{g.store}</span>
+                <div className="flex items-center gap-2">
+                  <Badge variant="secondary" className="text-[10px]">{g.rows.length} รายการ</Badge>
+                  {!g.known && <span className="text-destructive text-[10px]">ไม่พบในระบบ</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+          {multiStoreSaving && multiStoreProgress.total > 0 && (
+            <div className="space-y-1.5">
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>กำลัง import สาขา {multiStoreProgress.current} / {multiStoreProgress.total}...</span>
+              </div>
+              <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${(multiStoreProgress.current / multiStoreProgress.total) * 100}%` }} />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMultiStoreOpen(false)} disabled={multiStoreSaving}>ยกเลิก</Button>
+            <Button onClick={handleMultiStoreSave} disabled={multiStoreSaving || !multiStoreGroups.some(g => g.known)}>
+              {multiStoreSaving && <Loader2 className="w-4 h-4 mr-1 animate-spin" />}
+              บันทึก {multiStoreGroups.filter(g => g.known).length} สาขา
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={storeSelectOpen} onOpenChange={setStoreSelectOpen}>
         <DialogContent className="max-w-sm">
           <DialogHeader><DialogTitle>เลือก Store Name</DialogTitle><DialogDescription>Import {importRows.length} รายการ</DialogDescription></DialogHeader>
@@ -1110,7 +1217,7 @@ export default function SAROrderFromStoreTab() {
                       <th className="px-2 py-1.5 text-left border-r">Doc Name</th>
                       <th className="px-2 py-1.5 text-left border-r">Store</th>
                       <th className="px-2 py-1.5 text-center border-r">สถานะ Import</th>
-                      <th className="px-2 py-1.5 text-left border-r">วันที่</th>
+                      <th className="px-2 py-1.5 text-left border-r">วันที่ / ผู้นำเข้า</th>
                       <th className="px-2 py-1.5 w-20 text-center"></th>
                     </tr>
                   </thead>
@@ -1157,7 +1264,14 @@ export default function SAROrderFromStoreTab() {
                                   )}
                                 </div>
                               </td>
-                              <td className="px-2 py-1 text-muted-foreground border-r">{new Date(d.created_at).toLocaleString()}</td>
+                              <td className="px-2 py-1 border-r">
+                                <div className="text-muted-foreground">{new Date(d.created_at).toLocaleString()}</div>
+                                {d.user_id && userProfileMap[d.user_id] && (
+                                  <div className="text-[10px] text-blue-600 mt-0.5 truncate max-w-[160px]" title={userProfileMap[d.user_id]}>
+                                    👤 {userProfileMap[d.user_id]}
+                                  </div>
+                                )}
+                              </td>
                               <td className="px-2 py-1 text-center" onClick={e => e.stopPropagation()}>
                                 <div className="flex items-center gap-1 justify-center">
                                   <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={() => setOpenDoc(d)}>Open</Button>
