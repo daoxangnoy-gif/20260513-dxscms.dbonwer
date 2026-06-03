@@ -274,6 +274,10 @@ export default function SAROrderFromStoreTab() {
   const [viewDocType, setViewDocType] = useState<"RO" | "PO" | "MIXED" | null>(null);
   const [viewLoading, setViewLoading] = useState(false);
   const [viewPage, setViewPage] = useState(0);
+  const [viewExportCount, setViewExportCount] = useState<{ dc: number; d2s: number }>({ dc: 0, d2s: 0 });
+  const [summedRows, setSummedRows] = useState<ProcessedRow[] | null>(null);
+  const [sumLoading, setSumLoading] = useState(false);
+  const [listExportCount, setListExportCount] = useState<{ dc: number; d2s: number }>({ dc: 0, d2s: 0 });
   const [perROChunk, setPerROChunk] = useState(50);
   const [perPOChunk, setPerPOChunk] = useState(50);
 
@@ -893,7 +897,7 @@ export default function SAROrderFromStoreTab() {
       const { data, error } = await (supabase as any).from("ofs_result_docs").select("data,doc_name,doc_type").eq("id", doc.id).single();
       if (error) throw error;
       setViewItems((data.data || []) as ProcessedRow[]);
-      setViewTitle(data.doc_name); setViewDocType(data.doc_type as "RO" | "PO"); setViewPage(0);
+      setViewTitle(data.doc_name); setViewDocType(data.doc_type as "RO" | "PO"); setViewPage(0); setViewExportCount({ dc: 0, d2s: 0 });
     } catch (e: any) { toast({ title: "Load error", description: e.message, variant: "destructive" }); }
     finally { setViewLoading(false); }
   };
@@ -912,7 +916,7 @@ export default function SAROrderFromStoreTab() {
       setViewItems(merged);
       setViewTitle(`${ids.length} docs selected`);
       setViewDocType(types.size === 1 ? (types.values().next().value as "RO" | "PO") : "MIXED");
-      setViewPage(0);
+      setViewPage(0); setViewExportCount({ dc: 0, d2s: 0 });
     } catch (e: any) { toast({ title: "Load error", description: e.message, variant: "destructive" }); }
     finally { setViewLoading(false); }
   };
@@ -1088,6 +1092,40 @@ export default function SAROrderFromStoreTab() {
       XLSX.writeFile(wb, `OFS_PO_D2S_${fmtFile(new Date())}.xlsx`);
       toast({ title: "Export PO D2S สำเร็จ", description: `${out.length} rows` });
     } catch (e: any) { toast({ title: "Export ไม่สำเร็จ", description: e.message, variant: "destructive" }); }
+  };
+
+  const handleSumDocQty = async () => {
+    const poIds = Array.from(selectedResultIds).filter(id => resultDocs.find(d => d.id === id)?.doc_type === "PO");
+    if (!poIds.length) return;
+    setSumLoading(true);
+    try {
+      const chunks: string[][] = [];
+      for (let i = 0; i < poIds.length; i += 500) chunks.push(poIds.slice(i, i + 500));
+      const fetched = await Promise.all(chunks.map(ch => (supabase as any).from("ofs_result_docs").select("data").in("id", ch).then(({ data }: any) => data || [])));
+      const allRows: ProcessedRow[] = fetched.flat().flatMap((d: any) => d.data || []);
+      // Group by sku_code, sum qty
+      const skuMap = new Map<string, { qty: number; row: ProcessedRow }>();
+      for (const r of allRows) {
+        const qty = r.final_order_unit > 0 ? r.final_order_unit : r.qty_import;
+        if (!skuMap.has(r.sku_code)) skuMap.set(r.sku_code, { qty, row: r });
+        else skuMap.get(r.sku_code)!.qty += qty;
+      }
+      // Fetch MOQ from po_cost
+      const skus = Array.from(skuMap.keys());
+      const moqRows = await queryInChunks<any>("po_cost", "item_id", skus, "item_id,moq");
+      const moqMap = new Map<string, number>();
+      for (const r of moqRows) { if (r.item_id) moqMap.set(r.item_id, Math.max(1, Number(r.moq) || 1)); }
+      // Round up to MOQ
+      const result: ProcessedRow[] = Array.from(skuMap.values()).map(({ qty, row }) => {
+        const moq = moqMap.get(row.sku_code) || 1;
+        const rounded = Math.ceil(qty / moq) * moq;
+        return { ...row, final_order_unit: rounded, store_name: row.store_name, qty_import: rounded };
+      });
+      setSummedRows(result);
+      setListExportCount({ dc: 0, d2s: 0 });
+      toast({ title: "Sum Doc Qty สำเร็จ", description: `${result.length} SKU · ปัดขึ้น MOQ แล้ว` });
+    } catch (e: any) { toast({ title: "Error", description: e.message, variant: "destructive" }); }
+    finally { setSumLoading(false); }
   };
 
   const openListCal = (doc: OfsImportDoc) => {
@@ -1672,6 +1710,47 @@ export default function SAROrderFromStoreTab() {
                   {selectedResultIds.size > 1 && (
                     <Button size="sm" variant="outline" onClick={showSelectedResultDocs} disabled={viewLoading}>{viewLoading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : null}Show Selected ({selectedResultIds.size})</Button>
                   )}
+                  {/* Multi-PO actions: show when ≥2 PO docs selected */}
+                  {(() => {
+                    const selPoIds = Array.from(selectedResultIds).filter(id => resultDocs.find(d => d.id === id)?.doc_type === "PO");
+                    if (selPoIds.length < 2) return null;
+                    return (
+                      <div className="flex items-center gap-1.5 ml-1 pl-2 border-l">
+                        <span className="text-[10px] text-muted-foreground">PO {selPoIds.length} docs:</span>
+                        <Button size="sm" variant="outline" className="h-7 text-xs text-blue-700 border-blue-300 hover:bg-blue-50"
+                          onClick={async () => {
+                            // load all selected PO rows then exportPOD2S
+                            setSumLoading(true);
+                            try {
+                              const chunks: string[][] = [];
+                              for (let i = 0; i < selPoIds.length; i += 500) chunks.push(selPoIds.slice(i, i + 500));
+                              const fetched = await Promise.all(chunks.map(ch => (supabase as any).from("ofs_result_docs").select("data,doc_type").in("id", ch).then(({ data }: any) => data || [])));
+                              const rows: ProcessedRow[] = fetched.flat().flatMap((d: any) => ((d.data || []) as ProcessedRow[]).map(r => ({ ...r, _doc_type: d.doc_type })));
+                              await exportPOD2S(rows);
+                              setListExportCount(c => ({ ...c, d2s: c.d2s + 1 }));
+                            } finally { setSumLoading(false); }
+                          }}
+                          disabled={sumLoading}
+                        >
+                          <FileSpreadsheet className="w-3.5 h-3.5 mr-1" />Export PO D2S
+                          {listExportCount.d2s > 0 && <span className="ml-1 text-[9px] bg-blue-200 text-blue-800 px-1 rounded">{listExportCount.d2s}x</span>}
+                        </Button>
+                        <Button size="sm" variant="outline" className="h-7 text-xs text-amber-700 border-amber-300 hover:bg-amber-50"
+                          onClick={handleSumDocQty} disabled={sumLoading}
+                        >
+                          {sumLoading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Calculator className="w-3.5 h-3.5 mr-1" />}Sum Doc Qty
+                        </Button>
+                        {summedRows && (
+                          <Button size="sm" variant="outline" className="h-7 text-xs text-blue-700 border-blue-300 hover:bg-blue-50"
+                            onClick={async () => { await exportPODC(summedRows); setListExportCount(c => ({ ...c, dc: c.dc + 1 })); }}
+                          >
+                            <FileSpreadsheet className="w-3.5 h-3.5 mr-1" />Export PO DC ({summedRows.length} SKU)
+                            {listExportCount.dc > 0 && <span className="ml-1 text-[9px] bg-blue-200 text-blue-800 px-1 rounded">{listExportCount.dc}x</span>}
+                          </Button>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
                 <div className="flex-1 overflow-auto">
                   <table className="w-full text-xs">
@@ -1692,8 +1771,10 @@ export default function SAROrderFromStoreTab() {
                         : resultDocs.length === 0
                           ? <tr><td colSpan={7} className="text-center py-8 text-muted-foreground">ยังไม่มี Result Doc</td></tr>
                           : resultDocs.map(d => (
-                            <tr key={d.id} className={cn("border-t hover:bg-muted/40", selectedResultIds.has(d.id) && "bg-primary/5")}>
-                              <td className="px-2 py-1 text-center"><Checkbox checked={selectedResultIds.has(d.id)} onCheckedChange={() => setSelectedResultIds(s => { const n = new Set(s); n.has(d.id) ? n.delete(d.id) : n.add(d.id); return n; })} /></td>
+                            <tr key={d.id} className={cn("border-t hover:bg-muted/40 cursor-pointer", selectedResultIds.has(d.id) && "bg-primary/5")}
+                              onClick={() => { setSelectedResultIds(s => { const n = new Set(s); n.has(d.id) ? n.delete(d.id) : n.add(d.id); return n; }); setSummedRows(null); setListExportCount({ dc: 0, d2s: 0 }); }}
+                            >
+                              <td className="px-2 py-1 text-center" onClick={e => e.stopPropagation()}><Checkbox checked={selectedResultIds.has(d.id)} onCheckedChange={() => { setSelectedResultIds(s => { const n = new Set(s); n.has(d.id) ? n.delete(d.id) : n.add(d.id); return n; }); setSummedRows(null); setListExportCount({ dc: 0, d2s: 0 }); }} /></td>
                               <td className="px-2 py-1 font-mono">{d.doc_name}</td>
                               <td className="px-2 py-1"><Badge className={cn("text-[10px] px-1.5 border", d.doc_type === "RO" ? "bg-emerald-100 text-emerald-700 border-emerald-300" : "bg-blue-100 text-blue-700 border-blue-300")}>{d.doc_type}</Badge></td>
                               <td className="px-2 py-1">{d.store_name}</td>
@@ -1713,7 +1794,7 @@ export default function SAROrderFromStoreTab() {
               // Detail view
               <>
                 <div className="border-b px-4 py-2 flex items-center gap-2 flex-wrap shrink-0 bg-muted/20">
-                  <Button size="sm" variant="ghost" onClick={() => { setViewItems(null); setViewTitle(""); setViewDocType(null); }}><ChevronLeft className="w-4 h-4 mr-1" />กลับ</Button>
+                  <Button size="sm" variant="ghost" onClick={() => { setViewItems(null); setViewTitle(""); setViewDocType(null); setViewExportCount({ dc: 0, d2s: 0 }); }}><ChevronLeft className="w-4 h-4 mr-1" />กลับ</Button>
                   <div className="text-sm font-semibold truncate max-w-xs">{viewTitle}</div>
                   {viewDocType && viewDocType !== "MIXED" && <Badge className={cn("text-[10px] px-1.5 border", viewDocType === "RO" ? "bg-emerald-100 text-emerald-700 border-emerald-300" : "bg-blue-100 text-blue-700 border-blue-300")}>{viewDocType}</Badge>}
                   <span className="text-xs text-muted-foreground">{viewItems.length.toLocaleString()} แถว</span>
@@ -1724,8 +1805,14 @@ export default function SAROrderFromStoreTab() {
                     )}
                     {(viewDocType === "PO" || viewDocType === "MIXED") && (
                       <>
-                        <Button size="sm" variant="outline" className="h-7 text-xs text-blue-700" onClick={() => exportPODC(viewItems)}><FileSpreadsheet className="w-3.5 h-3.5 mr-1" />PO DC</Button>
-                        <Button size="sm" variant="outline" className="h-7 text-xs text-blue-700" onClick={() => exportPOD2S(viewItems)}><FileSpreadsheet className="w-3.5 h-3.5 mr-1" />PO D2S</Button>
+                        <Button size="sm" variant="outline" className="h-7 text-xs text-blue-700" onClick={async () => { await exportPODC(viewItems); setViewExportCount(c => ({ ...c, dc: c.dc + 1 })); }}>
+                          <FileSpreadsheet className="w-3.5 h-3.5 mr-1" />PO DC
+                          {viewExportCount.dc > 0 && <span className="ml-1 text-[9px] bg-blue-200 text-blue-800 px-1 rounded">{viewExportCount.dc}x</span>}
+                        </Button>
+                        <Button size="sm" variant="outline" className="h-7 text-xs text-blue-700" onClick={async () => { await exportPOD2S(viewItems); setViewExportCount(c => ({ ...c, d2s: c.d2s + 1 })); }}>
+                          <FileSpreadsheet className="w-3.5 h-3.5 mr-1" />PO D2S
+                          {viewExportCount.d2s > 0 && <span className="ml-1 text-[9px] bg-blue-200 text-blue-800 px-1 rounded">{viewExportCount.d2s}x</span>}
+                        </Button>
                       </>
                     )}
                   </div>
