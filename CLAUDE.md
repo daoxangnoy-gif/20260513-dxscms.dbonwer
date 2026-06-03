@@ -2,6 +2,20 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Session Startup
+
+เมื่อเปิดแชทใหม่ทุกครั้ง ให้ทำสิ่งนี้ก่อนเสมอ:
+
+1. อ่าน `CLAUDE.md` ให้ครบ
+2. รัน `find src -name "*.tsx" -o -name "*.ts" | head -50` เพื่อ scan โครงสร้างไฟล์
+3. อ่านไฟล์หลักเหล่านี้:
+   - `src/lib/tableConfig.ts` — table/column config
+   - `src/hooks/useAuth.tsx` — permission system
+   - `src/pages/SRRPage.tsx` — SRR module (ถ้างานเกี่ยวกับ SRR)
+4. สรุปให้ผู้ใช้ฟังสั้นๆ ว่าเข้าใจโปรเจกต์แล้ว และพร้อมรับคำสั่ง
+
+---
+
 ## Working Rules
 
 1. **แก้เฉพาะสิ่งที่สั่ง** — อย่าแก้ไขหรือปรับปรุงอื่นนอกจากที่ได้รับคำสั่ง
