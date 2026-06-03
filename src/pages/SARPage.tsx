@@ -53,6 +53,10 @@ interface DocRowRaw {
   max_cal?: number;
   min_final?: number;
   max_final?: number;
+  // enriched by RPC (from data_master)
+  standard_price?: number | null;
+  list_price?: number | null;
+  jmart_price?: number | null;
 }
 
 const COLS: { key: keyof SARRow; label: string; w?: number; right?: boolean; editable?: boolean }[] = [
@@ -221,6 +225,24 @@ export default function SARPage() {
   const loadRawDoc = useCallback(async () => {
     setRawDocLoading(true);
     try {
+      // ใช้ RPC แทนการดึง JSONB ทั้งก้อน — server filter + enrich ใน 1 round-trip
+      const { data, error } = await (supabase as any).rpc("get_sar_fetch_data", {
+        p_store_names: [],
+        p_sku_codes: [],
+      });
+      if (error) throw error;
+      const raw = (data?.rows || []) as DocRowRaw[];
+      setRawDoc(raw);
+    } catch (e: any) {
+      console.warn("load raw doc", e);
+    } finally {
+      setRawDocLoading(false);
+    }
+  }, []);
+  useEffect(() => { loadRawDoc(); }, [loadRawDoc]);
+
+  // ---- DEAD CODE BLOCK (replaced by RPC above) — kept for reference only ----
+  const _loadRawDocLegacy_UNUSED = async () => {
       const { data } = await supabase
         .from("minmax_cal_documents")
         .select("data")
@@ -228,8 +250,6 @@ export default function SARPage() {
         .limit(1).maybeSingle();
       if (!data?.data || !Array.isArray(data.data)) return;
       const raw = data.data as unknown as DocRowRaw[];
-
-      // Enrich with data_master so filter dropdowns show full Division/Dept/SubDept/Class/ItemType/BuyingStatus
       const needsEnrich = raw.some(r => !r.division || !r.department || !r.sub_department || !r.class || !r.item_type || !r.buying_status);
       if (needsEnrich) {
         const skus = Array.from(new Set(raw.map(r => r.sku_code).filter(Boolean)));
@@ -264,30 +284,9 @@ export default function SARPage() {
             off += PAGE;
           }
         }
-        const enriched = raw.map(r => {
-          const m = dmMap.get(r.sku_code);
-          if (!m) return r;
-          return {
-            ...r,
-            division: r.division || m.division,
-            department: r.department || m.department,
-            sub_department: r.sub_department || m.sub_department,
-            class: r.class || m.class,
-            item_type: r.item_type || m.item_type,
-            buying_status: r.buying_status || m.buying_status,
-          };
-        });
-        setRawDoc(enriched);
-      } else {
-        setRawDoc(raw);
+        void(dmMap); void(raw); // unused in legacy path
       }
-    } catch (e: any) {
-      console.warn("load raw doc", e);
-    } finally {
-      setRawDocLoading(false);
-    }
-  }, []);
-  useEffect(() => { loadRawDoc(); }, [loadRawDoc]);
+  }; // end _loadRawDocLegacy_UNUSED
 
   // Cross-filter aware option counts (each field's count ignores its own selection)
   // Optimized: O(N × activeFilters) using Set.has + pre-extracted row values
@@ -352,113 +351,86 @@ export default function SARPage() {
     return Array.from(map.entries()).map(([store_name, type_store]) => ({ store_name, type_store }));
   }, [rawDoc]);
 
-  // ----- Step 1: ดึงข้อมูล (load latest Min/Max doc) -----
+  // helper: map DocRowRaw (enriched by RPC) → SARRow
+  const mapDocRowToSARRow = (r: DocRowRaw): SARRow => {
+    const up = Number(r.unit_pick_edit ?? r.unit_pick ?? 1) || 1;
+    return {
+      sku_code: r.sku_code,
+      main_barcode: r.main_barcode,
+      product_name_la: r.product_name_la,
+      product_name_en: r.product_name_en,
+      unit_of_measure: r.unit_of_measure,
+      store_name: r.store_name,
+      type_store: r.type_store || "",
+      division: r.division || "",
+      department: r.department || "",
+      sub_department: r.sub_department || "",
+      item_type: r.item_type || "",
+      buying_status: r.buying_status || "",
+      unit_pick: up,
+      pack_qty: r.pack_qty ?? null,
+      box_qty: r.box_qty ?? null,
+      cost: r.standard_price != null ? Number(r.standard_price) : null,
+      price2km: r.list_price != null ? Number(r.list_price) : null,
+      price_jm: r.jmart_price != null ? Number(r.jmart_price) : null,
+      pack_size: up === 1 ? "Unit" : `1x${up}`,
+      avg_sale: Number(r.avg_sale) || 0,
+      rank_sale: r.rank_sale || "D",
+      rank_factor: Number(r.rank_factor) || 7,
+      min_val: Number(r.min_final ?? r.min_cal ?? 0) || 0,
+      max_val: Number(r.max_final ?? r.max_cal ?? 0) || 0,
+      stock_dc: 0, stock_store: 0, on_order: 0,
+      sar_suggest1: 0, sar_suggest2: 0, tt_order: 0, suggest_order_edit: null,
+      final_order_unit: 0, final_order_uom: 0, doh_min: 0, doh_max: 0, doh_stock: 0, doh_tobe: 0,
+      calculated: false,
+    };
+  };
+
+  // ----- Step 1: ดึงข้อมูล — ใช้ RPC get_sar_fetch_data -----
   const fetchData = async () => {
     setLoading(true);
     setLoadStartedAt(Date.now());
     try {
-      setProgressLabel("กำลังโหลด Min/Max Doc...");
-      setProgressPct(5);
-      const { data: doc, error } = await supabase
-        .from("minmax_cal_documents")
-        .select("data, doc_name, created_at")
-        .order("created_at", { ascending: false })
-        .limit(1).maybeSingle();
-      if (error) throw error;
-      if (!doc?.data || !Array.isArray(doc.data)) {
-        toast({ title: "ไม่พบ Min/Max Doc", description: "กรุณาคำนวณ Min/Max ก่อน", variant: "destructive" });
-        setRows([]); setCalculated(false);
-        return;
-      }
-      const raw = doc.data as unknown as DocRowRaw[];
-      setProgressLabel(`Doc โหลดแล้ว ${raw.length.toLocaleString()} แถว — กำลังกรอง...`);
-      setProgressPct(20);
+      let filtered: DocRowRaw[] = [];
+      let docName = "MinMax Doc";
 
-      // Enrich raw rows with data_master category fields BEFORE filtering
-      // (raw doc lacks division/department/sub_department/class/item_type/buying_status)
-      const needCat =
-        divisionFilter.length || departmentFilter.length || subDeptFilter.length ||
-        classFilter.length || itemTypeFilter.length || buyingFilter.length;
-      let working: DocRowRaw[] = raw;
-      if (needCat) {
-        const needsEnrich = raw.some(r =>
-          !r.division || !r.department || !r.sub_department || !r.class || !r.item_type || !r.buying_status);
-        if (needsEnrich) {
-          setProgressLabel("กำลังเสริมหมวดหมู่จาก Master...");
-          const skus = Array.from(new Set(raw.map(r => r.sku_code).filter(Boolean)));
-          const dmCat = new Map<string, { division: string; department: string; sub_department: string; class: string; item_type: string; buying_status: string }>();
-          const CHUNK = 500;
-          for (let i = 0; i < skus.length; i += CHUNK) {
-            const slice = skus.slice(i, i + CHUNK);
-            let off = 0;
-            const PAGE = 1000;
-            while (true) {
-              const { data: dm, error: dmErr } = await supabase.from("data_master")
-                .select("sku_code, division, department, sub_department, class, item_type, buying_status")
-                .in("sku_code", slice)
-                .range(off, off + PAGE - 1);
-              if (dmErr) throw dmErr;
-              const batch = (dm || []) as any[];
-              for (const m of batch) {
-                if (!m.sku_code) continue;
-                const ex = dmCat.get(m.sku_code);
-                dmCat.set(m.sku_code, {
-                  division: m.division || ex?.division || "",
-                  department: m.department || ex?.department || "",
-                  sub_department: m.sub_department || ex?.sub_department || "",
-                  class: m.class || ex?.class || "",
-                  item_type: m.item_type || ex?.item_type || "",
-                  buying_status: m.buying_status || ex?.buying_status || "",
-                });
-              }
-              if (batch.length < PAGE) break;
-              off += PAGE;
-            }
-          }
-          working = raw.map(r => {
-            const c = dmCat.get(r.sku_code);
-            if (!c) return r;
-            return {
-              ...r,
-              division: r.division || c.division,
-              department: r.department || c.department,
-              sub_department: r.sub_department || c.sub_department,
-              class: r.class || c.class,
-              item_type: r.item_type || c.item_type,
-              buying_status: r.buying_status || c.buying_status,
-            };
-          });
-        }
-      }
-
-      // Apply mode filter
-      let filtered = working;
       if (mode === "filter") {
-        filtered = working.filter(r =>
-          (storeFilter.length === 0 || storeFilter.includes(r.store_name)) &&
+        setProgressLabel("กำลังดึงข้อมูล Min/Max...");
+        setProgressPct(15);
+        const { data: rpcData, error } = await (supabase as any).rpc("get_sar_fetch_data", {
+          p_store_names: storeFilter.length ? storeFilter : [],
+          p_sku_codes: skuFilter.length ? skuFilter : [],
+        });
+        if (error) throw error;
+        if (!rpcData) { toast({ title: "ไม่พบ Min/Max Doc", description: "กรุณาคำนวณ Min/Max ก่อน", variant: "destructive" }); setRows([]); setCalculated(false); return; }
+        docName = rpcData.doc_name || docName;
+        const raw = (rpcData.rows || []) as DocRowRaw[];
+
+        setProgressPct(60);
+        setProgressLabel(`ได้ ${raw.length.toLocaleString()} แถว — กำลังกรอง...`);
+
+        // apply remaining client-side filters (typeStore, division, dept, subDept, class, buying, barcode)
+        filtered = raw.filter(r =>
           (typeStoreFilter.length === 0 || typeStoreFilter.includes(r.type_store)) &&
-          (itemTypeFilter.length === 0 || itemTypeFilter.includes(r.item_type || "")) &&
-          (buyingFilter.length === 0 || buyingFilter.includes(r.buying_status || "")) &&
-          (divisionFilter.length === 0 || divisionFilter.includes(r.division || "")) &&
-          (departmentFilter.length === 0 || departmentFilter.includes(r.department || "")) &&
-          (subDeptFilter.length === 0 || subDeptFilter.includes(r.sub_department || "")) &&
-          (classFilter.length === 0 || classFilter.includes(r.class || "")) &&
-          (skuFilter.length === 0 || skuFilter.includes(r.sku_code)) &&
-          (barcodeFilter.length === 0 || (r.main_barcode != null && barcodeFilter.includes(r.main_barcode)))
+          (itemTypeFilter.length === 0  || itemTypeFilter.includes(r.item_type || "")) &&
+          (buyingFilter.length === 0    || buyingFilter.includes(r.buying_status || "")) &&
+          (divisionFilter.length === 0  || divisionFilter.includes(r.division || "")) &&
+          (departmentFilter.length === 0  || departmentFilter.includes(r.department || "")) &&
+          (subDeptFilter.length === 0   || subDeptFilter.includes(r.sub_department || "")) &&
+          (classFilter.length === 0     || classFilter.includes(r.class || "")) &&
+          (barcodeFilter.length === 0   || (r.main_barcode != null && barcodeFilter.includes(r.main_barcode)))
         );
+
       } else {
+        // import mode — resolve barcodes first, then call RPC with resolved SKUs
         if (importedSet.size === 0) {
           toast({ title: "ยังไม่ Import", description: "กรุณา Import barcode/SKU ก่อน", variant: "destructive" });
           return;
         }
-        // Imported keys อาจเป็น sku_code หรือ barcode (main_barcode/barcode)
-        // Doc rows มีแต่ sku_code → ต้อง resolve barcode → sku_code จาก data_master ก่อน
         setProgressLabel(`กำลัง resolve barcode → SKU (${importedSet.size.toLocaleString()} keys)...`);
+        setProgressPct(10);
         const keys = Array.from(importedSet);
-        const resolvedSkus = new Set<string>();
-        // ใส่ key ที่อาจเป็น sku_code ตรง ๆ
-        for (const k of keys) resolvedSkus.add(k);
-        // Query data_master ด้วย main_barcode / barcode in (keys) แบบ batch
+        const resolvedSkus = new Set<string>(keys);
         const CHUNK_BC = 500;
         for (let i = 0; i < keys.length; i += CHUNK_BC) {
           const slice = keys.slice(i, i + CHUNK_BC);
@@ -466,154 +438,35 @@ export default function SARPage() {
             .from("data_master")
             .select("sku_code, main_barcode, barcode")
             .or(`main_barcode.in.(${slice.map(s => `"${s}"`).join(",")}),barcode.in.(${slice.map(s => `"${s}"`).join(",")})`);
-          if (bcErr) {
-            console.warn("[SAR import] barcode resolve error", bcErr);
-            continue;
-          }
-          for (const m of (bcRows || []) as any[]) {
-            if (m.sku_code) resolvedSkus.add(String(m.sku_code));
-          }
+          if (bcErr) { console.warn("[SAR import] barcode resolve error", bcErr); continue; }
+          for (const m of (bcRows || []) as any[]) { if (m.sku_code) resolvedSkus.add(String(m.sku_code)); }
         }
-        filtered = working.filter(r => resolvedSkus.has(r.sku_code));
+
+        setProgressLabel(`ดึงข้อมูล ${resolvedSkus.size.toLocaleString()} SKU...`);
+        setProgressPct(30);
+        const { data: rpcData, error } = await (supabase as any).rpc("get_sar_fetch_data", {
+          p_store_names: [],
+          p_sku_codes: Array.from(resolvedSkus),
+        });
+        if (error) throw error;
+        docName = rpcData?.doc_name || docName;
+        filtered = (rpcData?.rows || []) as DocRowRaw[];
         if (filtered.length === 0) {
           toast({ title: "ไม่พบข้อมูล", description: `Import ${importedSet.size} keys แต่ไม่ match กับ Min/Max Doc`, variant: "destructive" });
         }
       }
 
-      setProgressLabel(`กรองได้ ${filtered.length.toLocaleString()} แถว — กำลังเสริม Division/Pack/Box จาก Master...`);
-      setProgressPct(40);
+      setProgressPct(85);
+      setProgressLabel(`กรองได้ ${filtered.length.toLocaleString()} แถว — สร้าง rows...`);
 
-      // ----- Enrich missing fields from data_master + range_store_view -----
-      const skus = Array.from(new Set(filtered.map(r => r.sku_code).filter(Boolean)));
-      const dmMap = new Map<string, { division: string; department: string; sub_department: string; class: string; item_type: string; buying_status: string }>();
-      const mainBarcodeMap = new Map<string, string>(); // sku → main_barcode where packing_size_qty=1
-      const priceMap = new Map<string, { cost: number | null; price2km: number | null; price_jm: number | null }>(); // sku → prices where packing_size_qty=1
-      const rsvMap = new Map<string, { pack_qty: number | null; box_qty: number | null }>();
-      const CHUNK = 200;
-      let done = 0;
-
-      // Paginated fetch helper (bypasses PostgREST 1000-row default)
-      const fetchAllDM = async (slice: string[]) => {
-        const all: any[] = [];
-        let off = 0;
-        const PAGE = 1000;
-        while (true) {
-          const { data, error } = await supabase.from("data_master")
-            .select("sku_code, division, department, sub_department, class, item_type, buying_status, main_barcode, packing_size_qty, standard_price, list_price, jmart_price")
-            .in("sku_code", slice)
-            .range(off, off + PAGE - 1);
-          if (error) throw error;
-          const batch = data || [];
-          all.push(...batch);
-          if (batch.length < PAGE) break;
-          off += PAGE;
-        }
-        return all;
-      };
-
-      for (let i = 0; i < skus.length; i += CHUNK) {
-        const slice = skus.slice(i, i + CHUNK);
-        const [dmRows, rsvRes] = await Promise.all([
-          fetchAllDM(slice),
-          supabase.from("range_store_view")
-            .select("sku_code, pack_qty, box_qty")
-            .in("sku_code", slice),
-        ]);
-        for (const m of dmRows as any[]) {
-          if (!m.sku_code) continue;
-          // Capture category fields (first non-empty wins)
-          const existing = dmMap.get(m.sku_code);
-          if (!existing || (!existing.division && m.division)) {
-            dmMap.set(m.sku_code, {
-              division: m.division || existing?.division || "",
-              department: m.department || existing?.department || "",
-              sub_department: m.sub_department || existing?.sub_department || "",
-              class: m.class || existing?.class || "",
-              item_type: m.item_type || existing?.item_type || "",
-              buying_status: m.buying_status || existing?.buying_status || "",
-            });
-          }
-          // Capture main_barcode + prices WHERE packing_size_qty = 1
-          const pkg = m.packing_size_qty == null ? null : Number(m.packing_size_qty);
-          if (pkg === 1) {
-            if (m.main_barcode && !mainBarcodeMap.has(m.sku_code)) {
-              mainBarcodeMap.set(m.sku_code, m.main_barcode);
-            }
-            if (!priceMap.has(m.sku_code)) {
-              priceMap.set(m.sku_code, {
-                cost: m.standard_price == null ? null : Number(m.standard_price),
-                price2km: m.list_price == null ? null : Number(m.list_price),
-                price_jm: m.jmart_price == null ? null : Number(m.jmart_price),
-              });
-            }
-          }
-        }
-        for (const m of (rsvRes.data || []) as any[]) {
-          if (m.sku_code) rsvMap.set(m.sku_code, {
-            pack_qty: m.pack_qty == null ? null : Number(m.pack_qty),
-            box_qty: m.box_qty == null ? null : Number(m.box_qty),
-          });
-        }
-        done += slice.length;
-        setProgressPct(40 + Math.round((done / Math.max(1, skus.length)) * 50));
-        setProgressLabel(`เสริมข้อมูล Master ${done.toLocaleString()}/${skus.length.toLocaleString()}`);
-      }
-
-      // Map to SARRow (prefer doc values, fallback to master/rsv)
-      const mapped: SARRow[] = filtered.map(r => {
-        const dm = dmMap.get(r.sku_code);
-        const rsv = rsvMap.get(r.sku_code);
-        const mb1 = mainBarcodeMap.get(r.sku_code) || null;
-        const pr = priceMap.get(r.sku_code);
-        const up = Number(r.unit_pick_edit ?? r.unit_pick ?? 1) || 1;
-        return {
-          sku_code: r.sku_code,
-          main_barcode: mb1 ?? r.main_barcode,
-          product_name_la: r.product_name_la,
-          product_name_en: r.product_name_en,
-          unit_of_measure: r.unit_of_measure,
-          store_name: r.store_name,
-          type_store: r.type_store || "",
-          division: r.division || dm?.division || "",
-          department: r.department || dm?.department || "",
-          sub_department: r.sub_department || dm?.sub_department || "",
-          item_type: r.item_type || dm?.item_type || "",
-          buying_status: r.buying_status || dm?.buying_status || "",
-          unit_pick: up,
-          pack_qty: r.pack_qty ?? rsv?.pack_qty ?? null,
-          box_qty: r.box_qty ?? rsv?.box_qty ?? null,
-          cost: pr?.cost ?? null,
-          price2km: pr?.price2km ?? null,
-          price_jm: pr?.price_jm ?? null,
-          pack_size: up === 1 ? "Unit" : `1x${up}`,
-          avg_sale: Number(r.avg_sale) || 0,
-          rank_sale: r.rank_sale || "D",
-          rank_factor: Number(r.rank_factor) || 7,
-          min_val: Number(r.min_final ?? r.min_cal ?? 0) || 0,
-          max_val: Number(r.max_final ?? r.max_cal ?? 0) || 0,
-          stock_dc: 0,
-          stock_store: 0,
-          on_order: 0,
-          sar_suggest1: 0,
-          sar_suggest2: 0,
-          tt_order: 0,
-          suggest_order_edit: null,
-          final_order_unit: 0,
-          final_order_uom: 0,
-          doh_min: 0,
-          doh_max: 0,
-          doh_stock: 0,
-          doh_tobe: 0,
-          calculated: false,
-        };
-      });
+      const mapped: SARRow[] = filtered.map(mapDocRowToSARRow);
 
       setProgressPct(100);
       const _excluded = await (await import("@/lib/filterTemplates")).applyExcludeFilters(mapped as any[], "sar");
       setRows(_excluded as any);
       setCalculated(false);
       setPage(0);
-      toast({ title: `ดึงข้อมูลสำเร็จ`, description: `${mapped.length.toLocaleString()} แถว จาก ${doc.doc_name}` });
+      toast({ title: "ดึงข้อมูลสำเร็จ", description: `${mapped.length.toLocaleString()} แถว จาก ${docName}` });
     } catch (e: any) {
       toast({ title: "Load error", description: e.message, variant: "destructive" });
     } finally {
@@ -633,96 +486,44 @@ export default function SARPage() {
     setCalcStartedAt(Date.now());
     try {
       const skus = Array.from(new Set(rows.map(r => r.sku_code)));
+      const storeNames = Array.from(new Set(rows.map(r => r.store_name)));
 
-      setProgressLabel("กำลังโหลด Stock...");
-      setProgressPct(5);
+      setProgressLabel("กำลังโหลด Stock + On Order...");
+      setProgressPct(10);
 
-      // 1) Fetch stock — DC sum by type_store=DC; store keyed by company (= store_name)
+      // ใช้ RPC แทน sequential loops — 1 round-trip แทน ~20+ requests
+      const { data: calcData, error: rpcError } = await (supabase as any).rpc("get_sar_calc_data", {
+        p_sku_codes: skus,
+        p_store_names: storeNames,
+      });
+      if (rpcError) throw rpcError;
+
+      setProgressPct(70);
+      setProgressLabel("กำลังสร้าง maps...");
+
+      // Build stockMap (same structure as before — logic unchanged)
       const stockMap = new Map<string, { dc: number; store: Map<string, number> }>();
-      const PAGE = 1000;
-      let stockDone = 0;
-      for (let i = 0; i < skus.length; i += 500) {
-        const slice = skus.slice(i, i + 500);
-        let offset = 0;
-        while (true) {
-          const { data, error } = await supabase
-            .from("stock")
-            .select("item_id, type_store, company, quantity")
-            .in("item_id", slice)
-            .range(offset, offset + PAGE - 1);
-          if (error) throw error;
-          const batch = (data || []) as any[];
-          for (const s of batch) {
-            const sku = s.item_id;
-            if (!sku) continue;
-            if (!stockMap.has(sku)) stockMap.set(sku, { dc: 0, store: new Map() });
-            const entry = stockMap.get(sku)!;
-            const qty = Number(s.quantity) || 0;
-            const ts = String(s.type_store || "");
-            const company = String(s.company || "").trim();
-            if (ts === "DC") {
-              entry.dc += qty;
-            }
-            // Store stock — SUMIF qty WHERE company = store_name
-            if (company) {
-              entry.store.set(company, (entry.store.get(company) || 0) + qty);
-            }
-          }
-          if (batch.length < PAGE) break;
-          offset += PAGE;
-        }
-        stockDone += slice.length;
-        setProgressPct(5 + Math.round((stockDone / Math.max(1, skus.length)) * 55));
-        setProgressLabel(`โหลด Stock ${stockDone.toLocaleString()}/${skus.length.toLocaleString()} SKU`);
+      for (const s of (calcData?.stock_dc || []) as any[]) {
+        if (!s.item_id) continue;
+        if (!stockMap.has(s.item_id)) stockMap.set(s.item_id, { dc: 0, store: new Map() });
+        stockMap.get(s.item_id)!.dc = Number(s.qty) || 0;
+      }
+      for (const s of (calcData?.stock_store || []) as any[]) {
+        if (!s.item_id) continue;
+        if (!stockMap.has(s.item_id)) stockMap.set(s.item_id, { dc: 0, store: new Map() });
+        const company = String(s.company || "").trim();
+        if (company) stockMap.get(s.item_id)!.store.set(company, Number(s.qty) || 0);
       }
 
-      setProgressLabel("กำลังโหลด On Order DC...");
-      setProgressPct(60);
-
-      // 2) Fetch on_order_dc
       const onOrderMap = new Map<string, number>();
-      let ooDone = 0;
-      for (let i = 0; i < skus.length; i += 500) {
-        const slice = skus.slice(i, i + 500);
-        let offset = 0;
-        while (true) {
-          const { data, error } = await supabase
-            .from("on_order_dc")
-            .select("sku_code, store_name, qty")
-            .in("sku_code", slice)
-            .range(offset, offset + PAGE - 1);
-          if (error) throw error;
-          const batch = (data || []) as any[];
-          for (const o of batch) {
-            const k = `${o.sku_code}|${o.store_name}`;
-            onOrderMap.set(k, (onOrderMap.get(k) || 0) + (Number(o.qty) || 0));
-          }
-          if (batch.length < PAGE) break;
-          offset += PAGE;
-        }
-        ooDone += slice.length;
-        setProgressPct(60 + Math.round((ooDone / Math.max(1, skus.length)) * 30));
-        setProgressLabel(`โหลด On Order ${ooDone.toLocaleString()}/${skus.length.toLocaleString()} SKU`);
+      for (const o of (calcData?.on_order || []) as any[]) {
+        const k = `${o.sku_code}|${o.store_name}`;
+        onOrderMap.set(k, (onOrderMap.get(k) || 0) + (Number(o.qty) || 0));
       }
 
-      setProgressLabel("กำลังโหลด SKU No Order...");
-      setProgressPct(92);
-
-      // 2.5) Load SKU No Order set (sku_code|store_name)
       const noOrderSet = new Set<string>();
-      {
-        let off = 0;
-        while (true) {
-          const { data, error } = await (supabase as any)
-            .from("sku_no_order")
-            .select("sku_code, store_name")
-            .range(off, off + PAGE - 1);
-          if (error) throw error;
-          const batch = (data || []) as any[];
-          for (const r of batch) noOrderSet.add(`${r.sku_code}|${r.store_name}`);
-          if (batch.length < PAGE) break;
-          off += PAGE;
-        }
+      for (const r of (calcData?.sku_no_order || []) as any[]) {
+        noOrderSet.add(`${r.sku_code}|${r.store_name}`);
       }
 
       setProgressLabel("กำลังคำนวณ...");
