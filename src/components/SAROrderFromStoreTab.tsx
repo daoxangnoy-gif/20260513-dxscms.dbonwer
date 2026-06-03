@@ -1725,7 +1725,7 @@ export default function SAROrderFromStoreTab() {
                   {/* Multi-PO actions: show when ≥2 PO docs selected */}
                   {(() => {
                     const selPoIds = Array.from(selectedResultIds).filter(id => resultDocs.find(d => d.id === id)?.doc_type === "PO");
-                    if (selPoIds.length < 2) return null;
+                    if (selPoIds.length < 1) return null;
                     return (
                       <div className="flex items-center gap-1.5 ml-1 pl-2 border-l">
                         <span className="text-[10px] text-muted-foreground">PO {selPoIds.length} docs:</span>
