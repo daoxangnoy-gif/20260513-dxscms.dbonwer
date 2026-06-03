@@ -1846,22 +1846,21 @@ export default function SAROrderFromStoreTab() {
                                     {vendorFilterLoading ? (
                                       <div className="flex items-center justify-center py-4"><Loader2 className="w-4 h-4 animate-spin text-muted-foreground" /></div>
                                     ) : visibleVendors.map(v => {
-                                      // null = all selected, empty Set = none, Set = specific
                                       const checked = vendorFilter === null || vendorFilter.has(v.vendor_code);
+                                      const toggle = () => setVendorFilter(prev => {
+                                        const base = prev === null ? new Set(vendorList.map(x => x.vendor_code)) : new Set(prev);
+                                        base.has(v.vendor_code) ? base.delete(v.vendor_code) : base.add(v.vendor_code);
+                                        return base.size === vendorList.length ? null : base;
+                                      });
                                       return (
-                                        <div key={v.vendor_code} className={cn("flex items-start gap-2 px-3 py-1.5 hover:bg-muted/40 cursor-pointer text-xs", checked && "bg-primary/5")}
-                                          onClick={e => { e.stopPropagation(); setVendorFilter(prev => {
-                                            const base = prev === null ? new Set(vendorList.map(x => x.vendor_code)) : new Set(prev);
-                                            base.has(v.vendor_code) ? base.delete(v.vendor_code) : base.add(v.vendor_code);
-                                            return base.size === vendorList.length ? null : base;
-                                          }); }}>
-                                          <Checkbox checked={checked} className="mt-0.5 shrink-0" onCheckedChange={() => {}} />
+                                        <label key={v.vendor_code} className={cn("flex items-start gap-2 px-3 py-1.5 hover:bg-muted/40 cursor-pointer text-xs select-none", checked && "bg-primary/5")}>
+                                          <input type="checkbox" checked={checked} onChange={toggle} className="mt-0.5 shrink-0 accent-primary cursor-pointer" />
                                           <div className="min-w-0">
                                             <div className="font-mono font-semibold truncate">{v.vendor_code}</div>
                                             <div className="text-muted-foreground truncate">{v.vendor_name}</div>
                                             {v.spc_name && <div className="text-[10px] text-blue-600 truncate">SPC: {v.spc_name}</div>}
                                           </div>
-                                        </div>
+                                        </label>
                                       );
                                     })}
                                   </div>
