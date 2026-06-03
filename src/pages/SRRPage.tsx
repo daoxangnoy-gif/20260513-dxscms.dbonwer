@@ -555,6 +555,13 @@ function SRRDCItemPage() {
     };
   });
 
+  // Ensure orig_* fields are populated for rows loaded from snapshots saved before these fields existed
+  const patchSnapshotRows = (rows: SRRRow[]): SRRRow[] =>
+    rows.map(r => ({
+      ...r,
+      orig_stock_dc: r.orig_stock_dc ?? r.stock_dc ?? 0,
+    }));
+
   // Load snapshots from DB on mount + load available dates
   useEffect(() => {
     const loadFromDB = async () => {
@@ -577,7 +584,7 @@ function SRRDCItemPage() {
             created_at: s.created_at,
             item_count: s.item_count,
             suggest_count: s.suggest_count,
-            data: s.data as SRRRow[],
+            data: patchSnapshotRows(s.data as SRRRow[]),
             edit_count: s.edit_count,
             edited_columns: s.edited_columns,
             user_id: (s as any).user_id,
@@ -634,7 +641,7 @@ function SRRDCItemPage() {
           created_at: s.created_at,
           item_count: s.item_count,
           suggest_count: s.suggest_count,
-          data: s.data as SRRRow[],
+          data: patchSnapshotRows(s.data as SRRRow[]),
           edit_count: s.edit_count,
           edited_columns: s.edited_columns,
             user_id: (s as any).user_id,
@@ -665,7 +672,7 @@ function SRRDCItemPage() {
         created_at: s.created_at,
         item_count: s.item_count,
         suggest_count: s.suggest_count,
-        data: s.data as SRRRow[],
+        data: patchSnapshotRows(s.data as SRRRow[]),
         edit_count: s.edit_count,
         edited_columns: s.edited_columns,
             user_id: (s as any).user_id,
@@ -707,7 +714,7 @@ function SRRDCItemPage() {
         created_at: s.created_at,
         item_count: s.item_count,
         suggest_count: s.suggest_count,
-        data: s.data as SRRRow[],
+        data: patchSnapshotRows(s.data as SRRRow[]),
         edit_count: s.edit_count,
         edited_columns: s.edited_columns,
             user_id: (s as any).user_id,
