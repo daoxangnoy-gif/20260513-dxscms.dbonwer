@@ -1980,8 +1980,12 @@ export default function SRRSendDocsPage() {
       </Dialog>
 
       {/* Create Dialog */}
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="max-w-2xl">
+      <Dialog open={createOpen} onOpenChange={(open) => { if (open) setCreateOpen(true); /* ห้ามปิดจาก outside — ต้องกด X หรือ ยกเลิก เท่านั้น */ }}>
+        <DialogContent
+          className="max-w-2xl"
+          onInteractOutside={(e) => e.preventDefault()}
+          onEscapeKeyDown={(e) => e.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle>{editingId ? "แก้ไขเอกสารฝาก" : "Scan เอกสารฝาก"}</DialogTitle>
             <DialogDescription>สะแกน QR Code เลขที่ PO — ตรวจสอบเลขซ้ำอัตโนมัติ</DialogDescription>
