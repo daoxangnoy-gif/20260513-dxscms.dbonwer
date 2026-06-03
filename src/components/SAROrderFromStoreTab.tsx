@@ -25,7 +25,7 @@ import { remapRowsByTemplate } from "@/lib/exportTemplate";
 import { SARRow, computeRow } from "@/lib/sarCalc";
 
 // --------------- Types ---------------
-type OfsSubTab = "import_docs" | "result_docs";
+type OfsSubTab = "import_docs" | "cal_table" | "result_docs";
 
 interface ImportRow { code: string; qty: number; }
 
@@ -866,6 +866,12 @@ export default function SAROrderFromStoreTab() {
     } catch (e: any) { toast({ title: "Export ไม่สำเร็จ", description: e.message, variant: "destructive" }); }
   };
 
+  const openListCal = (doc: OfsImportDoc) => {
+    setSelectedDocIds(new Set([doc.id]));
+    setHqFetched(false); setHqCalculated(false); setHqRows([]);
+    setSubTab("cal_table");
+  };
+
   // ============================================================
   // renderTable (shared for HQ + result docs detail)
   // ============================================================
@@ -1134,6 +1140,7 @@ export default function SAROrderFromStoreTab() {
         <div className="border-b px-4 pt-2 bg-background shrink-0">
           <TabsList>
             {(canImport || canHQ) && <TabsTrigger value="import_docs">Import Docs</TabsTrigger>}
+            {canHQ && <TabsTrigger value="cal_table">Cal Table{hqFetched && <span className="ml-1.5 text-[10px] bg-primary/15 text-primary px-1 rounded">{hqRows.length.toLocaleString()}</span>}</TabsTrigger>}
             {canResult && <TabsTrigger value="result_docs">Result Docs</TabsTrigger>}
           </TabsList>
         </div>
@@ -1167,48 +1174,10 @@ export default function SAROrderFromStoreTab() {
               <div className="text-sm font-semibold">Import Docs</div>
               {selectedDocIds.size > 0 && <Badge variant="secondary" className="text-xs">เลือก {selectedDocIds.size}</Badge>}
               <Button size="sm" variant="outline" onClick={loadImportDocs} disabled={importDocsLoading}><RefreshCw className={cn("w-3.5 h-3.5 mr-1", importDocsLoading && "animate-spin")} />Refresh</Button>
-              {canHQ && selectedDocIds.size > 0 && !hqFetched && (
-                <Button size="sm" onClick={handleFetchData} disabled={hqLoading}>{hqLoading ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-1" />}ดึงข้อมูล</Button>
-              )}
-              {canHQ && hqFetched && (
-                <Button size="sm" onClick={handleCalculate} disabled={hqCalculating || hqCalculated}>{hqCalculating ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Calculator className="w-4 h-4 mr-1" />}คำนวณ</Button>
-              )}
-              {canHQ && hqCalculated && (
-                <Button size="sm" onClick={() => setSaveOpen(true)}><Save className="w-4 h-4 mr-1" />Save</Button>
-              )}
-              {hqFetched && (
-                <>
-                  <div className="flex items-center gap-1 ml-2">
-                    <Search className="w-3.5 h-3.5 text-muted-foreground" />
-                    <Input placeholder="ค้นหา SKU/Barcode/Store..." value={hqSearch} onChange={e => setHqSearch(e.target.value)} className="h-7 text-xs w-52" />
-                  </div>
-                  <span className="text-xs text-muted-foreground">{filteredHqRows.length.toLocaleString()} แถว</span>
-                </>
-              )}
-              {/* Status + timer — ดึงข้อมูล / คำนวณ */}
-              {(hqLoading || hqCalculating) && (
-                <div className="ml-auto flex items-center gap-2 shrink-0">
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
-                  <span className="text-xs text-muted-foreground truncate max-w-[200px]">
-                    {hqLoading ? progressLabel : "กำลังคำนวณ..."}
-                  </span>
-                  {hqLoading && (
-                    <span className="text-xs font-mono tabular-nums text-primary font-semibold">{fetchElapsed}s</span>
-                  )}
-                </div>
-              )}
-              {/* แสดงผลสุดท้ายหลัง fetch/cal เสร็จ */}
-              {!hqLoading && !hqCalculating && hqCalculated && calcElapsed > 0 && (
-                <span className="ml-auto text-[10px] text-muted-foreground shrink-0">คำนวณ {calcElapsed}s</span>
-              )}
             </div>
-            {/* thin progress bar ใต้ toolbar */}
-            {(hqLoading || progressPct > 0) && (
-              <Progress value={progressPct} className="h-1 rounded-none shrink-0" />
-            )}
 
-            {/* Doc list (with expand/collapse) */}
-            <div className={cn("overflow-y-auto border-b", hqFetched ? "shrink-0 max-h-64" : "flex-1")}>
+            {/* Doc list */}
+            <div className="overflow-y-auto border-b flex-1">
               {importDocsLoading ? (
                 <div className="flex items-center justify-center py-6"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
               ) : (
@@ -1279,6 +1248,11 @@ export default function SAROrderFromStoreTab() {
                               <td className="px-2 py-1 text-center" onClick={e => e.stopPropagation()}>
                                 <div className="flex items-center gap-1 justify-center">
                                   <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={() => setOpenDoc(d)}>Open</Button>
+                                  {canHQ && (
+                                    <Button size="sm" variant="outline" className="h-6 px-2 text-[10px] text-primary border-primary/40 hover:bg-primary/10" onClick={() => openListCal(d)}>
+                                      List Cal.
+                                    </Button>
+                                  )}
                                   {canHQ && <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" onClick={() => deleteImportDoc(d.id, d.doc_name)}><Trash2 className="w-3 h-3" /></Button>}
                                 </div>
                               </td>
@@ -1291,7 +1265,58 @@ export default function SAROrderFromStoreTab() {
               )}
             </div>
 
-            {/* SAR Table */}
+          </TabsContent>
+        )}
+
+        {/* ============ CAL TABLE TAB ============ */}
+        {canHQ && (
+          <TabsContent value="cal_table" className="flex-1 overflow-hidden mt-0 data-[state=active]:flex flex-col">
+            <div className="border-b px-4 py-2 flex items-center gap-2 flex-wrap shrink-0 bg-muted/20">
+              <div className="text-sm font-semibold">Cal Table</div>
+              {selectedDocIds.size > 0 && <Badge variant="secondary" className="text-xs">เลือก {selectedDocIds.size} doc</Badge>}
+              {selectedDocIds.size > 0 && !hqFetched && (
+                <Button size="sm" onClick={handleFetchData} disabled={hqLoading}>
+                  {hqLoading ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-1" />}ดึงข้อมูล
+                </Button>
+              )}
+              {hqFetched && (
+                <Button size="sm" onClick={handleCalculate} disabled={hqCalculating || hqCalculated}>
+                  {hqCalculating ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Calculator className="w-4 h-4 mr-1" />}คำนวณ
+                </Button>
+              )}
+              {hqCalculated && (
+                <Button size="sm" onClick={() => setSaveOpen(true)}><Save className="w-4 h-4 mr-1" />Save</Button>
+              )}
+              {hqFetched && (
+                <>
+                  <div className="flex items-center gap-1 ml-2">
+                    <Search className="w-3.5 h-3.5 text-muted-foreground" />
+                    <Input placeholder="ค้นหา SKU/Barcode/Store..." value={hqSearch} onChange={e => setHqSearch(e.target.value)} className="h-7 text-xs w-52" />
+                  </div>
+                  <span className="text-xs text-muted-foreground">{filteredHqRows.length.toLocaleString()} แถว</span>
+                </>
+              )}
+              {(hqLoading || hqCalculating) && (
+                <div className="ml-auto flex items-center gap-2 shrink-0">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
+                  <span className="text-xs text-muted-foreground truncate max-w-[200px]">
+                    {hqLoading ? progressLabel : "กำลังคำนวณ..."}
+                  </span>
+                  {hqLoading && <span className="text-xs font-mono tabular-nums text-primary font-semibold">{fetchElapsed}s</span>}
+                </div>
+              )}
+              {!hqLoading && !hqCalculating && hqCalculated && calcElapsed > 0 && (
+                <span className="ml-auto text-[10px] text-muted-foreground shrink-0">คำนวณ {calcElapsed}s</span>
+              )}
+            </div>
+            {(hqLoading || progressPct > 0) && (
+              <Progress value={progressPct} className="h-1 rounded-none shrink-0" />
+            )}
+            {!hqFetched && !hqLoading && (
+              <div className="flex-1 flex items-center justify-center text-sm text-muted-foreground">
+                กด "List Cal." ในหน้า Import Docs เพื่อเลือก Doc แล้วกด ดึงข้อมูล
+              </div>
+            )}
             {hqFetched && (
               <>
                 <div className="px-4 py-1.5 text-xs font-semibold text-muted-foreground bg-muted/30 border-b shrink-0 select-none">
@@ -1300,7 +1325,6 @@ export default function SAROrderFromStoreTab() {
                 {renderTable(filteredHqRows, true)}
               </>
             )}
-
           </TabsContent>
         )}
 
