@@ -1028,29 +1028,28 @@ export default function SAROrderFromStoreTab() {
     return row;
   };
 
-  // helper: fill missing vendor_code/unit_barcode/unit_uom/ship_to for rows saved before these fields were added
+  // helper: fill missing fields for rows saved before vendor/ship_to/po_cost_unit were added
   const enrichRowsForExport = async (rows: ProcessedRow[]): Promise<ProcessedRow[]> => {
-    const missingVendor = rows.filter(r => !r.vendor_code);
-    const missingShipTo = rows.filter(r => !r.ship_to && r.store_name);
-    if (!missingVendor.length && !missingShipTo.length) return rows;
+    const allSkus = [...new Set(rows.map(r => r.sku_code))];
+    const allStores = [...new Set(rows.map(r => r.store_name).filter(Boolean))];
 
-    const skus = [...new Set(missingVendor.map(r => r.sku_code))];
-    const stores = [...new Set(missingShipTo.map(r => r.store_name).filter(Boolean))];
-
-    const [dmRows, stRows] = await Promise.all([
-      skus.length ? queryInChunks<any>("data_master", "sku_code", skus, "sku_code,vendor_code,vendor_display_name,main_barcode,unit_of_measure") : Promise.resolve([]),
-      stores.length ? (async () => {
+    const [dmRows, stRows, poCostRows] = await Promise.all([
+      allSkus.length ? queryInChunks<any>("data_master", "sku_code", allSkus, "sku_code,vendor_code,vendor_display_name,main_barcode,unit_of_measure") : Promise.resolve([]),
+      allStores.length ? (async () => {
         const chunks: string[][] = [];
-        for (let i = 0; i < stores.length; i += 500) chunks.push(stores.slice(i, i + 500));
+        for (let i = 0; i < allStores.length; i += 500) chunks.push(allStores.slice(i, i + 500));
         const res = await Promise.all(chunks.map(ch => (supabase.from("store_type" as any) as any).select("store_name,ship_to").in("store_name", ch).then(({ data }: any) => data || [])));
         return res.flat();
       })() : Promise.resolve([]),
+      allSkus.length ? queryInChunks<any>("po_cost", "item_id", allSkus, "item_id,po_cost_unit") : Promise.resolve([]),
     ]);
 
     const vcMap = new Map<string, any>();
     for (const r of dmRows) { if (r.sku_code && r.vendor_code && !vcMap.has(r.sku_code)) vcMap.set(r.sku_code, r); }
     const shipMap = new Map<string, string>();
     for (const r of stRows as any[]) { if (r.store_name) shipMap.set(r.store_name, r.ship_to || ""); }
+    const poCostMap = new Map<string, number | null>();
+    for (const r of poCostRows) { if (r.item_id && !poCostMap.has(r.item_id)) poCostMap.set(r.item_id, r.po_cost_unit != null ? Number(r.po_cost_unit) : null); }
 
     return rows.map(r => ({
       ...r,
@@ -1059,6 +1058,7 @@ export default function SAROrderFromStoreTab() {
       unit_barcode: r.unit_barcode || vcMap.get(r.sku_code)?.main_barcode || r.main_barcode || "",
       unit_uom: r.unit_uom || vcMap.get(r.sku_code)?.unit_of_measure || r.unit_of_measure || "Unit",
       ship_to: r.ship_to || shipMap.get(r.store_name) || "",
+      po_cost_unit: r.po_cost_unit != null ? r.po_cost_unit : (poCostMap.has(r.sku_code) ? poCostMap.get(r.sku_code)! : null),
     }));
   };
 
