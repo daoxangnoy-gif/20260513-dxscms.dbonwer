@@ -867,7 +867,9 @@ export default function SAROrderFromStoreTab() {
   };
 
   const openListCal = (doc: OfsImportDoc) => {
-    setSelectedDocIds(new Set([doc.id]));
+    // ถ้า doc นี้ยังไม่ได้ถูก select → add เข้าไป (ไม่ reset selection เดิม)
+    // ถ้า selected อยู่แล้ว → ไป Cal Table พร้อม selection ที่มีอยู่
+    setSelectedDocIds(s => s.has(doc.id) ? s : new Set([...s, doc.id]));
     setHqFetched(false); setHqCalculated(false); setHqRows([]);
     setSubTab("cal_table");
   };
@@ -1274,9 +1276,9 @@ export default function SAROrderFromStoreTab() {
             <div className="border-b px-4 py-2 flex items-center gap-2 flex-wrap shrink-0 bg-muted/20">
               <div className="text-sm font-semibold">Cal Table</div>
               {selectedDocIds.size > 0 && <Badge variant="secondary" className="text-xs">เลือก {selectedDocIds.size} doc</Badge>}
-              {selectedDocIds.size > 0 && !hqFetched && (
-                <Button size="sm" onClick={handleFetchData} disabled={hqLoading}>
-                  {hqLoading ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-1" />}ดึงข้อมูล
+              {selectedDocIds.size > 0 && (
+                <Button size="sm" variant={hqFetched ? "outline" : "default"} onClick={handleFetchData} disabled={hqLoading}>
+                  {hqLoading ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-1" />}{hqFetched ? "ดึงใหม่" : "ดึงข้อมูล"}
                 </Button>
               )}
               {hqFetched && (
