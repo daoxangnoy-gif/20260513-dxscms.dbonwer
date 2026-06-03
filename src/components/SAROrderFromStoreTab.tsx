@@ -236,6 +236,7 @@ export default function SAROrderFromStoreTab() {
   const [calcElapsed, setCalcElapsed] = useState(0);
   const [useQtyImport, setUseQtyImport] = useState(false);
   const [hqSearch, setHqSearch] = useState("");
+  const [importDocsSearch, setImportDocsSearch] = useState("");
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveName, setSaveName] = useState("");
   const [hqSaving, setHqSaving] = useState(false);
@@ -546,6 +547,16 @@ export default function SAROrderFromStoreTab() {
     [filteredHqRows, calPage]
   );
   const totalCalPages = Math.max(1, Math.ceil(filteredHqRows.length / CAL_PAGE_SIZE));
+
+  const filteredImportDocs = useMemo(() => {
+    if (!importDocsSearch.trim()) return importDocs;
+    const q = importDocsSearch.toLowerCase();
+    return importDocs.filter(d =>
+      d.doc_name.toLowerCase().includes(q) ||
+      d.store_name.toLowerCase().includes(q) ||
+      (d.user_id && (userProfileMap[d.user_id] || "").toLowerCase().includes(q))
+    );
+  }, [importDocs, importDocsSearch, userProfileMap]);
 
   const saveSummary = useMemo(() => {
     if (!hqCalculated || !hqRows.length) return [];
@@ -1297,6 +1308,21 @@ export default function SAROrderFromStoreTab() {
               <div className="text-sm font-semibold">Import Docs</div>
               {selectedDocIds.size > 0 && <Badge variant="secondary" className="text-xs">เลือก {selectedDocIds.size}</Badge>}
               <Button size="sm" variant="outline" onClick={loadImportDocs} disabled={importDocsLoading}><RefreshCw className={cn("w-3.5 h-3.5 mr-1", importDocsLoading && "animate-spin")} />Refresh</Button>
+              <div className="flex items-center gap-1 ml-2">
+                <Search className="w-3.5 h-3.5 text-muted-foreground" />
+                <Input
+                  placeholder="เสิร์ช Doc / Store / ผู้นำเข้า..."
+                  value={importDocsSearch}
+                  onChange={e => setImportDocsSearch(e.target.value)}
+                  className="h-7 text-xs w-60"
+                />
+                {importDocsSearch && (
+                  <button onClick={() => setImportDocsSearch("")} className="text-muted-foreground hover:text-foreground text-xs px-1">✕</button>
+                )}
+              </div>
+              {importDocsSearch && (
+                <span className="text-xs text-muted-foreground">{filteredImportDocs.length.toLocaleString()} / {importDocs.length.toLocaleString()}</span>
+              )}
             </div>
 
             {/* Doc list */}
@@ -1308,7 +1334,7 @@ export default function SAROrderFromStoreTab() {
                   <thead className="bg-muted sticky top-0 z-10">
                     <tr className="border-b">
                       <th className="px-2 py-1.5 w-8 border-r">
-                        <Checkbox checked={importDocs.length > 0 && selectedDocIds.size === importDocs.length} onCheckedChange={c => setSelectedDocIds(c ? new Set(importDocs.map(d => d.id)) : new Set())} />
+                        <Checkbox checked={filteredImportDocs.length > 0 && filteredImportDocs.every(d => selectedDocIds.has(d.id))} onCheckedChange={c => setSelectedDocIds(s => { const n = new Set(s); filteredImportDocs.forEach(d => c ? n.add(d.id) : n.delete(d.id)); return n; })} />
                       </th>
                       <th className="px-2 py-1.5 text-left border-r">Doc Name</th>
                       <th className="px-2 py-1.5 text-left border-r">Store</th>
@@ -1318,9 +1344,9 @@ export default function SAROrderFromStoreTab() {
                     </tr>
                   </thead>
                   <tbody>
-                    {importDocs.length === 0
-                      ? <tr><td colSpan={7} className="text-center py-6 text-muted-foreground">ยังไม่มี Doc</td></tr>
-                      : importDocs.map(d => {
+                    {filteredImportDocs.length === 0
+                      ? <tr><td colSpan={7} className="text-center py-6 text-muted-foreground">{importDocs.length > 0 ? "ไม่พบผลลัพธ์" : "ยังไม่มี Doc"}</td></tr>
+                      : filteredImportDocs.map(d => {
                         const isExpanded = expandedDocIds.has(d.id);
                         const lineItems = (d.data || []) as OfsImportLine[];
                         return (
