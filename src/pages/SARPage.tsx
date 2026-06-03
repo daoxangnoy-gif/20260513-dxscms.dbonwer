@@ -222,26 +222,45 @@ export default function SARPage() {
   const [loadStartedAt, setLoadStartedAt] = useState<number | null>(null);
   const [calcStartedAt, setCalcStartedAt] = useState<number | null>(null);
 
+  const SAR_RAWDOC_CACHE_KEY = "sar_rawdoc_cache_v1";
+
   const loadRawDoc = useCallback(async () => {
     setRawDocLoading(true);
     try {
-      // loadRawDoc ใช้สำหรับ filter dropdown เท่านั้น → ดึง JSONB ตรงๆ ไม่ต้อง join
-      const { data } = await supabase
+      // ดึง id + created_at ก่อนเพื่อเช็ค session cache
+      const { data: meta } = await supabase
         .from("minmax_cal_documents")
-        .select("data")
+        .select("id, created_at, data")
         .order("created_at", { ascending: false })
         .limit(1).maybeSingle();
-      if (!data?.data || !Array.isArray(data.data)) return;
-      const raw = data.data as unknown as DocRowRaw[];
+      if (!meta?.data || !Array.isArray(meta.data)) return;
+
+      const cacheKey = `${SAR_RAWDOC_CACHE_KEY}_${meta.id}`;
+
+      // ✅ Session cache: ถ้า doc เดิม (same id) ใช้ข้อมูลที่ enrich แล้วทันที
+      const cached = sessionStorage.getItem(cacheKey);
+      if (cached) {
+        try {
+          setRawDoc(JSON.parse(cached) as DocRowRaw[]);
+          return;
+        } catch { /* parse error → re-fetch */ }
+      }
+
+      const raw = meta.data as unknown as DocRowRaw[];
 
       // enrich division/dept/class เฉพาะถ้า minmax doc ไม่มีข้อมูลเหล่านี้
       const needsEnrich = raw.some(r => !r.division || !r.department || !r.sub_department || !r.class || !r.item_type || !r.buying_status);
       if (needsEnrich) {
         const skus = Array.from(new Set(raw.map(r => r.sku_code).filter(Boolean)));
         const dmMap = new Map<string, { division: string; department: string; sub_department: string; class: string; item_type: string; buying_status: string }>();
-        const CHUNK = 500;
-        for (let i = 0; i < skus.length; i += CHUNK) {
-          const slice = skus.slice(i, i + CHUNK);
+
+        // ✅ Parallel fetch: ยิง chunks พร้อมกันทั้งหมดแทนการรอทีละรอบ
+        const CHUNK = 1000; // เพิ่มจาก 500 → 1000 ลดจำนวน round-trip
+        const chunks: string[][] = [];
+        for (let i = 0; i < skus.length; i += CHUNK) chunks.push(skus.slice(i, i + CHUNK));
+
+        const chunkResults = await Promise.all(chunks.map(async (slice) => {
+          const rows: any[] = [];
           let off = 0;
           const PAGE = 1000;
           while (true) {
@@ -250,31 +269,53 @@ export default function SARPage() {
               .in("sku_code", slice)
               .range(off, off + PAGE - 1);
             if (error) break;
-            const batch = dm || [];
-            for (const m of batch as any[]) {
-              if (!m.sku_code) continue;
-              const ex = dmMap.get(m.sku_code);
-              if (!ex || (!ex.division && m.division)) {
-                dmMap.set(m.sku_code, {
-                  division: m.division || ex?.division || "",
-                  department: m.department || ex?.department || "",
-                  sub_department: m.sub_department || ex?.sub_department || "",
-                  class: m.class || ex?.class || "",
-                  item_type: m.item_type || ex?.item_type || "",
-                  buying_status: m.buying_status || ex?.buying_status || "",
-                });
-              }
-            }
-            if (batch.length < PAGE) break;
+            rows.push(...(dm || []));
+            if ((dm || []).length < PAGE) break;
             off += PAGE;
           }
+          return rows;
+        }));
+
+        for (const batch of chunkResults) {
+          for (const m of batch) {
+            if (!m.sku_code) continue;
+            const ex = dmMap.get(m.sku_code);
+            if (!ex || (!ex.division && m.division)) {
+              dmMap.set(m.sku_code, {
+                division: m.division || ex?.division || "",
+                department: m.department || ex?.department || "",
+                sub_department: m.sub_department || ex?.sub_department || "",
+                class: m.class || ex?.class || "",
+                item_type: m.item_type || ex?.item_type || "",
+                buying_status: m.buying_status || ex?.buying_status || "",
+              });
+            }
+          }
         }
-        setRawDoc(raw.map(r => {
+
+        const enriched = raw.map(r => {
           const m = dmMap.get(r.sku_code);
           if (!m) return r;
           return { ...r, division: r.division || m.division, department: r.department || m.department, sub_department: r.sub_department || m.sub_department, class: r.class || m.class, item_type: r.item_type || m.item_type, buying_status: r.buying_status || m.buying_status };
-        }));
+        });
+
+        // บันทึก session cache (ล้าง key เก่าก่อน เพื่อประหยัด sessionStorage)
+        try {
+          for (const k of Object.keys(sessionStorage)) {
+            if (k.startsWith(SAR_RAWDOC_CACHE_KEY)) sessionStorage.removeItem(k);
+          }
+          sessionStorage.setItem(cacheKey, JSON.stringify(enriched));
+        } catch { /* sessionStorage full → skip */ }
+
+        setRawDoc(enriched);
       } else {
+        // doc ที่มีข้อมูลครบแล้ว → cache เลย
+        try {
+          for (const k of Object.keys(sessionStorage)) {
+            if (k.startsWith(SAR_RAWDOC_CACHE_KEY)) sessionStorage.removeItem(k);
+          }
+          sessionStorage.setItem(cacheKey, JSON.stringify(raw));
+        } catch { /* skip */ }
         setRawDoc(raw);
       }
     } catch (e: any) {
