@@ -1837,9 +1837,16 @@ export default function SAROrderFromStoreTab() {
                               return (
                                 <>
                                   <div className="flex gap-1 px-2 py-1 border-b items-center">
-                                    <button className="text-[10px] text-primary hover:underline" onClick={e => { e.stopPropagation(); setVendorFilter(null); }}>Select All</button>
+                                    <button className="text-[10px] text-primary hover:underline" onClick={() => {
+                                      // ถ้า search active → เลือกเฉพาะที่กรองเห็น, ถ้าไม่ search → เลือกทั้งหมด
+                                      if (vendorFilterSearch.trim()) {
+                                        setVendorFilter(new Set(visibleVendors.map(v => v.vendor_code)));
+                                      } else {
+                                        setVendorFilter(null);
+                                      }
+                                    }}>Select All{vendorFilterSearch.trim() ? ` (${visibleVendors.length})` : ""}</button>
                                     <span className="text-muted-foreground text-[10px]">·</span>
-                                    <button className="text-[10px] text-muted-foreground hover:underline" onClick={e => { e.stopPropagation(); setVendorFilter(new Set()); }}>Clear</button>
+                                    <button className="text-[10px] text-muted-foreground hover:underline" onClick={() => setVendorFilter(new Set())}>Clear</button>
                                     <span className="text-[10px] text-primary ml-auto">{selectedCount} / {vendorList.length} selected</span>
                                   </div>
                                   <div className="max-h-60 overflow-y-auto">
