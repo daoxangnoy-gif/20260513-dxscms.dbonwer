@@ -383,43 +383,37 @@ export default function SARPage() {
     };
   };
 
-  // ----- Step 1: ดึงข้อมูล — ใช้ RPC get_sar_fetch_data -----
+  // ----- Step 1: ดึงข้อมูล -----
+  // Flow: filter rawDoc (in-memory) → get_sar_enrich_data(filteredSkus) → map SARRow
   const fetchData = async () => {
     setLoading(true);
     setLoadStartedAt(Date.now());
     try {
+      if (!rawDoc.length) {
+        toast({ title: "ไม่พบ Min/Max Doc", description: "กรุณาคำนวณ Min/Max ก่อน", variant: "destructive" });
+        setRows([]); setCalculated(false); return;
+      }
+
       let filtered: DocRowRaw[] = [];
-      let docName = "MinMax Doc";
 
       if (mode === "filter") {
-        setProgressLabel("กำลังดึงข้อมูล Min/Max...");
-        setProgressPct(15);
-        const { data: rpcData, error } = await (supabase as any).rpc("get_sar_fetch_data", {
-          p_store_names: storeFilter.length ? storeFilter : [],
-          p_sku_codes: skuFilter.length ? skuFilter : [],
-        });
-        if (error) throw error;
-        if (!rpcData) { toast({ title: "ไม่พบ Min/Max Doc", description: "กรุณาคำนวณ Min/Max ก่อน", variant: "destructive" }); setRows([]); setCalculated(false); return; }
-        docName = rpcData.doc_name || docName;
-        const raw = (rpcData.rows || []) as DocRowRaw[];
-
-        setProgressPct(60);
-        setProgressLabel(`ได้ ${raw.length.toLocaleString()} แถว — กำลังกรอง...`);
-
-        // apply remaining client-side filters (typeStore, division, dept, subDept, class, buying, barcode)
-        filtered = raw.filter(r =>
+        setProgressLabel("กำลังกรองข้อมูล...");
+        setProgressPct(10);
+        // filter rawDoc ที่อยู่ใน memory แล้ว — ไม่มี network call
+        filtered = rawDoc.filter(r =>
+          (storeFilter.length === 0     || storeFilter.includes(r.store_name)) &&
           (typeStoreFilter.length === 0 || typeStoreFilter.includes(r.type_store)) &&
           (itemTypeFilter.length === 0  || itemTypeFilter.includes(r.item_type || "")) &&
           (buyingFilter.length === 0    || buyingFilter.includes(r.buying_status || "")) &&
           (divisionFilter.length === 0  || divisionFilter.includes(r.division || "")) &&
-          (departmentFilter.length === 0  || departmentFilter.includes(r.department || "")) &&
+          (departmentFilter.length === 0 || departmentFilter.includes(r.department || "")) &&
           (subDeptFilter.length === 0   || subDeptFilter.includes(r.sub_department || "")) &&
           (classFilter.length === 0     || classFilter.includes(r.class || "")) &&
+          (skuFilter.length === 0       || skuFilter.includes(r.sku_code)) &&
           (barcodeFilter.length === 0   || (r.main_barcode != null && barcodeFilter.includes(r.main_barcode)))
         );
-
       } else {
-        // import mode — resolve barcodes first, then call RPC with resolved SKUs
+        // import mode — resolve barcodes → filter rawDoc
         if (importedSet.size === 0) {
           toast({ title: "ยังไม่ Import", description: "กรุณา Import barcode/SKU ก่อน", variant: "destructive" });
           return;
@@ -432,38 +426,75 @@ export default function SARPage() {
         for (let i = 0; i < keys.length; i += CHUNK_BC) {
           const slice = keys.slice(i, i + CHUNK_BC);
           const { data: bcRows, error: bcErr } = await supabase
-            .from("data_master")
-            .select("sku_code, main_barcode, barcode")
+            .from("data_master").select("sku_code, main_barcode, barcode")
             .or(`main_barcode.in.(${slice.map(s => `"${s}"`).join(",")}),barcode.in.(${slice.map(s => `"${s}"`).join(",")})`);
           if (bcErr) { console.warn("[SAR import] barcode resolve error", bcErr); continue; }
           for (const m of (bcRows || []) as any[]) { if (m.sku_code) resolvedSkus.add(String(m.sku_code)); }
         }
-
-        setProgressLabel(`ดึงข้อมูล ${resolvedSkus.size.toLocaleString()} SKU...`);
-        setProgressPct(30);
-        const { data: rpcData, error } = await (supabase as any).rpc("get_sar_fetch_data", {
-          p_store_names: [],
-          p_sku_codes: Array.from(resolvedSkus),
-        });
-        if (error) throw error;
-        docName = rpcData?.doc_name || docName;
-        filtered = (rpcData?.rows || []) as DocRowRaw[];
+        filtered = rawDoc.filter(r => resolvedSkus.has(r.sku_code));
         if (filtered.length === 0) {
           toast({ title: "ไม่พบข้อมูล", description: `Import ${importedSet.size} keys แต่ไม่ match กับ Min/Max Doc`, variant: "destructive" });
         }
       }
 
-      setProgressPct(85);
-      setProgressLabel(`กรองได้ ${filtered.length.toLocaleString()} แถว — สร้าง rows...`);
+      setProgressPct(30);
+      setProgressLabel(`กรองได้ ${filtered.length.toLocaleString()} แถว — กำลังดึง Master...`);
 
-      const mapped: SARRow[] = filtered.map(mapDocRowToSARRow);
+      // เรียก RPC เพื่อ enrich data_master + pack_box สำหรับ filtered SKUs เท่านั้น
+      const filteredSkus = [...new Set(filtered.map(r => r.sku_code).filter(Boolean))];
+      const { data: enrichData, error: enrichErr } = await (supabase as any).rpc("get_sar_enrich_data", {
+        p_sku_codes: filteredSkus,
+      });
+      if (enrichErr) throw enrichErr;
+
+      setProgressPct(80);
+      setProgressLabel("สร้าง rows...");
+
+      // build enrich maps
+      const dmMap = new Map<string, any>();
+      for (const r of (enrichData?.dm || []) as any[]) { if (r.sku_code && !dmMap.has(r.sku_code)) dmMap.set(r.sku_code, r); }
+      const rsvMap = new Map<string, { pack_qty: number | null; box_qty: number | null }>();
+      for (const r of (enrichData?.pack_box || []) as any[]) { if (r.sku_code && !rsvMap.has(r.sku_code)) rsvMap.set(r.sku_code, { pack_qty: r.pack_qty ?? null, box_qty: r.box_qty ?? null }); }
+
+      const mapped: SARRow[] = filtered.map(r => {
+        const dm = dmMap.get(r.sku_code);
+        const rsv = rsvMap.get(r.sku_code);
+        const up = Number(r.unit_pick_edit ?? r.unit_pick ?? 1) || 1;
+        return {
+          sku_code: r.sku_code,
+          main_barcode: dm?.main_barcode ?? r.main_barcode,
+          product_name_la: r.product_name_la, product_name_en: r.product_name_en,
+          unit_of_measure: r.unit_of_measure, store_name: r.store_name,
+          type_store: r.type_store || "",
+          division: r.division || dm?.division || "",
+          department: r.department || dm?.department || "",
+          sub_department: r.sub_department || dm?.sub_department || "",
+          item_type: r.item_type || dm?.item_type || "",
+          buying_status: r.buying_status || dm?.buying_status || "",
+          unit_pick: up,
+          pack_qty: r.pack_qty ?? rsv?.pack_qty ?? null,
+          box_qty: r.box_qty ?? rsv?.box_qty ?? null,
+          cost: dm?.standard_price != null ? Number(dm.standard_price) : null,
+          price2km: dm?.list_price != null ? Number(dm.list_price) : null,
+          price_jm: dm?.jmart_price != null ? Number(dm.jmart_price) : null,
+          pack_size: up === 1 ? "Unit" : `1x${up}`,
+          avg_sale: Number(r.avg_sale) || 0, rank_sale: r.rank_sale || "D",
+          rank_factor: Number(r.rank_factor) || 7,
+          min_val: Number(r.min_final ?? r.min_cal ?? 0) || 0,
+          max_val: Number(r.max_final ?? r.max_cal ?? 0) || 0,
+          stock_dc: 0, stock_store: 0, on_order: 0,
+          sar_suggest1: 0, sar_suggest2: 0, tt_order: 0, suggest_order_edit: null,
+          final_order_unit: 0, final_order_uom: 0, doh_min: 0, doh_max: 0, doh_stock: 0, doh_tobe: 0,
+          calculated: false,
+        };
+      });
 
       setProgressPct(100);
       const _excluded = await (await import("@/lib/filterTemplates")).applyExcludeFilters(mapped as any[], "sar");
       setRows(_excluded as any);
       setCalculated(false);
       setPage(0);
-      toast({ title: "ดึงข้อมูลสำเร็จ", description: `${mapped.length.toLocaleString()} แถว จาก ${docName}` });
+      toast({ title: "ดึงข้อมูลสำเร็จ", description: `${mapped.length.toLocaleString()} แถว` });
     } catch (e: any) {
       toast({ title: "Load error", description: e.message, variant: "destructive" });
     } finally {
