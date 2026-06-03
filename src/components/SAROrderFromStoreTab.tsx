@@ -176,6 +176,23 @@ export default function SAROrderFromStoreTab() {
   const [multiStoreGroups, setMultiStoreGroups] = useState<{ store: string; rows: ImportRow[]; known: boolean }[]>([]);
   const [multiStoreSaving, setMultiStoreSaving] = useState(false);
   const [multiStoreProgress, setMultiStoreProgress] = useState({ current: 0, total: 0 });
+
+  // Elapsed timer สำหรับ multi-store import
+  const [multiStoreElapsedMs, setMultiStoreElapsedMs] = useState(0);
+  const multiStoreStartRef = useRef<number | null>(null);
+  const multiStoreTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startMultiStoreTimer = () => {
+    multiStoreStartRef.current = performance.now();
+    setMultiStoreElapsedMs(0);
+    if (multiStoreTimerRef.current) clearInterval(multiStoreTimerRef.current);
+    multiStoreTimerRef.current = setInterval(() => {
+      setMultiStoreElapsedMs(multiStoreStartRef.current ? Math.round(performance.now() - multiStoreStartRef.current) : 0);
+    }, 100);
+  };
+  const stopMultiStoreTimer = () => {
+    if (multiStoreTimerRef.current) { clearInterval(multiStoreTimerRef.current); multiStoreTimerRef.current = null; }
+  };
+  useEffect(() => () => stopMultiStoreTimer(), []);
   // user profile map
   const [userProfileMap, setUserProfileMap] = useState<Record<string, string>>({});
 
@@ -355,6 +372,7 @@ export default function SAROrderFromStoreTab() {
     if (!validGroups.length) return;
     setMultiStoreSaving(true);
     setMultiStoreProgress({ current: 0, total: validGroups.length });
+    startMultiStoreTimer();
     const allSkips: SkipRow[] = [];
     let totalPass = 0, totalTotal = 0;
     try {
@@ -375,6 +393,7 @@ export default function SAROrderFromStoreTab() {
     } finally {
       setMultiStoreSaving(false);
       setMultiStoreProgress({ current: 0, total: 0 });
+      stopMultiStoreTimer();
     }
   };
 
@@ -1045,8 +1064,11 @@ export default function SAROrderFromStoreTab() {
           </div>
           {multiStoreSaving && multiStoreProgress.total > 0 && (
             <div className="space-y-1.5">
-              <div className="flex justify-between text-xs text-muted-foreground">
+              <div className="flex justify-between items-center text-xs text-muted-foreground">
                 <span>กำลัง import สาขา {multiStoreProgress.current} / {multiStoreProgress.total}...</span>
+                <span className="font-mono font-semibold text-primary text-sm tabular-nums">
+                  {(multiStoreElapsedMs / 1000).toFixed(1)} s
+                </span>
               </div>
               <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
                 <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${(multiStoreProgress.current / multiStoreProgress.total) * 100}%` }} />
