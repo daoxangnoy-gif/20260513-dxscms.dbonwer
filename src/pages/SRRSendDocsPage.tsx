@@ -380,7 +380,10 @@ function ScannerPanel({
       <div className="flex items-center justify-between text-sm">
         <span className="font-medium">รายการที่สะแกน: <Badge variant="secondary">{codes.length}</Badge></span>
         {codes.length > 0 && (
-          <Button type="button" variant="ghost" size="sm" onClick={() => setCodes([])}>
+          <Button type="button" variant="ghost" size="sm" onClick={() => {
+            if (!window.confirm(`ยืนยันล้างรายการทั้งหมด ${codes.length} รายการ?`)) return;
+            setCodes([]);
+          }}>
             <X className="w-3.5 h-3.5 mr-1" />ล้างทั้งหมด
           </Button>
         )}
