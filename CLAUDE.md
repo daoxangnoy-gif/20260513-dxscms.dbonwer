@@ -146,6 +146,22 @@ Final Order  = ROUNDUP(max(SRR Suggest - On Order, 0) / MOQ) × MOQ
 - นับจำนวน PO ของแต่ละ Partner ที่อยู่ในแต่ละจุด ณ ขณะนั้น
 - ทำให้รู้ว่าเอกสารของ Partner ไหนอยู่ที่จุดไหน และยังค้างอยู่ที่ไหนบ้าง
 
+**สถานะเอกสาร (Shipment status):**
+- `pending` → เริ่มฝาก, `in_transit` → กำลังเดินทาง, `matched` / `mismatch` → จบครบ/ไม่ครบ, `finalized` → สิ้นสุด (ตัดออกจาก Report)
+- สถานะ `finalized` เก็บใน Supabase (`document_shipments.status`) ไม่ใช่ localStorage — ทุก User จึงเห็นพร้อมกัน
+- **latestScanByCode** logic: PO code ที่ถูกสะแกนใน Shipment ใหม่กว่าจะ "ย้าย" มานับที่จุดใหม่อัตโนมัติใน Report tab
+
+### SAR Order From Store (`SAROrderFromStoreTab`)
+
+ระบบ import รายการสั่งซื้อจากสาขา (OFS) แล้วคำนวณ SAR:
+
+**Flow import:**
+1. Barcode/SKU → resolve เป็น `sku_code` (ค้นใน `main_barcode` → `sku_code` → `barcode`)
+2. ดึง `data_master` ที่ `packing_size_qty = 1` เพื่อเอา buying_status / item_type / product_owner
+3. เช็ค `range_store` ด้วย **store code prefix** (`.like("store_name", "121010003%")`) ไม่ใช่ชื่อเต็ม
+4. ตรวจเงื่อนไข Skip: ไม่พบใน DM / Inactive / Non basic / product_owner ไม่ใช่ Lanexang / ไม่อยู่ใน Range
+5. บันทึก `data` (valid) และ `skip_data` (skips) ลง `ofs_import_docs`
+
 ### Payment Overdue
 
 ติดตามรายการ PO ที่เกินกำหนดชำระเงิน
@@ -242,6 +258,20 @@ SAR (เบิกก่อนได้ก่อน — first-import-first-out al
 
 `RangeStorePage` and `MinmaxCalPage` are standalone calculation pages. They do NOT use `useDataTable`; each fetches data directly from Supabase and manages state locally.
 
+**Range Store — Data Architecture (สำคัญมาก):**
+- `range_store` (long table) — แหล่งข้อมูลจริง, มี RLS (authenticated เท่านั้น), เก็บแบบ `sku_code × store_name`
+- `range_store_view` (materialized physical table) — pre-joined view สำหรับ RangeStorePage UI, ต้อง sync ด้วย `sync_range_store_view()` หลัง import
+- `store_type` — master ชื่อสาขา ใช้เป็น dropdown และ allowed_stores ใน RPC ทุกตัว
+- **ระวัง naming drift:** ถ้าชื่อสาขาใน `range_store` กับ `store_type` สะกดต่างกัน (เช่น `Phontong` vs `Phonetong`) จะทำให้ SAR import skip ทุกรายการ และ MinMax Cal ไม่เจอ SKU ของสาขานั้น
+- **Import validation:** RangeStorePage import จะ auto-correct store_name ด้วย store code prefix ถ้าสะกดผิด และ skip ถ้าไม่พบรหัสสาขาเลย
+
+**Min/Max Cal — Save Scope:**
+- Save Doc จะลบ minmax เก่าก่อน upsert ใหม่ตาม scope:
+  - ไม่มี filter → ลบทั้งหมด (full recalc)
+  - มี typeStoreFilter → ลบทุกสาขาใน type (ครอบคลุม SKU ที่หลุดออกจาก range)
+  - มี storeFilter → ลบเฉพาะสาขาที่เลือก
+- **อย่าลบแค่ stores ที่อยู่ใน payload** เพราะ SKU ที่หลุดออกจาก range จะไม่อยู่ใน payload แต่ยังค้างใน minmax table
+
 ### Filter Templates (`src/lib/filterTemplates.ts`)
 
 `FilterTemplate` records stored in Supabase (`filter_templates` table) are applied client-side via `applyExcludeFilters()` in `useDataTable`'s fetch pipeline. Active templates act as always-on exclude rules. Changes emit a custom event (`onFilterTemplatesUpdated`) to trigger re-fetch.
@@ -253,6 +283,12 @@ SAR (เบิกก่อนได้ก่อน — first-import-first-out al
 - `user_roles` join table
 - `get_user_permissions(_user_id)` RPC aggregates everything into a single response
 - Edge Function `admin-update-user` (JWT-verified) handles admin user mutations
+
+### Supabase — RLS & anon key
+
+- ตาราง `range_store`, `range_store_view`, `document_shipments`, `document_movements` มี RLS → anon key อ่านไม่ได้ (เห็น `*/0` ไม่ใช่ว่าว่างเปล่า)
+- RPC ที่ประกาศ `SECURITY DEFINER` จะ bypass RLS → ใช้ได้แม้ anon key (เช่น `get_range_store_data`, `sync_range_store_view`)
+- ตาราง `data_master`, `store_type` ไม่มี RLS → anon อ่านได้ปกติ
 
 ### Supabase Types
 
