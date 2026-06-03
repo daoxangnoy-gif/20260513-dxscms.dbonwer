@@ -181,6 +181,8 @@ function SRRDCItemPage() {
     srrStateRef.current?.selectedBatchValuesByMode || { filter: [], vendor: [], import: [] }
   );
   const [loadingSnapshots, setLoadingSnapshots] = useState(false);
+  const [snapshotLoadLabel, setSnapshotLoadLabel] = useState("");
+  const [snapshotLoadedRows, setSnapshotLoadedRows] = useState(0);
   const [latestImportedDocIds, setLatestImportedDocIds] = useState<string[]>([]);
   const listPoBatches = useMemo(() => getLocalPOBatches("srr_saved_pos"), [poRefreshKey]);
   const documentBatches = useMemo(
@@ -558,8 +560,13 @@ function SRRDCItemPage() {
     const loadFromDB = async () => {
       try {
         setLoadingSnapshots(true);
+        setSnapshotLoadLabel("กำลังโหลด Snapshots จาก DB...");
+        setSnapshotLoadedRows(0);
         // Load recent snapshots
-        const snapshots = await loadRecentSnapshots();
+        const snapshots = await loadRecentSnapshots((loaded) => {
+          setSnapshotLoadedRows(loaded);
+        });
+        setSnapshotLoadLabel("กำลังประมวลผล Documents...");
         if (snapshots.length > 0 && vendorDocs.length === 0) {
           const docs: VendorDocument[] = snapshots.map(s => ({
             id: s.id,
@@ -580,6 +587,7 @@ function SRRDCItemPage() {
           setVendorDocs(docs);
         }
         // Load available dates and batches
+        setSnapshotLoadLabel("กำลังโหลด Dates & Batches...");
         const [dates, batches] = await Promise.all([getSnapshotDates(), getSnapshotBatches("srr_snapshots")]);
         setSnapshotDates(dates);
         setSnapshotBatches(batches);
@@ -589,6 +597,8 @@ function SRRDCItemPage() {
         console.error("Error loading snapshots:", err);
       } finally {
         setLoadingSnapshots(false);
+        setSnapshotLoadLabel("");
+        setSnapshotLoadedRows(0);
       }
     };
     loadFromDB();
@@ -3151,14 +3161,26 @@ function SRRDCItemPage() {
 
           <div className="flex-1 overflow-auto p-4">
             <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
-              <Database className="w-16 h-16 mb-4 opacity-20" />
-              {totalDocsCount === 0 && !loading ? (
+              {loadingSnapshots && vendorDocs.length === 0 ? (
                 <>
+                  <div className="w-12 h-12 mb-4 rounded-full border-4 border-primary/30 border-t-primary animate-spin" />
+                  <p className="text-base font-medium text-foreground">{snapshotLoadLabel || "กำลังโหลด Docs..."}</p>
+                  {snapshotLoadedRows > 0 && (
+                    <p className="text-sm mt-1 font-mono text-primary font-semibold">
+                      โหลดแล้ว {snapshotLoadedRows.toLocaleString()} rows
+                    </p>
+                  )}
+                  <p className="text-xs mt-2 text-muted-foreground/70">กรุณารอสักครู่...</p>
+                </>
+              ) : totalDocsCount === 0 && !loading ? (
+                <>
+                  <Database className="w-16 h-16 mb-4 opacity-20" />
                   <p className="text-base font-medium">1. กด "เตรียมข้อมูล" → 2. เลือก SPC Name → 3. กด "Read & Cal"</p>
                   <p className="text-xs mt-2 text-muted-foreground/70">เมื่อคำนวณเสร็จ กดปุ่ม <strong>Doc</strong> ที่มุมขวาบน เพื่อเปิดดู Documents</p>
                 </>
               ) : (
                 <>
+                  <Database className="w-16 h-16 mb-4 opacity-20" />
                   <p className="text-base font-medium">✅ มี {totalDocsCount} เอกสาร · {totalItems.toLocaleString()} รายการ</p>
                   <p className="text-xs mt-2 text-muted-foreground/70">กดปุ่ม <strong>เอกสารคำนวน ({vendorDocs.length})</strong> ที่มุมขวาบน เพื่อเปิดดู</p>
                   <Button size="sm" variant="default" className="mt-3 gap-1.5" onClick={() => setDocsDialogOpen(true)}>

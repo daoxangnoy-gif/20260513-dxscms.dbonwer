@@ -813,6 +813,8 @@ export default function SRRDirectPage() {
     Record<"filter" | "vendor" | "import", string[]>
   >(d2sStateRef.current?.selectedBatchValuesByMode || { filter: [], vendor: [], import: [] });
   const [loadingSnapshots, setLoadingSnapshots] = useState(false);
+  const [snapshotLoadLabel, setSnapshotLoadLabel] = useState("");
+  const [snapshotLoadedRows, setSnapshotLoadedRows] = useState(0);
   // Doc ids from the most recent Read & Cal — used to auto-tick & highlight in Doc dialog
   const [latestImportedDocIds, setLatestImportedDocIds] = useState<string[]>([]);
   const listPoBatches = useMemo(() => getLocalPOBatches("srr_saved_pos_d2s"), [poRefreshKey]);
@@ -1234,9 +1236,14 @@ export default function SRRDirectPage() {
         }
       });
     if (vendorDocs.length === 0) {
+      setLoadingSnapshots(true);
+      setSnapshotLoadLabel("กำลังโหลด D2S Snapshots จาก DB...");
+      setSnapshotLoadedRows(0);
       loadD2SSnapshots()
         .then((snaps) => {
           if (!snaps || snaps.length === 0) return;
+          setSnapshotLoadLabel("กำลังประมวลผล Documents...");
+          setSnapshotLoadedRows(snaps.length);
           const docs: VendorDocument[] = snaps.map((s: any) => ({
             id: s.id,
             vendor_code: s.vendor_code,
@@ -1256,7 +1263,12 @@ export default function SRRDirectPage() {
           }));
           setVendorDocs(docs);
         })
-        .catch((err) => console.error("Load D2S snapshots failed:", err));
+        .catch((err) => console.error("Load D2S snapshots failed:", err))
+        .finally(() => {
+          setLoadingSnapshots(false);
+          setSnapshotLoadLabel("");
+          setSnapshotLoadedRows(0);
+        });
     }
     // Load distinct snapshot dates (for Filter Date dropdown)
     Promise.all([getD2SSnapshotDates(), getSnapshotBatches("srr_d2s_snapshots")])
@@ -3823,14 +3835,26 @@ export default function SRRDirectPage() {
 
           <div className="flex-1 overflow-auto p-4">
             <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
-              <Database className="w-16 h-16 mb-4 opacity-20" />
-              {totalDocsCount === 0 && !loading ? (
+              {loadingSnapshots && vendorDocs.length === 0 ? (
                 <>
+                  <div className="w-12 h-12 mb-4 rounded-full border-4 border-primary/30 border-t-primary animate-spin" />
+                  <p className="text-base font-medium text-foreground">{snapshotLoadLabel || "กำลังโหลด Docs..."}</p>
+                  {snapshotLoadedRows > 0 && (
+                    <p className="text-sm mt-1 font-mono text-primary font-semibold">
+                      โหลดแล้ว {snapshotLoadedRows.toLocaleString()} rows
+                    </p>
+                  )}
+                  <p className="text-xs mt-2 text-muted-foreground/70">กรุณารอสักครู่...</p>
+                </>
+              ) : totalDocsCount === 0 && !loading ? (
+                <>
+                  <Database className="w-16 h-16 mb-4 opacity-20" />
                   <p className="text-base font-medium">1. กด "เตรียมข้อมูล" → 2. เลือก SPC Name → 3. กด "Read & Cal"</p>
                   <p className="text-xs mt-2 text-muted-foreground/70">เมื่อคำนวณเสร็จ กดปุ่ม <strong>Doc</strong> ที่มุมขวาบน เพื่อเปิดดู Documents</p>
                 </>
               ) : (
                 <>
+                  <Database className="w-16 h-16 mb-4 opacity-20" />
                   <p className="text-base font-medium">✅ มี {totalDocsCount} เอกสาร · {totalItems.toLocaleString()} รายการ</p>
                   <p className="text-xs mt-2 text-muted-foreground/70">กดปุ่ม <strong>เอกสารคำนวน ({vendorDocs.length})</strong> ที่มุมขวาบน เพื่อเปิดดู</p>
                   <Button size="sm" variant="default" className="mt-3 gap-1.5" onClick={() => setDocsDialogOpen(true)}>

@@ -92,7 +92,8 @@ export function mergeSnapshotBatches(primary: SnapshotBatch[], secondary: Snapsh
 async function fetchAllPaged<T = any>(
   buildQuery: () => any,
   pageSize = 1000,
-  hardCap = 100_000
+  hardCap = 100_000,
+  onProgress?: (loaded: number) => void
 ): Promise<T[]> {
   const all: T[] = [];
   let from = 0;
@@ -101,6 +102,7 @@ async function fetchAllPaged<T = any>(
     if (error) throw error;
     const rows = (data || []) as T[];
     all.push(...rows);
+    if (onProgress) onProgress(all.length);
     if (rows.length < pageSize) break;
     from += pageSize;
   }
@@ -185,7 +187,7 @@ export async function loadSnapshots(dateKey: string): Promise<SnapshotDoc[]> {
 }
 
 // Load all snapshots within 30 days
-export async function loadRecentSnapshots(): Promise<SnapshotDoc[]> {
+export async function loadRecentSnapshots(onProgress?: (loaded: number) => void): Promise<SnapshotDoc[]> {
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - 30);
   const cutoffStr = cutoff.toISOString().split("T")[0];
@@ -197,7 +199,8 @@ export async function loadRecentSnapshots(): Promise<SnapshotDoc[]> {
       .gte("date_key", cutoffStr)
       .order("date_key", { ascending: false }),
     1000,
-    50_000
+    50_000,
+    onProgress
   );
   return data.map((r: any) => ({
     ...r,
