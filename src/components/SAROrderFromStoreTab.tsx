@@ -1074,7 +1074,8 @@ export default function SAROrderFromStoreTab() {
     try {
       const perChunk = Math.max(1, perPOChunk);
       const enriched = await enrichRowsForExport(target);
-      const filtered = vendorFilter && vendorFilter.size > 0 ? enriched.filter(r => vendorFilter.has(r.vendor_code || "")) : enriched;
+      if (vendorFilter !== null && vendorFilter.size === 0) { toast({ title: "ไม่มี Vendor ที่เลือก", description: "กรุณาเลือก Vendor อย่างน้อย 1 รายการ", variant: "destructive" }); return; }
+      const filtered = vendorFilter !== null ? enriched.filter(r => vendorFilter.has(r.vendor_code || "")) : enriched;
       // vendor_code → sku_code → { qty, row }
       const byVendor = new Map<string, Map<string, { qty: number; row: ProcessedRow }>>();
       for (const r of filtered) {
@@ -1112,7 +1113,8 @@ export default function SAROrderFromStoreTab() {
     try {
       const perChunk = Math.max(1, perPOChunk);
       const enriched = await enrichRowsForExport(target);
-      const filtered = vendorFilter && vendorFilter.size > 0 ? enriched.filter(r => vendorFilter.has(r.vendor_code || "")) : enriched;
+      if (vendorFilter !== null && vendorFilter.size === 0) { toast({ title: "ไม่มี Vendor ที่เลือก", description: "กรุณาเลือก Vendor อย่างน้อย 1 รายการ", variant: "destructive" }); return; }
+      const filtered = vendorFilter !== null ? enriched.filter(r => vendorFilter.has(r.vendor_code || "")) : enriched;
       // vendor_code → store → rows
       const byVendor = new Map<string, Map<string, ProcessedRow[]>>();
       for (const r of filtered) {
@@ -1187,7 +1189,8 @@ export default function SAROrderFromStoreTab() {
       const fetched = await Promise.all(chunks.map(ch => (supabase as any).from("ofs_result_docs").select("data").in("id", ch).then(({ data }: any) => data || [])));
       let allRows: ProcessedRow[] = fetched.flat().flatMap((d: any) => d.data || []);
       // apply vendor filter if set
-      if (vendorFilter && vendorFilter.size > 0) {
+      if (vendorFilter !== null) {
+        if (vendorFilter.size === 0) { toast({ title: "ไม่มี Vendor ที่เลือก", variant: "destructive" }); return; }
         const enriched = await enrichRowsForExport(allRows);
         allRows = enriched.filter(r => vendorFilter.has(r.vendor_code || ""));
       }
@@ -1824,37 +1827,47 @@ export default function SAROrderFromStoreTab() {
                                 autoFocus
                               />
                             </div>
-                            <div className="flex gap-1 px-2 py-1 border-b">
-                              <button className="text-[10px] text-primary hover:underline" onClick={() => setVendorFilter(new Set(vendorList.map(v => v.vendor_code)))}>Select All</button>
-                              <span className="text-muted-foreground text-[10px]">·</span>
-                              <button className="text-[10px] text-muted-foreground hover:underline" onClick={() => setVendorFilter(null)}>Clear</button>
-                              {vendorFilter && <span className="text-[10px] text-primary ml-auto">{vendorFilter.size} selected</span>}
-                            </div>
-                            <div className="max-h-60 overflow-y-auto">
-                              {vendorFilterLoading ? (
-                                <div className="flex items-center justify-center py-4"><Loader2 className="w-4 h-4 animate-spin text-muted-foreground" /></div>
-                              ) : vendorList.filter(v => {
+                            {(() => {
+                              const visibleVendors = vendorList.filter(v => {
                                 if (!vendorFilterSearch.trim()) return true;
                                 const q = vendorFilterSearch.toLowerCase();
                                 return v.vendor_code.toLowerCase().includes(q) || v.vendor_name.toLowerCase().includes(q) || v.spc_name.toLowerCase().includes(q);
-                              }).map(v => {
-                                const checked = !vendorFilter || vendorFilter.has(v.vendor_code);
-                                return (
-                                  <div key={v.vendor_code} className={cn("flex items-start gap-2 px-3 py-1.5 hover:bg-muted/40 cursor-pointer text-xs", checked && "bg-primary/5")}
-                                    onClick={() => setVendorFilter(prev => {
-                                      const next = new Set(prev ?? vendorList.map(x => x.vendor_code));
-                                      next.has(v.vendor_code) ? next.delete(v.vendor_code) : next.add(v.vendor_code);
-                                      return next.size === vendorList.length ? null : next;
-                                    })}>
-                                    <Checkbox checked={checked} className="mt-0.5 shrink-0" />
-                                    <div className="min-w-0">
-                                      <div className="font-mono font-semibold truncate">{v.vendor_code}</div>
-                                      <div className="text-muted-foreground truncate">{v.vendor_name}</div>
-                                      {v.spc_name && <div className="text-[10px] text-blue-600 truncate">SPC: {v.spc_name}</div>}
-                                    </div>
+                              });
+                              const selectedCount = vendorFilter === null ? vendorList.length : vendorFilter.size;
+                              return (
+                                <>
+                                  <div className="flex gap-1 px-2 py-1 border-b items-center">
+                                    <button className="text-[10px] text-primary hover:underline" onClick={e => { e.stopPropagation(); setVendorFilter(null); }}>Select All</button>
+                                    <span className="text-muted-foreground text-[10px]">·</span>
+                                    <button className="text-[10px] text-muted-foreground hover:underline" onClick={e => { e.stopPropagation(); setVendorFilter(new Set()); }}>Clear</button>
+                                    <span className="text-[10px] text-primary ml-auto">{selectedCount} / {vendorList.length} selected</span>
                                   </div>
-                                );
-                              })}
+                                  <div className="max-h-60 overflow-y-auto">
+                                    {vendorFilterLoading ? (
+                                      <div className="flex items-center justify-center py-4"><Loader2 className="w-4 h-4 animate-spin text-muted-foreground" /></div>
+                                    ) : visibleVendors.map(v => {
+                                      // null = all selected, empty Set = none, Set = specific
+                                      const checked = vendorFilter === null || vendorFilter.has(v.vendor_code);
+                                      return (
+                                        <div key={v.vendor_code} className={cn("flex items-start gap-2 px-3 py-1.5 hover:bg-muted/40 cursor-pointer text-xs", checked && "bg-primary/5")}
+                                          onClick={e => { e.stopPropagation(); setVendorFilter(prev => {
+                                            const base = prev === null ? new Set(vendorList.map(x => x.vendor_code)) : new Set(prev);
+                                            base.has(v.vendor_code) ? base.delete(v.vendor_code) : base.add(v.vendor_code);
+                                            return base.size === vendorList.length ? null : base;
+                                          }); }}>
+                                          <Checkbox checked={checked} className="mt-0.5 shrink-0" onCheckedChange={() => {}} />
+                                          <div className="min-w-0">
+                                            <div className="font-mono font-semibold truncate">{v.vendor_code}</div>
+                                            <div className="text-muted-foreground truncate">{v.vendor_name}</div>
+                                            {v.spc_name && <div className="text-[10px] text-blue-600 truncate">SPC: {v.spc_name}</div>}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </>
+                              );
+                            })()}
                             </div>
                           </PopoverContent>
                         </Popover>
