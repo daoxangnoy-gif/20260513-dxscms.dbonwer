@@ -32,6 +32,7 @@ interface ImportRow { code: string; qty: number; }
 interface SkipRow {
   barcode: string; product_name_la: string;
   qty: number; reason: string; store_name: string;
+  sku_code?: string; rank_sales?: string;
 }
 
 interface OfsImportLine {
@@ -322,7 +323,7 @@ export default function SAROrderFromStoreTab() {
 
     const resolvedSkus = [...new Set(Array.from(codeToSku.values()))];
     onStatus?.(`ดึงข้อมูลสินค้า ${resolvedSkus.length.toLocaleString()} SKU...`);
-    const dmSel = "sku_code,main_barcode,product_name_la,buying_status,item_type,product_owner";
+    const dmSel = "sku_code,main_barcode,product_name_la,buying_status,item_type,product_owner,rank_sales";
     const dmRows = await queryInChunks<any>("data_master", "sku_code", resolvedSkus, dmSel, q => q.eq("packing_size_qty", 1));
     const skuToDm = new Map<string, any>();
     dmRows.forEach((r: any) => { if (r.sku_code && !skuToDm.has(r.sku_code)) skuToDm.set(r.sku_code, r); });
@@ -346,13 +347,15 @@ export default function SAROrderFromStoreTab() {
     for (const r of rows) {
       const dm = dmMap[r.code];
       const pnLa = dm?.product_name_la ?? "";
-      if (!dm) { skips.push({ barcode: r.code, product_name_la: "", qty: r.qty, reason: "ไม่พบใน Data master", store_name: storeName }); continue; }
+      if (!dm) { skips.push({ barcode: r.code, product_name_la: "", qty: r.qty, reason: "ไม่พบใน Data master", store_name: storeName, sku_code: "", rank_sales: "" }); continue; }
       const bs = (dm.buying_status ?? "").trim();
-      if (bs === "Inactive" || bs === "Discontinue") { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: `Buying Status: ${bs}`, store_name: storeName }); continue; }
-      if ((dm.item_type ?? "").trim() === "Non basic") { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: "Item type: Non basic", store_name: storeName }); continue; }
-      if (!(dm.product_owner ?? "").toLowerCase().includes("lanexang green property")) { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: `Product owner: ${dm.product_owner || "-"}`, store_name: storeName }); continue; }
-      if (!rangeSet.has(dm.sku_code)) { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: `ไม่อยู่ใน Range store (${storeName})`, store_name: storeName }); continue; }
-      if (dupSkus.has(dm.sku_code)) { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: `SKU ซ้ำ (${dm.sku_code})`, store_name: storeName }); continue; }
+      const skuCode = dm.sku_code ?? "";
+      const rankSales = dm.rank_sales ?? "";
+      if (bs === "Inactive" || bs === "Discontinue") { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: `Buying Status: ${bs}`, store_name: storeName, sku_code: skuCode, rank_sales: rankSales }); continue; }
+      if ((dm.item_type ?? "").trim() === "Non basic") { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: "Item type: Non basic", store_name: storeName, sku_code: skuCode, rank_sales: rankSales }); continue; }
+      if (!(dm.product_owner ?? "").toLowerCase().includes("lanexang green property")) { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: `Product owner: ${dm.product_owner || "-"}`, store_name: storeName, sku_code: skuCode, rank_sales: rankSales }); continue; }
+      if (!rangeSet.has(dm.sku_code)) { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: `ไม่อยู่ใน Range store (${storeName})`, store_name: storeName, sku_code: skuCode, rank_sales: rankSales }); continue; }
+      if (dupSkus.has(dm.sku_code)) { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: `SKU ซ้ำ (${dm.sku_code})`, store_name: storeName, sku_code: skuCode, rank_sales: rankSales }); continue; }
       valid.push({ sku_code: dm.sku_code, main_barcode: dm.main_barcode ?? null, product_name_la: pnLa, qty: r.qty });
     }
 
@@ -445,12 +448,19 @@ export default function SAROrderFromStoreTab() {
     }
   };
 
+  const skipToRow = (r: SkipRow) => ({
+    "SKU Code": r.sku_code || "",
+    "Barcode Import": r.barcode,
+    "Product Name LA": r.product_name_la,
+    "Rank Sales": r.rank_sales || "",
+    "Qty": r.qty,
+    "Reason": r.reason,
+    "Store Name": r.store_name,
+  });
+
   const downloadSkipList = () => {
     if (!pendingSkips.length) return;
-    const ws = XLSX.utils.json_to_sheet(pendingSkips.map(r => ({
-      "Barcode Import": r.barcode, "Product Name LA": r.product_name_la,
-      "Qty": r.qty, "Reason": r.reason, "Store Name": r.store_name,
-    })));
+    const ws = XLSX.utils.json_to_sheet(pendingSkips.map(skipToRow));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Skip List");
     XLSX.writeFile(wb, `OFS_Skip_${Date.now()}.xlsx`);
@@ -459,10 +469,7 @@ export default function SAROrderFromStoreTab() {
   const downloadSkipListFromDoc = (d: OfsImportDoc) => {
     const skips = (d.skip_data || []) as SkipRow[];
     if (!skips.length) { toast({ title: "ไม่มี Skip List", description: "Doc นี้ไม่มีรายการที่ถูก Skip หรือข้อมูลเก่าก่อนอัปเดตระบบ", variant: "destructive" }); return; }
-    const ws = XLSX.utils.json_to_sheet(skips.map(r => ({
-      "Barcode Import": r.barcode, "Product Name LA": r.product_name_la,
-      "Qty": r.qty, "Reason": r.reason, "Store Name": r.store_name,
-    })));
+    const ws = XLSX.utils.json_to_sheet(skips.map(skipToRow));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Skip List");
     XLSX.writeFile(wb, `OFS_Skip_${d.doc_name}.xlsx`);
