@@ -278,6 +278,11 @@ export default function SAROrderFromStoreTab() {
   const [summedRows, setSummedRows] = useState<ProcessedRow[] | null>(null);
   const [sumLoading, setSumLoading] = useState(false);
   const [listExportCount, setListExportCount] = useState<{ dc: number; d2s: number }>({ dc: 0, d2s: 0 });
+  const [vendorFilterOpen, setVendorFilterOpen] = useState(false);
+  const [vendorList, setVendorList] = useState<{ vendor_code: string; vendor_name: string; spc_name: string }[]>([]);
+  const [vendorFilterLoading, setVendorFilterLoading] = useState(false);
+  const [vendorFilter, setVendorFilter] = useState<Set<string> | null>(null);
+  const [vendorFilterSearch, setVendorFilterSearch] = useState("");
   const [perROChunk, setPerROChunk] = useState(50);
   const [perPOChunk, setPerPOChunk] = useState(50);
 
@@ -1069,9 +1074,10 @@ export default function SAROrderFromStoreTab() {
     try {
       const perChunk = Math.max(1, perPOChunk);
       const enriched = await enrichRowsForExport(target);
+      const filtered = vendorFilter && vendorFilter.size > 0 ? enriched.filter(r => vendorFilter.has(r.vendor_code || "")) : enriched;
       // vendor_code → sku_code → { qty, row }
       const byVendor = new Map<string, Map<string, { qty: number; row: ProcessedRow }>>();
-      for (const r of enriched) {
+      for (const r of filtered) {
         const vc = r.vendor_code || "(no vendor)";
         if (!byVendor.has(vc)) byVendor.set(vc, new Map());
         const skuMap = byVendor.get(vc)!;
@@ -1106,9 +1112,10 @@ export default function SAROrderFromStoreTab() {
     try {
       const perChunk = Math.max(1, perPOChunk);
       const enriched = await enrichRowsForExport(target);
+      const filtered = vendorFilter && vendorFilter.size > 0 ? enriched.filter(r => vendorFilter.has(r.vendor_code || "")) : enriched;
       // vendor_code → store → rows
       const byVendor = new Map<string, Map<string, ProcessedRow[]>>();
-      for (const r of enriched) {
+      for (const r of filtered) {
         const vc = r.vendor_code || "(no vendor)";
         const s = r.store_name || "(no store)";
         if (!byVendor.has(vc)) byVendor.set(vc, new Map());
@@ -1138,6 +1145,38 @@ export default function SAROrderFromStoreTab() {
     } catch (e: any) { toast({ title: "Export ไม่สำเร็จ", description: e.message, variant: "destructive" }); }
   };
 
+  const loadVendorListForFilter = async () => {
+    const poIds = Array.from(selectedResultIds).filter(id => resultDocs.find(d => d.id === id)?.doc_type === "PO");
+    if (!poIds.length) return;
+    setVendorFilterLoading(true);
+    try {
+      const chunks: string[][] = [];
+      for (let i = 0; i < poIds.length; i += 500) chunks.push(poIds.slice(i, i + 500));
+      const fetched = await Promise.all(chunks.map(ch => (supabase as any).from("ofs_result_docs").select("data").in("id", ch).then(({ data }: any) => data || [])));
+      const allRows: any[] = fetched.flat().flatMap((d: any) => d.data || []);
+      // get unique SKUs then fetch vendor_code
+      const allSkus = [...new Set(allRows.map((r: any) => r.sku_code).filter(Boolean))];
+      const dmRows = await queryInChunks<any>("data_master", "sku_code", allSkus, "sku_code,vendor_code,vendor_display_name");
+      const skuToVc = new Map<string, string>();
+      const skuToVn = new Map<string, string>();
+      for (const r of dmRows) { if (r.sku_code && r.vendor_code && !skuToVc.has(r.sku_code)) { skuToVc.set(r.sku_code, r.vendor_code); skuToVn.set(r.sku_code, r.vendor_display_name || ""); } }
+      // merge with existing vendor_code on row
+      const vcSet = new Map<string, string>(); // vendor_code → vendor_name
+      for (const r of allRows) {
+        const vc = r.vendor_code || skuToVc.get(r.sku_code) || "";
+        const vn = r.vendor_name || skuToVn.get(r.sku_code) || "";
+        if (vc && !vcSet.has(vc)) vcSet.set(vc, vn);
+      }
+      const vCodes = [...vcSet.keys()];
+      const vmRows = await queryInChunks<any>("vendor_master", "vendor_code", vCodes, "vendor_code,spc_name");
+      const spcMap = new Map<string, string>();
+      for (const r of vmRows) { if (r.vendor_code) spcMap.set(r.vendor_code, r.spc_name || ""); }
+      const list = vCodes.map(vc => ({ vendor_code: vc, vendor_name: vcSet.get(vc) || "", spc_name: spcMap.get(vc) || "" }))
+        .sort((a, b) => a.vendor_code.localeCompare(b.vendor_code));
+      setVendorList(list);
+    } finally { setVendorFilterLoading(false); }
+  };
+
   const handleSumDocQty = async () => {
     const poIds = Array.from(selectedResultIds).filter(id => resultDocs.find(d => d.id === id)?.doc_type === "PO");
     if (!poIds.length) return;
@@ -1146,7 +1185,12 @@ export default function SAROrderFromStoreTab() {
       const chunks: string[][] = [];
       for (let i = 0; i < poIds.length; i += 500) chunks.push(poIds.slice(i, i + 500));
       const fetched = await Promise.all(chunks.map(ch => (supabase as any).from("ofs_result_docs").select("data").in("id", ch).then(({ data }: any) => data || [])));
-      const allRows: ProcessedRow[] = fetched.flat().flatMap((d: any) => d.data || []);
+      let allRows: ProcessedRow[] = fetched.flat().flatMap((d: any) => d.data || []);
+      // apply vendor filter if set
+      if (vendorFilter && vendorFilter.size > 0) {
+        const enriched = await enrichRowsForExport(allRows);
+        allRows = enriched.filter(r => vendorFilter.has(r.vendor_code || ""));
+      }
       // Group by sku_code, sum qty
       const skuMap = new Map<string, { qty: number; row: ProcessedRow }>();
       for (const r of allRows) {
@@ -1759,8 +1803,61 @@ export default function SAROrderFromStoreTab() {
                     const selPoIds = Array.from(selectedResultIds).filter(id => resultDocs.find(d => d.id === id)?.doc_type === "PO");
                     if (selPoIds.length < 1) return null;
                     return (
-                      <div className="flex items-center gap-1.5 ml-1 pl-2 border-l">
+                      <div className="flex items-center gap-1.5 ml-1 pl-2 border-l flex-wrap">
                         <span className="text-[10px] text-muted-foreground">PO {selPoIds.length} docs:</span>
+                        {/* Vendor Filter Dropdown */}
+                        <Popover open={vendorFilterOpen} onOpenChange={open => { setVendorFilterOpen(open); if (open && !vendorList.length) loadVendorListForFilter(); }}>
+                          <PopoverTrigger asChild>
+                            <Button size="sm" variant="outline" className={cn("h-7 text-xs", vendorFilter && vendorFilter.size > 0 && "border-primary text-primary bg-primary/5")}>
+                              <ChevronDown className="w-3.5 h-3.5 mr-1" />
+                              {vendorFilter && vendorFilter.size > 0 ? `Vendor ${vendorFilter.size}` : "All Vendor"}
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-80 p-0" align="start">
+                            <div className="p-2 border-b flex items-center gap-1">
+                              <Search className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                              <input
+                                className="flex-1 text-xs bg-transparent outline-none placeholder:text-muted-foreground"
+                                placeholder="ค้นหา vendor code / name / SPC..."
+                                value={vendorFilterSearch}
+                                onChange={e => setVendorFilterSearch(e.target.value)}
+                                autoFocus
+                              />
+                            </div>
+                            <div className="flex gap-1 px-2 py-1 border-b">
+                              <button className="text-[10px] text-primary hover:underline" onClick={() => setVendorFilter(new Set(vendorList.map(v => v.vendor_code)))}>Select All</button>
+                              <span className="text-muted-foreground text-[10px]">·</span>
+                              <button className="text-[10px] text-muted-foreground hover:underline" onClick={() => setVendorFilter(null)}>Clear</button>
+                              {vendorFilter && <span className="text-[10px] text-primary ml-auto">{vendorFilter.size} selected</span>}
+                            </div>
+                            <div className="max-h-60 overflow-y-auto">
+                              {vendorFilterLoading ? (
+                                <div className="flex items-center justify-center py-4"><Loader2 className="w-4 h-4 animate-spin text-muted-foreground" /></div>
+                              ) : vendorList.filter(v => {
+                                if (!vendorFilterSearch.trim()) return true;
+                                const q = vendorFilterSearch.toLowerCase();
+                                return v.vendor_code.toLowerCase().includes(q) || v.vendor_name.toLowerCase().includes(q) || v.spc_name.toLowerCase().includes(q);
+                              }).map(v => {
+                                const checked = !vendorFilter || vendorFilter.has(v.vendor_code);
+                                return (
+                                  <div key={v.vendor_code} className={cn("flex items-start gap-2 px-3 py-1.5 hover:bg-muted/40 cursor-pointer text-xs", checked && "bg-primary/5")}
+                                    onClick={() => setVendorFilter(prev => {
+                                      const next = new Set(prev ?? vendorList.map(x => x.vendor_code));
+                                      next.has(v.vendor_code) ? next.delete(v.vendor_code) : next.add(v.vendor_code);
+                                      return next.size === vendorList.length ? null : next;
+                                    })}>
+                                    <Checkbox checked={checked} className="mt-0.5 shrink-0" />
+                                    <div className="min-w-0">
+                                      <div className="font-mono font-semibold truncate">{v.vendor_code}</div>
+                                      <div className="text-muted-foreground truncate">{v.vendor_name}</div>
+                                      {v.spc_name && <div className="text-[10px] text-blue-600 truncate">SPC: {v.spc_name}</div>}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </PopoverContent>
+                        </Popover>
                         <div className="flex items-center gap-1">
                           <span className="text-[10px] text-muted-foreground">ตัด</span>
                           <input type="number" min={1} value={perPOChunk} onChange={e => setPerPOChunk(Math.max(1, Number(e.target.value) || 1))}
@@ -1822,9 +1919,9 @@ export default function SAROrderFromStoreTab() {
                           ? <tr><td colSpan={7} className="text-center py-8 text-muted-foreground">ยังไม่มี Result Doc</td></tr>
                           : resultDocs.map(d => (
                             <tr key={d.id} className={cn("border-t hover:bg-muted/40 cursor-pointer", selectedResultIds.has(d.id) && "bg-primary/5")}
-                              onClick={() => { setSelectedResultIds(s => { const n = new Set(s); n.has(d.id) ? n.delete(d.id) : n.add(d.id); return n; }); setSummedRows(null); setListExportCount({ dc: 0, d2s: 0 }); }}
+                              onClick={() => { setSelectedResultIds(s => { const n = new Set(s); n.has(d.id) ? n.delete(d.id) : n.add(d.id); return n; }); setSummedRows(null); setListExportCount({ dc: 0, d2s: 0 }); setVendorFilter(null); setVendorList([]); }}
                             >
-                              <td className="px-2 py-1 text-center" onClick={e => e.stopPropagation()}><Checkbox checked={selectedResultIds.has(d.id)} onCheckedChange={() => { setSelectedResultIds(s => { const n = new Set(s); n.has(d.id) ? n.delete(d.id) : n.add(d.id); return n; }); setSummedRows(null); setListExportCount({ dc: 0, d2s: 0 }); }} /></td>
+                              <td className="px-2 py-1 text-center" onClick={e => e.stopPropagation()}><Checkbox checked={selectedResultIds.has(d.id)} onCheckedChange={() => { setSelectedResultIds(s => { const n = new Set(s); n.has(d.id) ? n.delete(d.id) : n.add(d.id); return n; }); setSummedRows(null); setListExportCount({ dc: 0, d2s: 0 }); setVendorFilter(null); setVendorList([]); }} /></td>
                               <td className="px-2 py-1 font-mono">{d.doc_name}</td>
                               <td className="px-2 py-1"><Badge className={cn("text-[10px] px-1.5 border", d.doc_type === "RO" ? "bg-emerald-100 text-emerald-700 border-emerald-300" : "bg-blue-100 text-blue-700 border-blue-300")}>{d.doc_type}</Badge></td>
                               <td className="px-2 py-1">{d.store_name}</td>
