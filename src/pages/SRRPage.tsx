@@ -18,7 +18,7 @@ import {
   Loader2, Calculator, Download, ChevronLeft, ChevronRight, Database, Search, X,
   FileSpreadsheet, Pencil, Check, CheckSquare, Columns, XCircle, Save, Eye,
   ChevronDown, ChevronUp as ChevronUpIcon, RefreshCw, Filter, Play, Trash2,
-  FolderOpen, CalendarDays, BarChart3, Info,
+  FolderOpen, CalendarDays, BarChart3, Info, CheckCircle2, Clock,
 } from "lucide-react";
 import { SRRReportTab } from "@/components/SRRReportTab";
 import { SRRReport2Tab } from "@/components/SRRReport2Tab";
@@ -203,6 +203,9 @@ function SRRDCItemPage() {
   const [calcStartedAt, setCalcStartedAt] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<string>(srrStateRef.current?.activeTab || "read-cal");
   const [docsDialogOpen, setDocsDialogOpen] = useState(false);
+  const [finalDocsDialogOpen, setFinalDocsDialogOpen] = useState(false);
+  const [finalDocs, setFinalDocs] = useState<any[]>([]);
+  const [finalDocsLoading, setFinalDocsLoading] = useState(false);
   const cancelCalcRef = useRef(false);
   const [dataReady, setDataReady] = useState(false);
   const [dataLoadingMsg, setDataLoadingMsg] = useState("");
@@ -554,6 +557,21 @@ function SRRDCItemPage() {
       };
     };
   });
+
+  // Load Doc Final from DB
+  const loadFinalDocs = async () => {
+    setFinalDocsLoading(true);
+    try {
+      const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 60);
+      const { data, error } = await (supabase as any)
+        .from("srr_final_documents")
+        .select("id, date_key, spc_name, vendor_code, vendor_display, item_count, suggest_count, edited_columns, source, saved_by, saved_at")
+        .gte("saved_at", cutoff.toISOString())
+        .order("saved_at", { ascending: false });
+      if (!error && data) setFinalDocs(data);
+    } catch { /* ignore */ } finally { setFinalDocsLoading(false); }
+  };
+  useEffect(() => { loadFinalDocs(); }, []);
 
   // Ensure orig_* fields are populated for rows loaded from snapshots saved before these fields existed
   const patchSnapshotRows = (rows: SRRRow[]): SRRRow[] =>
@@ -2389,6 +2407,36 @@ function SRRDCItemPage() {
         }
       }
 
+      // Save Doc Final — full VendorDocument data per vendor (for audit/review trail)
+      if (user?.id) {
+        try {
+          const dateKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+          const src = activeDateMode || "filter";
+          const vendorCodesWithSuggest = [...new Set(showData.filter(r => r.final_suggest_qty > 0).map(r => r.vendor_code))];
+          const finalInserts = vendorCodesWithSuggest.map(vc => {
+            const vDoc = vendorDocs.find(d => d.vendor_code === vc);
+            const vRows = showData.filter(r => r.vendor_code === vc);
+            return {
+              date_key: dateKey,
+              spc_name: vDoc?.spc_name || vRows[0]?.spc_name || "",
+              vendor_code: vc,
+              vendor_display: vDoc?.vendor_display || vRows[0]?.vendor_display || vc,
+              data: vRows as any,
+              item_count: vRows.length,
+              suggest_count: vRows.filter(r => r.final_suggest_qty > 0).length,
+              edited_columns: vDoc?.edited_columns || [],
+              source: src,
+              saved_by: user.id,
+            };
+          });
+          if (finalInserts.length > 0) {
+            const { error: finErr } = await (supabase as any).from("srr_final_documents").insert(finalInserts);
+            if (finErr) console.error("srr_final_documents insert error:", finErr);
+            else loadFinalDocs();
+          }
+        } catch (finErr) { console.error("Failed to save Doc Final:", finErr); }
+      }
+
       toast({ title: "บันทึก PO สำเร็จ", description: `${newPOs.length} เอกสาร (แยกตาม vendor + po_group)` });
       setExportOpen(false);
     } catch (err: any) {
@@ -3048,7 +3096,17 @@ function SRRDCItemPage() {
           )}
 
           {/* DOC zone — pushed right */}
-          <div className="ml-auto flex items-center shrink-0 pl-1">
+          <div className="ml-auto flex items-center gap-1.5 shrink-0 pl-1">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setFinalDocsDialogOpen(true)}
+              className="h-6 text-[11px] px-2 gap-1 border-amber-400 text-amber-700 hover:bg-amber-50"
+              title="Doc Final — เอกสารที่ผ่านการ Review แล้ว (บันทึกเมื่อกด Save)"
+            >
+              <CheckCircle2 className="w-3 h-3" />
+              Doc Final {finalDocs.length > 0 ? `(${finalDocs.length})` : ""}
+            </Button>
             <Button
               size="sm"
               variant="default"
@@ -3786,6 +3844,93 @@ function SRRDCItemPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCalcErrorDialog(s => ({ ...s, open: false }))}>ปิด</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ===== Doc Final Dialog ===== */}
+      <Dialog open={finalDocsDialogOpen} onOpenChange={setFinalDocsDialogOpen}>
+        <DialogContent className="max-w-4xl max-h-[80vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-amber-500" />
+              Doc Final — เอกสารที่ผ่านการ Review แล้ว
+            </DialogTitle>
+            <DialogDescription className="text-xs">บันทึกอัตโนมัติทุกครั้งที่กด Save · เก็บ 60 วัน</DialogDescription>
+          </DialogHeader>
+
+          {finalDocsLoading ? (
+            <div className="flex items-center justify-center py-10 text-muted-foreground gap-2">
+              <Loader2 className="w-4 h-4 animate-spin" /> กำลังโหลด...
+            </div>
+          ) : finalDocs.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-10 text-muted-foreground gap-2">
+              <CheckCircle2 className="w-10 h-10 opacity-20" />
+              <p className="text-sm">ยังไม่มี Doc Final · กด Save เพื่อบันทึกครั้งแรก</p>
+            </div>
+          ) : (
+            <div className="overflow-auto flex-1">
+              <table className="w-full text-xs border-collapse">
+                <thead className="bg-muted/50 sticky top-0">
+                  <tr>
+                    <th className="text-left p-2 border-b font-medium">วันที่ Save</th>
+                    <th className="text-left p-2 border-b font-medium">Vendor</th>
+                    <th className="text-left p-2 border-b font-medium">SPC</th>
+                    <th className="text-right p-2 border-b font-medium">Items</th>
+                    <th className="text-right p-2 border-b font-medium">Suggest</th>
+                    <th className="text-left p-2 border-b font-medium">คอลัมน์ที่แก้ไข</th>
+                    <th className="text-left p-2 border-b font-medium">Source</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {finalDocs.map((d: any) => (
+                    <tr key={d.id} className="border-b hover:bg-muted/30 transition-colors">
+                      <td className="p-2 text-muted-foreground whitespace-nowrap">
+                        <div className="flex items-center gap-1">
+                          <Clock className="w-3 h-3 opacity-50" />
+                          {new Date(d.saved_at).toLocaleString("th-TH", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                        </div>
+                      </td>
+                      <td className="p-2 font-mono">
+                        <div className="font-semibold">{d.vendor_code}</div>
+                        <div className="text-muted-foreground truncate max-w-[180px]">{d.vendor_display}</div>
+                      </td>
+                      <td className="p-2">{d.spc_name || "—"}</td>
+                      <td className="p-2 text-right tabular-nums">{(d.item_count || 0).toLocaleString()}</td>
+                      <td className="p-2 text-right tabular-nums text-green-600 font-semibold">{(d.suggest_count || 0).toLocaleString()}</td>
+                      <td className="p-2 max-w-[200px]">
+                        {(d.edited_columns || []).length === 0 ? (
+                          <span className="text-muted-foreground">—</span>
+                        ) : (
+                          <div className="flex flex-wrap gap-1">
+                            {(d.edited_columns as string[]).slice(0, 4).map((c: string) => (
+                              <span key={c} className="bg-amber-100 text-amber-700 rounded px-1 py-0.5 text-[10px]">{c}</span>
+                            ))}
+                            {(d.edited_columns as string[]).length > 4 && (
+                              <span className="text-muted-foreground text-[10px]">+{(d.edited_columns as string[]).length - 4}</span>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                      <td className="p-2">
+                        <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                          d.source === "filter" ? "bg-blue-100 text-blue-700" :
+                          d.source === "vendor" ? "bg-purple-100 text-purple-700" :
+                          "bg-gray-100 text-gray-700"
+                        }`}>{d.source || "filter"}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <DialogFooter className="pt-2">
+            <Button variant="outline" size="sm" onClick={() => { loadFinalDocs(); }}>
+              <RefreshCw className="w-3.5 h-3.5 mr-1" /> Refresh
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setFinalDocsDialogOpen(false)}>ปิด</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
