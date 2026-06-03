@@ -2312,6 +2312,24 @@ export default function SRRSendDocsPage() {
                 <p className="text-xs text-muted-foreground mt-0.5">เลือก tab เพื่อดูสถานะแต่ละจุด — แท็บขวาสุดคือจุดปัจจุบัน (active)</p>
               </div>
               <div className="flex items-center gap-2">
+                {/* ปุ่มสแกนเพิ่ม: ใช้ได้เฉพาะตอนที่ต้นทางบันทึกแล้ว แต่ยังไม่มี arrived movement */}
+                {(() => {
+                  const hasArrived = movements.some(m => m.shipment_id === activeShipment.id && m.action === "arrived");
+                  const isFinalized = activeShipment.status === "finalized";
+                  const canAddMore = !hasArrived && !isFinalized;
+                  return (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className={canAddMore ? "border-blue-400 text-blue-600 hover:bg-blue-50" : ""}
+                      disabled={!canAddMore}
+                      title={!canAddMore ? "ปลายทางสแกนรับแล้ว ไม่สามารถเพิ่มได้" : "เพิ่มรายการสแกนเข้าเอกสารนี้"}
+                      onClick={() => openEdit(activeShipment)}
+                    >
+                      <ScanLine className="w-4 h-4 mr-1" />สแกนเพิ่ม
+                    </Button>
+                  );
+                })()}
                 <Button variant="outline" size="sm" onClick={() => setScanFullscreen(f => !f)}>
                   {scanFullscreen ? <><Minimize2 className="w-4 h-4 mr-1" />ย่อคืน</> : <><Maximize2 className="w-4 h-4 mr-1" />Expand</>}
                 </Button>
