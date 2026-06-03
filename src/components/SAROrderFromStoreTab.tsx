@@ -323,10 +323,15 @@ export default function SAROrderFromStoreTab() {
 
     const resolvedSkus = [...new Set(Array.from(codeToSku.values()))];
     onStatus?.(`ดึงข้อมูลสินค้า ${resolvedSkus.length.toLocaleString()} SKU...`);
-    const dmSel = "sku_code,main_barcode,product_name_la,buying_status,item_type,product_owner,rank_sales";
-    const dmRows = await queryInChunks<any>("data_master", "sku_code", resolvedSkus, dmSel, q => q.eq("packing_size_qty", 1));
+    const dmSel = "sku_code,main_barcode,product_name_la,buying_status,item_type,product_owner";
+    const [dmRows, rankRows] = await Promise.all([
+      queryInChunks<any>("data_master", "sku_code", resolvedSkus, dmSel, q => q.eq("packing_size_qty", 1)),
+      queryInChunks<any>("rank_sales", "item_id", resolvedSkus, "item_id,final_rank"),
+    ]);
     const skuToDm = new Map<string, any>();
     dmRows.forEach((r: any) => { if (r.sku_code && !skuToDm.has(r.sku_code)) skuToDm.set(r.sku_code, r); });
+    const skuToRank = new Map<string, string>();
+    rankRows.forEach((r: any) => { if (r.item_id && r.final_rank) skuToRank.set(r.item_id, r.final_rank); });
 
     const dmMap: Record<string, any> = {};
     for (const [code, sku] of codeToSku.entries()) { const dm = skuToDm.get(sku); if (dm) dmMap[code] = dm; }
@@ -350,7 +355,7 @@ export default function SAROrderFromStoreTab() {
       if (!dm) { skips.push({ barcode: r.code, product_name_la: "", qty: r.qty, reason: "ไม่พบใน Data master", store_name: storeName, sku_code: "", rank_sales: "" }); continue; }
       const bs = (dm.buying_status ?? "").trim();
       const skuCode = dm.sku_code ?? "";
-      const rankSales = dm.rank_sales ?? "";
+      const rankSales = skuToRank.get(skuCode) ?? "";
       if (bs === "Inactive" || bs === "Discontinue") { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: `Buying Status: ${bs}`, store_name: storeName, sku_code: skuCode, rank_sales: rankSales }); continue; }
       if ((dm.item_type ?? "").trim() === "Non basic") { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: "Item type: Non basic", store_name: storeName, sku_code: skuCode, rank_sales: rankSales }); continue; }
       if (!(dm.product_owner ?? "").toLowerCase().includes("lanexang green property")) { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: `Product owner: ${dm.product_owner || "-"}`, store_name: storeName, sku_code: skuCode, rank_sales: rankSales }); continue; }
