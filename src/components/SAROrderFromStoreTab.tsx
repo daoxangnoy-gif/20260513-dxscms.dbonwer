@@ -1028,15 +1028,50 @@ export default function SAROrderFromStoreTab() {
     return row;
   };
 
+  // helper: fill missing vendor_code/unit_barcode/unit_uom/ship_to for rows saved before these fields were added
+  const enrichRowsForExport = async (rows: ProcessedRow[]): Promise<ProcessedRow[]> => {
+    const missingVendor = rows.filter(r => !r.vendor_code);
+    const missingShipTo = rows.filter(r => !r.ship_to && r.store_name);
+    if (!missingVendor.length && !missingShipTo.length) return rows;
+
+    const skus = [...new Set(missingVendor.map(r => r.sku_code))];
+    const stores = [...new Set(missingShipTo.map(r => r.store_name).filter(Boolean))];
+
+    const [dmRows, stRows] = await Promise.all([
+      skus.length ? queryInChunks<any>("data_master", "sku_code", skus, "sku_code,vendor_code,vendor_display_name,main_barcode,unit_of_measure") : Promise.resolve([]),
+      stores.length ? (async () => {
+        const chunks: string[][] = [];
+        for (let i = 0; i < stores.length; i += 500) chunks.push(stores.slice(i, i + 500));
+        const res = await Promise.all(chunks.map(ch => (supabase.from("store_type" as any) as any).select("store_name,ship_to").in("store_name", ch).then(({ data }: any) => data || [])));
+        return res.flat();
+      })() : Promise.resolve([]),
+    ]);
+
+    const vcMap = new Map<string, any>();
+    for (const r of dmRows) { if (r.sku_code && r.vendor_code && !vcMap.has(r.sku_code)) vcMap.set(r.sku_code, r); }
+    const shipMap = new Map<string, string>();
+    for (const r of stRows as any[]) { if (r.store_name) shipMap.set(r.store_name, r.ship_to || ""); }
+
+    return rows.map(r => ({
+      ...r,
+      vendor_code: r.vendor_code || vcMap.get(r.sku_code)?.vendor_code || "",
+      vendor_name: r.vendor_name || vcMap.get(r.sku_code)?.vendor_display_name || "",
+      unit_barcode: r.unit_barcode || vcMap.get(r.sku_code)?.main_barcode || r.main_barcode || "",
+      unit_uom: r.unit_uom || vcMap.get(r.sku_code)?.unit_of_measure || r.unit_of_measure || "Unit",
+      ship_to: r.ship_to || shipMap.get(r.store_name) || "",
+    }));
+  };
+
   // PO DC — group by vendor_code only, split by perPOChunk → srr_dc_po template
   const exportPODC = async (rows: ProcessedRow[]) => {
     const target = rows.filter(r => (!r._doc_type || r._doc_type === "PO") && r.qty_import > 0);
     if (!target.length) { toast({ title: "ไม่มีรายการ PO", variant: "destructive" }); return; }
     try {
       const perChunk = Math.max(1, perPOChunk);
+      const enriched = await enrichRowsForExport(target);
       // vendor_code → sku_code → { qty, row }
       const byVendor = new Map<string, Map<string, { qty: number; row: ProcessedRow }>>();
-      for (const r of target) {
+      for (const r of enriched) {
         const vc = r.vendor_code || "(no vendor)";
         if (!byVendor.has(vc)) byVendor.set(vc, new Map());
         const skuMap = byVendor.get(vc)!;
@@ -1070,9 +1105,10 @@ export default function SAROrderFromStoreTab() {
     if (!target.length) { toast({ title: "ไม่มีรายการ PO", variant: "destructive" }); return; }
     try {
       const perChunk = Math.max(1, perPOChunk);
+      const enriched = await enrichRowsForExport(target);
       // vendor_code → store → rows
       const byVendor = new Map<string, Map<string, ProcessedRow[]>>();
-      for (const r of target) {
+      for (const r of enriched) {
         const vc = r.vendor_code || "(no vendor)";
         const s = r.store_name || "(no store)";
         if (!byVendor.has(vc)) byVendor.set(vc, new Map());
