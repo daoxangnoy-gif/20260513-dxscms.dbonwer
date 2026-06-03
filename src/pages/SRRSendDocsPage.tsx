@@ -54,7 +54,7 @@ function LocationCombobox({
       <PopoverContent className="p-0 w-72 z-[70000]" align="start">
         <Command>
           <CommandInput placeholder="ค้นหาจุด..." />
-          <CommandList>
+          <CommandList style={{ maxHeight: "240px", overflowY: "auto" }}>
             <CommandEmpty>ไม่พบจุด</CommandEmpty>
             <CommandGroup>
               {options.map((o) => (
