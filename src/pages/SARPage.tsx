@@ -225,24 +225,7 @@ export default function SARPage() {
   const loadRawDoc = useCallback(async () => {
     setRawDocLoading(true);
     try {
-      // ใช้ RPC แทนการดึง JSONB ทั้งก้อน — server filter + enrich ใน 1 round-trip
-      const { data, error } = await (supabase as any).rpc("get_sar_fetch_data", {
-        p_store_names: [],
-        p_sku_codes: [],
-      });
-      if (error) throw error;
-      const raw = (data?.rows || []) as DocRowRaw[];
-      setRawDoc(raw);
-    } catch (e: any) {
-      console.warn("load raw doc", e);
-    } finally {
-      setRawDocLoading(false);
-    }
-  }, []);
-  useEffect(() => { loadRawDoc(); }, [loadRawDoc]);
-
-  // ---- DEAD CODE BLOCK (replaced by RPC above) — kept for reference only ----
-  const _loadRawDocLegacy_UNUSED = async () => {
+      // loadRawDoc ใช้สำหรับ filter dropdown เท่านั้น → ดึง JSONB ตรงๆ ไม่ต้อง join
       const { data } = await supabase
         .from("minmax_cal_documents")
         .select("data")
@@ -250,6 +233,8 @@ export default function SARPage() {
         .limit(1).maybeSingle();
       if (!data?.data || !Array.isArray(data.data)) return;
       const raw = data.data as unknown as DocRowRaw[];
+
+      // enrich division/dept/class เฉพาะถ้า minmax doc ไม่มีข้อมูลเหล่านี้
       const needsEnrich = raw.some(r => !r.division || !r.department || !r.sub_department || !r.class || !r.item_type || !r.buying_status);
       if (needsEnrich) {
         const skus = Array.from(new Set(raw.map(r => r.sku_code).filter(Boolean)));
@@ -284,9 +269,21 @@ export default function SARPage() {
             off += PAGE;
           }
         }
-        void(dmMap); void(raw); // unused in legacy path
+        setRawDoc(raw.map(r => {
+          const m = dmMap.get(r.sku_code);
+          if (!m) return r;
+          return { ...r, division: r.division || m.division, department: r.department || m.department, sub_department: r.sub_department || m.sub_department, class: r.class || m.class, item_type: r.item_type || m.item_type, buying_status: r.buying_status || m.buying_status };
+        }));
+      } else {
+        setRawDoc(raw);
       }
-  }; // end _loadRawDocLegacy_UNUSED
+    } catch (e: any) {
+      console.warn("load raw doc", e);
+    } finally {
+      setRawDocLoading(false);
+    }
+  }, []);
+  useEffect(() => { loadRawDoc(); }, [loadRawDoc]);
 
   // Cross-filter aware option counts (each field's count ignores its own selection)
   // Optimized: O(N × activeFilters) using Set.has + pre-extracted row values
