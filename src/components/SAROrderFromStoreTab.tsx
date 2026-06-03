@@ -69,6 +69,7 @@ interface ProcessedRow extends SARRow {
   unit_barcode?: string;
   unit_uom?: string;
   ship_to?: string;
+  po_cost_unit?: number | null;
 }
 
 // --------------- Columns ---------------
@@ -649,25 +650,42 @@ export default function SAROrderFromStoreTab() {
       const stTypeMap = new Map<string, string>();
       for (const r of (calcData?.store_types || []) as any[]) stTypeMap.set(r.store_name, r.type_store || "");
 
-      // Fetch vendor info + unit barcode/UoM from data_master (packing_size_qty=1)
+      // Fetch unit barcode/UoM from data_master (packing_size_qty=1)
       setProgressPct(88); setProgressLabel("ดึงข้อมูล Vendor...");
-      const dmVendorRows = await queryInChunks<any>("data_master", "sku_code", allSkus, "sku_code,vendor_code,vendor_display_name,main_barcode,unit_of_measure", q => q.eq("packing_size_qty", 1));
-      const skuToVendorCode = new Map<string, string>();
-      const skuToVendorName = new Map<string, string>();
+      const dmUnitRows = await queryInChunks<any>("data_master", "sku_code", allSkus, "sku_code,main_barcode,unit_of_measure", q => q.eq("packing_size_qty", 1));
       const skuToUnitBarcode = new Map<string, string>();
       const skuToUnitUom = new Map<string, string>();
-      for (const r of dmVendorRows) {
+      for (const r of dmUnitRows) {
         if (r.sku_code) {
-          skuToVendorCode.set(r.sku_code, r.vendor_code || "");
-          skuToVendorName.set(r.sku_code, r.vendor_display_name || "");
           skuToUnitBarcode.set(r.sku_code, r.main_barcode || "");
           skuToUnitUom.set(r.sku_code, r.unit_of_measure || "");
         }
       }
+
+      // Fetch vendor_code WITHOUT packing_size_qty filter (take first non-empty per SKU)
+      const dmVendorRows = await queryInChunks<any>("data_master", "sku_code", allSkus, "sku_code,vendor_code,vendor_display_name");
+      const skuToVendorCode = new Map<string, string>();
+      const skuToVendorName = new Map<string, string>();
+      for (const r of dmVendorRows) {
+        if (r.sku_code && r.vendor_code && !skuToVendorCode.has(r.sku_code)) {
+          skuToVendorCode.set(r.sku_code, r.vendor_code);
+          skuToVendorName.set(r.sku_code, r.vendor_display_name || "");
+        }
+      }
+
       const allVendorCodes = [...new Set(Array.from(skuToVendorCode.values()).filter(Boolean))];
       const vendorMasterRows = allVendorCodes.length ? await queryInChunks<any>("vendor_master", "vendor_code", allVendorCodes, "vendor_code,currency") : [];
       const vendorCurrencyMap = new Map<string, string>();
       for (const r of vendorMasterRows) { if (r.vendor_code) vendorCurrencyMap.set(r.vendor_code, r.currency || ""); }
+
+      // Fetch po_cost_unit from po_cost table (key = item_id = sku_code)
+      const poCostRows = await queryInChunks<any>("po_cost", "item_id", allSkus, "item_id,po_cost_unit");
+      const skuToPoCostUnit = new Map<string, number | null>();
+      for (const r of poCostRows) {
+        if (r.item_id && !skuToPoCostUnit.has(r.item_id)) {
+          skuToPoCostUnit.set(r.item_id, r.po_cost_unit != null ? Number(r.po_cost_unit) : null);
+        }
+      }
 
       // Fetch ship_to from store_type for D2S Picking Type
       const shipToRows = allStores.length
@@ -714,7 +732,8 @@ export default function SAROrderFromStoreTab() {
         const uBarcode = skuToUnitBarcode.get(sku) || dm?.main_barcode || mb || "";
         const uUom = skuToUnitUom.get(sku) || dm?.unit_of_measure || "";
         const shipTo = storeShipToMap.get(storeName) || "";
-        rows.push({ ...sarRow, qty_import: qty, division_group: dm?.division_group ?? "", stock_store_orig: sarRow.stock_store, vendor_code: vCode, vendor_name: vName, currency: vCurr, unit_barcode: uBarcode, unit_uom: uUom, ship_to: shipTo });
+        const poCostUnit = skuToPoCostUnit.has(sku) ? skuToPoCostUnit.get(sku)! : null;
+        rows.push({ ...sarRow, qty_import: qty, division_group: dm?.division_group ?? "", stock_store_orig: sarRow.stock_store, vendor_code: vCode, vendor_name: vName, currency: vCurr, unit_barcode: uBarcode, unit_uom: uUom, ship_to: shipTo, po_cost_unit: poCostUnit });
       }
 
       setHqRows(rows); setHqFetched(true); setProgressPct(100);
@@ -733,7 +752,7 @@ export default function SAROrderFromStoreTab() {
     setCalcElapsed(0);
     const start = Date.now();
     await new Promise(r => setTimeout(r, 10)); // ให้ UI update ก่อน
-    const next = hqRows.map(r => ({ ...computeRow(r), qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to }));
+    const next = hqRows.map(r => ({ ...computeRow(r), qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to, po_cost_unit: r.po_cost_unit }));
     const elapsed = Math.round((Date.now() - start) / 100) / 10;
     setCalcElapsed(elapsed);
     setHqRows(next); setHqCalculated(true);
@@ -745,7 +764,7 @@ export default function SAROrderFromStoreTab() {
     setHqRows(ofsCalCache.hqRows.map(r => {
       if (r.sku_code !== skuCode || r.store_name !== storeName) return r;
       const updated = computeRow({ ...r, suggest_order_edit: val });
-      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to };
+      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to, po_cost_unit: r.po_cost_unit };
     }));
   };
 
@@ -753,14 +772,14 @@ export default function SAROrderFromStoreTab() {
     setHqRows(ofsCalCache.hqRows.map(r => {
       if (r.sku_code !== skuCode || r.store_name !== storeName) return r;
       const updated = computeRow({ ...r, stock_store: val });
-      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to };
+      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to, po_cost_unit: r.po_cost_unit };
     }));
   };
 
   const clearAllStockStore = () => {
     setHqRows(ofsCalCache.hqRows.map(r => {
       const updated = computeRow({ ...r, stock_store: 0 });
-      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to };
+      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to, po_cost_unit: r.po_cost_unit };
     }));
   };
 
@@ -768,7 +787,7 @@ export default function SAROrderFromStoreTab() {
     setHqRows(ofsCalCache.hqRows.map(r => {
       const orig = r.stock_store_orig ?? 0;
       const updated = computeRow({ ...r, stock_store: orig });
-      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to };
+      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to, po_cost_unit: r.po_cost_unit };
     }));
   };
 
@@ -984,8 +1003,10 @@ export default function SAROrderFromStoreTab() {
     const uom = r.unit_uom || r.unit_of_measure || "Unit";
     const pickingId = isD2S ? (r.ship_to || "") : "2540";
     const interTransfer = isD2S ? "true" : "";
+    const unitPrice = r.po_cost_unit != null ? r.po_cost_unit : (r.cost || 0);
     const row: Record<string, any> = {
       "partner_id": isFirst ? (r.vendor_code || "") : "",
+      "Vendor Name": r.vendor_name || "",
       "Picking Type / Database ID": isFirst ? pickingId : "",
       "Inter Transfer": isFirst ? interTransfer : "",
       "PO Group": isFirst ? groupKey : "",
@@ -995,7 +1016,7 @@ export default function SAROrderFromStoreTab() {
       "Products to Purchase/UoM": uom,
       "Products to Purchase/Exclude In Package": "True",
       "Products to Purchase/Quantity": qty,
-      "Products to Purchase/Unit Price": r.cost || 0,
+      "Products to Purchase/Unit Price": unitPrice,
       "assigned_to": isFirst ? "SPC manager01" : "",
       "description": isFirst ? "" : "",
     };
