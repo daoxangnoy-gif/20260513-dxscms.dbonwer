@@ -1028,34 +1028,32 @@ export default function SAROrderFromStoreTab() {
     return row;
   };
 
-  // PO DC — group by vendor_code → sub_department, sum qty by SKU per vendor+sub_dept → srr_dc_po template
+  // PO DC — group by vendor_code only, split by perPOChunk → srr_dc_po template
   const exportPODC = async (rows: ProcessedRow[]) => {
     const target = rows.filter(r => (!r._doc_type || r._doc_type === "PO") && r.qty_import > 0);
     if (!target.length) { toast({ title: "ไม่มีรายการ PO", variant: "destructive" }); return; }
     try {
       const perChunk = Math.max(1, perPOChunk);
-      // vendor_code → sub_department → sku_code → { qty, row }
-      const byVendor = new Map<string, Map<string, Map<string, { qty: number; row: ProcessedRow }>>>();
+      // vendor_code → sku_code → { qty, row }
+      const byVendor = new Map<string, Map<string, { qty: number; row: ProcessedRow }>>();
       for (const r of target) {
         const vc = r.vendor_code || "(no vendor)";
-        const sd = r.sub_department || "(no sub-dept)";
         if (!byVendor.has(vc)) byVendor.set(vc, new Map());
-        const bySD = byVendor.get(vc)!;
-        if (!bySD.has(sd)) bySD.set(sd, new Map());
-        const skuMap = bySD.get(sd)!;
+        const skuMap = byVendor.get(vc)!;
         const rowQty = r.final_order_unit > 0 ? r.final_order_unit : r.qty_import;
         if (!skuMap.has(r.sku_code)) skuMap.set(r.sku_code, { qty: rowQty, row: r });
         else skuMap.get(r.sku_code)!.qty += rowQty;
       }
       const out: any[] = [];
-      for (const [, bySD] of byVendor) {
-        for (const [sd, skuMap] of bySD) {
-          const items = Array.from(skuMap.values());
-          for (let start = 0; start < items.length; start += perChunk) {
-            items.slice(start, start + perChunk).forEach(({ qty, row }, idx) => {
-              out.push(toSrrPoRow(row, qty, idx === 0, sd, false));
-            });
-          }
+      for (const [vc, skuMap] of byVendor) {
+        const items = Array.from(skuMap.values());
+        for (let start = 0; start < items.length; start += perChunk) {
+          const chunkNum = Math.floor(start / perChunk) + 1;
+          const totalChunks = Math.ceil(items.length / perChunk);
+          const groupKey = totalChunks > 1 ? `${vc}-${chunkNum}` : vc;
+          items.slice(start, start + perChunk).forEach(({ qty, row }, idx) => {
+            out.push(toSrrPoRow(row, qty, idx === 0, groupKey, false));
+          });
         }
       }
       const mapped = await remapRowsByTemplate("srr_dc_po", out);
@@ -1066,35 +1064,33 @@ export default function SAROrderFromStoreTab() {
     } catch (e: any) { toast({ title: "Export ไม่สำเร็จ", description: e.message, variant: "destructive" }); }
   };
 
-  // PO D2S — group by vendor_code → store → sub_department → srr_d2s_po template
+  // PO D2S — group by vendor_code → store, split by perPOChunk → srr_d2s_po template
   const exportPOD2S = async (rows: ProcessedRow[]) => {
     const target = rows.filter(r => (!r._doc_type || r._doc_type === "PO") && r.qty_import > 0);
     if (!target.length) { toast({ title: "ไม่มีรายการ PO", variant: "destructive" }); return; }
     try {
       const perChunk = Math.max(1, perPOChunk);
-      // vendor_code → store → sub_department → rows
-      const byVendor = new Map<string, Map<string, Map<string, ProcessedRow[]>>>();
+      // vendor_code → store → rows
+      const byVendor = new Map<string, Map<string, ProcessedRow[]>>();
       for (const r of target) {
         const vc = r.vendor_code || "(no vendor)";
         const s = r.store_name || "(no store)";
-        const sd = r.sub_department || "(no sub-dept)";
         if (!byVendor.has(vc)) byVendor.set(vc, new Map());
         const byStore = byVendor.get(vc)!;
-        if (!byStore.has(s)) byStore.set(s, new Map());
-        const bySD = byStore.get(s)!;
-        if (!bySD.has(sd)) bySD.set(sd, []);
-        bySD.get(sd)!.push(r);
+        if (!byStore.has(s)) byStore.set(s, []);
+        byStore.get(s)!.push(r);
       }
       const out: any[] = [];
-      for (const [, byStore] of byVendor) {
-        for (const [, bySD] of byStore) {
-          for (const [sd, items] of bySD) {
-            for (let start = 0; start < items.length; start += perChunk) {
-              items.slice(start, start + perChunk).forEach((r, idx) => {
-                const qty = r.final_order_unit > 0 ? r.final_order_unit : r.qty_import;
-                out.push(toSrrPoRow(r, qty, idx === 0, sd, true));
-              });
-            }
+      for (const [vc, byStore] of byVendor) {
+        for (const [, items] of byStore) {
+          const totalChunks = Math.ceil(items.length / perChunk);
+          for (let start = 0; start < items.length; start += perChunk) {
+            const chunkNum = Math.floor(start / perChunk) + 1;
+            const groupKey = totalChunks > 1 ? `${vc}-${chunkNum}` : vc;
+            items.slice(start, start + perChunk).forEach((r, idx) => {
+              const qty = r.final_order_unit > 0 ? r.final_order_unit : r.qty_import;
+              out.push(toSrrPoRow(r, qty, idx === 0, groupKey, true));
+            });
           }
         }
       }
@@ -1729,6 +1725,12 @@ export default function SAROrderFromStoreTab() {
                     return (
                       <div className="flex items-center gap-1.5 ml-1 pl-2 border-l">
                         <span className="text-[10px] text-muted-foreground">PO {selPoIds.length} docs:</span>
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] text-muted-foreground">ตัด</span>
+                          <input type="number" min={1} value={perPOChunk} onChange={e => setPerPOChunk(Math.max(1, Number(e.target.value) || 1))}
+                            className="w-14 h-6 px-1 text-xs text-right border rounded bg-background" />
+                          <span className="text-[10px] text-muted-foreground">รายการ/group</span>
+                        </div>
                         <Button size="sm" variant="outline" className="h-7 text-xs text-blue-700 border-blue-300 hover:bg-blue-50"
                           onClick={async () => {
                             // load all selected PO rows then exportPOD2S
@@ -1817,6 +1819,12 @@ export default function SAROrderFromStoreTab() {
                     )}
                     {(viewDocType === "PO" || viewDocType === "MIXED") && (
                       <>
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] text-muted-foreground">ตัด</span>
+                          <input type="number" min={1} value={perPOChunk} onChange={e => setPerPOChunk(Math.max(1, Number(e.target.value) || 1))}
+                            className="w-14 h-6 px-1 text-xs text-right border rounded bg-background" title="จำนวนรายการต่อ 1 group" />
+                          <span className="text-[10px] text-muted-foreground">รายการ/group</span>
+                        </div>
                         <Button size="sm" variant="outline" className="h-7 text-xs text-blue-700" onClick={async () => { await exportPODC(viewItems); setViewExportCount(c => ({ ...c, dc: c.dc + 1 })); }}>
                           <FileSpreadsheet className="w-3.5 h-3.5 mr-1" />PO DC
                           {viewExportCount.dc > 0 && <span className="ml-1 text-[9px] bg-blue-200 text-blue-800 px-1 rounded">{viewExportCount.dc}x</span>}
