@@ -1106,6 +1106,7 @@ export default function SRRSendDocsPage() {
   };
 
   // create / edit dialog state
+  const SCAN_DRAFT_KEY = "send_docs_scan_draft";
   const [createOpen, setCreateOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [depositorName, setDepositorName] = useState("");
@@ -1113,6 +1114,48 @@ export default function SRRSendDocsPage() {
   const [originLocation, setOriginLocation] = useState("");
   const [destinationLocation, setDestinationLocation] = useState("");
   const [originCodes, setOriginCodes] = useState<string[]>([]);
+
+  // Draft: auto-save to localStorage whenever scan dialog state changes (only for new scans, not edits)
+  useEffect(() => {
+    if (!createOpen || editingId) return; // ไม่ draft ตอนแก้ไขของเดิม
+    const draft = { depositorName, receiverName, originLocation, destinationLocation, originCodes };
+    if (originCodes.length > 0 || depositorName || receiverName || originLocation || destinationLocation) {
+      localStorage.setItem(SCAN_DRAFT_KEY, JSON.stringify(draft));
+    }
+  }, [depositorName, receiverName, originLocation, destinationLocation, originCodes, createOpen, editingId]);
+
+  // Load draft on mount
+  const [hasDraft, setHasDraft] = useState(false);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(SCAN_DRAFT_KEY);
+      if (raw) {
+        const d = JSON.parse(raw);
+        if ((d.originCodes?.length ?? 0) > 0 || d.depositorName || d.originLocation) setHasDraft(true);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  const restoreDraft = () => {
+    try {
+      const raw = localStorage.getItem(SCAN_DRAFT_KEY);
+      if (!raw) return;
+      const d = JSON.parse(raw);
+      setEditingId(null);
+      setDepositorName(d.depositorName || "");
+      setReceiverName(d.receiverName || "");
+      setOriginLocation(d.originLocation || "");
+      setDestinationLocation(d.destinationLocation || "");
+      setOriginCodes(d.originCodes || []);
+      setCreateOpen(true);
+      setHasDraft(false);
+    } catch { /* ignore */ }
+  };
+
+  const clearDraft = () => {
+    localStorage.removeItem(SCAN_DRAFT_KEY);
+    setHasDraft(false);
+  };
 
   // destination dialog state
   const [destOpen, setDestOpen] = useState(false);
@@ -1337,7 +1380,7 @@ export default function SRRSendDocsPage() {
       }
       toast({ title: "บันทึกเรียบร้อย", description: `${originCodes.length} เอกสาร` });
     }
-    setCreateOpen(false); resetCreate(); load();
+    clearDraft(); setCreateOpen(false); resetCreate(); load();
   };
 
   const openDestination = async (s: Shipment) => {
@@ -1673,6 +1716,17 @@ export default function SRRSendDocsPage() {
             <Button onClick={() => { resetCreate(); setCreateOpen(true); }}>
               <ScanLine className="w-4 h-4 mr-2" />Scan เอกสาร
             </Button>
+            {hasDraft && (() => {
+              try {
+                const d = JSON.parse(localStorage.getItem(SCAN_DRAFT_KEY) || "{}");
+                const count = d.originCodes?.length ?? 0;
+                return (
+                  <Button variant="outline" className="border-orange-400 text-orange-600 hover:bg-orange-50" onClick={restoreDraft}>
+                    <ScanLine className="w-4 h-4 mr-2" />สแกนต่อ ({count} รายการค้างอยู่)
+                  </Button>
+                );
+              } catch { return null; }
+            })()}
             <Button variant="outline" onClick={() => setLocOpen(true)}>
               <MapPin className="w-4 h-4 mr-2" />จุดรับส่งเอกสาร
             </Button>
@@ -2027,7 +2081,7 @@ export default function SRRSendDocsPage() {
             return null;
           }} />
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCreateOpen(false)}>ยกเลิก</Button>
+            <Button variant="outline" onClick={() => { clearDraft(); resetCreate(); setCreateOpen(false); }}>ยกเลิก</Button>
             <Button onClick={handleSaveDoc}><Save className="w-4 h-4 mr-1" />{editingId ? "บันทึกการแก้ไข" : `Save เป็น Doc (${originCodes.length})`}</Button>
           </DialogFooter>
         </DialogContent>
