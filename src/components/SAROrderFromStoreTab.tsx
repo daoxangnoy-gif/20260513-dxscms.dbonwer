@@ -111,14 +111,14 @@ const NUM_COLS = new Set(["unit_pick", "pack_qty", "box_qty", "cost", "price2km"
 // --------------- Helpers ---------------
 async function queryInChunks<T>(table: string, field: string, values: string[], sel: string, extra?: (q: any) => any): Promise<T[]> {
   if (!values.length) return [];
-  const results: T[] = [];
-  for (let i = 0; i < values.length; i += 200) {
-    let q = (supabase.from(table as any) as any).select(sel).in(field, values.slice(i, i + 200));
+  const chunks: string[][] = [];
+  for (let i = 0; i < values.length; i += 500) chunks.push(values.slice(i, i + 500));
+  const batches = await Promise.all(chunks.map(chunk => {
+    let q = (supabase.from(table as any) as any).select(sel).in(field, chunk);
     if (extra) q = extra(q);
-    const { data } = await q;
-    if (data) results.push(...(data as T[]));
-  }
-  return results;
+    return q.then(({ data }: any) => (data || []) as T[]);
+  }));
+  return batches.flat();
 }
 
 function fmtNum(v: any): string {
