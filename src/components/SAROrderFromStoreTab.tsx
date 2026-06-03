@@ -1028,28 +1028,34 @@ export default function SAROrderFromStoreTab() {
     return row;
   };
 
-  // PO DC — group by sub_department, sum qty by SKU, split by perPOChunk → srr_dc_po template
+  // PO DC — group by vendor_code → sub_department, sum qty by SKU per vendor+sub_dept → srr_dc_po template
   const exportPODC = async (rows: ProcessedRow[]) => {
     const target = rows.filter(r => (!r._doc_type || r._doc_type === "PO") && r.qty_import > 0);
     if (!target.length) { toast({ title: "ไม่มีรายการ PO", variant: "destructive" }); return; }
     try {
       const perChunk = Math.max(1, perPOChunk);
-      const bySubDept = new Map<string, Map<string, { qty: number; row: ProcessedRow }>>();
+      // vendor_code → sub_department → sku_code → { qty, row }
+      const byVendor = new Map<string, Map<string, Map<string, { qty: number; row: ProcessedRow }>>>();
       for (const r of target) {
+        const vc = r.vendor_code || "(no vendor)";
         const sd = r.sub_department || "(no sub-dept)";
-        if (!bySubDept.has(sd)) bySubDept.set(sd, new Map());
-        const skuMap = bySubDept.get(sd)!;
+        if (!byVendor.has(vc)) byVendor.set(vc, new Map());
+        const bySD = byVendor.get(vc)!;
+        if (!bySD.has(sd)) bySD.set(sd, new Map());
+        const skuMap = bySD.get(sd)!;
         const rowQty = r.final_order_unit > 0 ? r.final_order_unit : r.qty_import;
         if (!skuMap.has(r.sku_code)) skuMap.set(r.sku_code, { qty: rowQty, row: r });
         else skuMap.get(r.sku_code)!.qty += rowQty;
       }
       const out: any[] = [];
-      for (const [sd, skuMap] of bySubDept) {
-        const items = Array.from(skuMap.values());
-        for (let start = 0; start < items.length; start += perChunk) {
-          items.slice(start, start + perChunk).forEach(({ qty, row }, idx) => {
-            out.push(toSrrPoRow(row, qty, idx === 0, sd, false));
-          });
+      for (const [, bySD] of byVendor) {
+        for (const [sd, skuMap] of bySD) {
+          const items = Array.from(skuMap.values());
+          for (let start = 0; start < items.length; start += perChunk) {
+            items.slice(start, start + perChunk).forEach(({ qty, row }, idx) => {
+              out.push(toSrrPoRow(row, qty, idx === 0, sd, false));
+            });
+          }
         }
       }
       const mapped = await remapRowsByTemplate("srr_dc_po", out);
@@ -1060,29 +1066,35 @@ export default function SAROrderFromStoreTab() {
     } catch (e: any) { toast({ title: "Export ไม่สำเร็จ", description: e.message, variant: "destructive" }); }
   };
 
-  // PO D2S — group by store → sub_department, per store, split by perPOChunk → srr_d2s_po template
+  // PO D2S — group by vendor_code → store → sub_department → srr_d2s_po template
   const exportPOD2S = async (rows: ProcessedRow[]) => {
     const target = rows.filter(r => (!r._doc_type || r._doc_type === "PO") && r.qty_import > 0);
     if (!target.length) { toast({ title: "ไม่มีรายการ PO", variant: "destructive" }); return; }
     try {
       const perChunk = Math.max(1, perPOChunk);
-      const byStore = new Map<string, Map<string, ProcessedRow[]>>();
+      // vendor_code → store → sub_department → rows
+      const byVendor = new Map<string, Map<string, Map<string, ProcessedRow[]>>>();
       for (const r of target) {
+        const vc = r.vendor_code || "(no vendor)";
         const s = r.store_name || "(no store)";
         const sd = r.sub_department || "(no sub-dept)";
+        if (!byVendor.has(vc)) byVendor.set(vc, new Map());
+        const byStore = byVendor.get(vc)!;
         if (!byStore.has(s)) byStore.set(s, new Map());
-        const sdMap = byStore.get(s)!;
-        if (!sdMap.has(sd)) sdMap.set(sd, []);
-        sdMap.get(sd)!.push(r);
+        const bySD = byStore.get(s)!;
+        if (!bySD.has(sd)) bySD.set(sd, []);
+        bySD.get(sd)!.push(r);
       }
       const out: any[] = [];
-      for (const [store, sdMap] of byStore) {
-        for (const [sd, items] of sdMap) {
-          for (let start = 0; start < items.length; start += perChunk) {
-            items.slice(start, start + perChunk).forEach((r, idx) => {
-              const qty = r.final_order_unit > 0 ? r.final_order_unit : r.qty_import;
-              out.push(toSrrPoRow(r, qty, idx === 0, sd, true));
-            });
+      for (const [, byStore] of byVendor) {
+        for (const [, bySD] of byStore) {
+          for (const [sd, items] of bySD) {
+            for (let start = 0; start < items.length; start += perChunk) {
+              items.slice(start, start + perChunk).forEach((r, idx) => {
+                const qty = r.final_order_unit > 0 ? r.final_order_unit : r.qty_import;
+                out.push(toSrrPoRow(r, qty, idx === 0, sd, true));
+              });
+            }
           }
         }
       }
