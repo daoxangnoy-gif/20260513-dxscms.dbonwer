@@ -176,6 +176,23 @@ export default function MinmaxCalPage() {
   const [phaseLabel, setPhaseLabel] = useState<string>("");
   const [phasePct, setPhasePct] = useState<number>(0);
   const [phaseTimes, setPhaseTimes] = useState<{ fetch?: number; merge?: number; rowCount?: number; docCount?: number; readBatches?: number }>({});
+
+  // Elapsed timer (อัปเดตทุก 100ms ขณะ loading หรือ viewLoading)
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const elapsedStartRef = useRef<number | null>(null);
+  const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startElapsedTimer = () => {
+    elapsedStartRef.current = performance.now();
+    setElapsedMs(0);
+    if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
+    elapsedTimerRef.current = setInterval(() => {
+      setElapsedMs(elapsedStartRef.current ? Math.round(performance.now() - elapsedStartRef.current) : 0);
+    }, 100);
+  };
+  const stopElapsedTimer = () => {
+    if (elapsedTimerRef.current) { clearInterval(elapsedTimerRef.current); elapsedTimerRef.current = null; }
+  };
+  useEffect(() => () => stopElapsedTimer(), []);
   const [nFactor, setNFactor] = useState<number>(3);
   const [nInput, setNInput] = useState<string>("3");
   const [page, setPage] = useState(0);
@@ -337,6 +354,7 @@ export default function MinmaxCalPage() {
     setPhaseTimes({});
     setPhaseLabel("กำลังคำนวณ Min/Max ใน DB...");
     setPhasePct(5);
+    startElapsedTimer();
     try {
       const t0 = performance.now();
       const params: any = { p_n_factor: n };
@@ -455,6 +473,7 @@ export default function MinmaxCalPage() {
       setPhasePct(0);
       setPhaseLabel("");
       setLoading(false);
+      stopElapsedTimer();
     }
   }, [toast, storeFilter, typeStoreFilter, itemTypeFilter, buyingFilter, divisionFilter, departmentFilter, subDeptFilter, classFilter, skuFilter, barcodeFilter]);
 
@@ -541,6 +560,7 @@ export default function MinmaxCalPage() {
     setPhaseTimes({});
     setPhaseLabel("กำลังดึงข้อมูล Min/Max จาก View...");
     setPhasePct(20);
+    startElapsedTimer();
     try {
       const t0 = performance.now();
       const params: Record<string, any> = {};
@@ -618,6 +638,7 @@ export default function MinmaxCalPage() {
       setViewLoading(false);
       setPhasePct(0);
       setPhaseLabel("");
+      stopElapsedTimer();
     }
   }, [storeFilter, typeStoreFilter, itemTypeFilter, buyingFilter, divisionFilter, departmentFilter, subDeptFilter, classFilter, skuFilter, barcodeFilter, toast]);
 
@@ -1257,7 +1278,12 @@ export default function MinmaxCalPage() {
             <>
               <div className="flex items-center justify-between text-xs">
                 <span className="font-medium">{phaseLabel || (viewLoading ? "กำลังโหลด View..." : "พร้อม")}</span>
-                <span className="text-muted-foreground tabular-nums">{phasePct}%</span>
+                <div className="flex items-center gap-3 text-muted-foreground tabular-nums">
+                  <span className="font-mono font-semibold text-primary text-sm">
+                    {(elapsedMs / 1000).toFixed(1)} s
+                  </span>
+                  <span>{phasePct}%</span>
+                </div>
               </div>
               <Progress value={phasePct} className="h-1.5" />
             </>
