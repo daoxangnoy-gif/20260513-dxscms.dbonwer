@@ -29,11 +29,34 @@ export function normalizeDateKey(dk: string): string {
   return `${dk.substring(0, 4)}-${dk.substring(4, 6)}-${dk.substring(6, 8)}`;
 }
 
-// Get available snapshot dates (distinct date_key)
+// Cutoff helper — keep only last N calendar days
+function getCutoffDateKey(days = 3): string {
+  const d = new Date();
+  d.setDate(d.getDate() - (days - 1)); // today counts as day 1
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// Auto-prune snapshots older than 3 calendar days (fire-and-forget, silent on error)
+export async function pruneOldSnapshots(
+  tables: ("srr_snapshots" | "srr_d2s_snapshots")[] = ["srr_snapshots", "srr_d2s_snapshots"]
+): Promise<void> {
+  const cutoff = getCutoffDateKey(3);
+  await Promise.all(
+    tables.map((t) =>
+      (supabase as any).from(t).delete().lt("date_key", cutoff).then(({ error }: any) => {
+        if (error) console.warn(`[pruneOldSnapshots] ${t}:`, error.message);
+      })
+    )
+  );
+}
+
+// Get available snapshot dates (distinct date_key) — last 3 days only
 export async function getSnapshotDates(): Promise<string[]> {
+  const cutoff = getCutoffDateKey(3);
   const { data, error } = await supabase
     .from("srr_snapshots")
     .select("date_key")
+    .gte("date_key", cutoff)
     .order("date_key", { ascending: false });
   if (error) throw error;
   const dates = [...new Set((data || []).map((r: any) => r.date_key))];
@@ -112,8 +135,7 @@ async function fetchAllPaged<T = any>(
 // List distinct snapshot batches (grouped by created_at to the MINUTE) within last 30 days
 // Each Read & Cal run = 1 batch (all rows share the same created_at minute).
 export async function getSnapshotBatches(table: "srr_snapshots" | "srr_d2s_snapshots" = "srr_snapshots"): Promise<SnapshotBatch[]> {
-  const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 30);
-  const cutoffStr = cutoff.toISOString().split("T")[0];
+  const cutoffStr = getCutoffDateKey(3);
   // Page through ALL matching rows (Supabase default caps at 1000 per query)
   const data = await fetchAllPaged<any>(
     () => (supabase as any)

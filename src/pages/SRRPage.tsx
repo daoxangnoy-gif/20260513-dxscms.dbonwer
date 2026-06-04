@@ -34,7 +34,7 @@ import {
   deleteSnapshotDocuments, getSnapshotDates, loadSnapshots,
   cleanupOldSnapshots, savePODocument, loadSavedPODocs, deletePODocument,
   buildSnapshotBatchesFromDocs, getSnapshotBatches, loadSnapshotBatch,
-  mergeSnapshotBatches, type SnapshotBatch,
+  mergeSnapshotBatches, pruneOldSnapshots, type SnapshotBatch,
 } from "@/lib/snapshotService";
 import { SnapshotBatchPicker } from "@/components/SnapshotBatchPicker";
 import { SrrImportFilter, type SrrImportMode, type ImportedItem, type ImportedVendor } from "@/components/SrrImportFilter";
@@ -611,6 +611,9 @@ function SRRDCItemPage() {
           }));
           setVendorDocs(docs);
         }
+        // Auto-prune snapshots older than 3 days first, then load
+        setSnapshotLoadLabel("กำลังลบ Snapshots เก่า...");
+        await pruneOldSnapshots(["srr_snapshots"]).catch(() => {});
         // Load available dates and batches
         setSnapshotLoadLabel("กำลังโหลด Dates & Batches...");
         const [dates, batches] = await Promise.all([getSnapshotDates(), getSnapshotBatches("srr_snapshots")]);
@@ -1603,6 +1606,8 @@ function SRRDCItemPage() {
               }
             }
           );
+          // Auto-prune old snapshots after Cal, then refresh
+          pruneOldSnapshots(["srr_snapshots"]).catch(() => {});
           // Refresh available dates and batches, then dedupe (DB batch may share same minute label as optimistic)
           setLoadingDetail(`บันทึกสำเร็จ · refresh batch list...`);
           const [dates, batches] = await Promise.all([getSnapshotDates(), getSnapshotBatches("srr_snapshots")]);
