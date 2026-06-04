@@ -314,51 +314,6 @@ export default function MinmaxCalPage() {
 
   // ====== Load latest MinMax View rows (from minmax table, joined with data_master) ======
   // ใช้ตอน Calc เพื่อ merge ค่าเดิมของ SKU/Store ที่ไม่อยู่ใน filter ปัจจุบัน
-  const loadLatestDocRows = useCallback(async (): Promise<CalcRow[]> => {
-    const all: any[] = [];
-    let offset = 0;
-    while (true) {
-      const { data, error } = await (supabase as any)
-        .rpc("get_minmax_view_for_calc")
-        .range(offset, offset + RPC_BATCH - 1);
-      if (error) throw error;
-      const batch = data || [];
-      all.push(...batch);
-      if (batch.length < RPC_BATCH) break;
-      offset += RPC_BATCH;
-    }
-    return all.map((r: any) => ({
-      sku_code: r.sku_code,
-      product_name_la: r.product_name_la,
-      product_name_en: r.product_name_en,
-      main_barcode: r.main_barcode,
-      unit_of_measure: r.unit_of_measure,
-      store_name: r.store_name,
-      type_store: r.type_store || "",
-      size_store: "",
-      unit_pick: Number(r.unit_pick) || 1,
-      unit_pick_edit: null,
-      avg_sale: 0,
-      rank_sale: "D",
-      rank_factor: 7,
-      min_cal: Number(r.min_val) || 0,
-      max_cal: Number(r.max_val) || 0,
-      is_default_min: false,
-      item_type: r.item_type || "",
-      buying_status: r.buying_status || "",
-      division: r.division || "",
-      department: r.department || "",
-      sub_department: r.sub_department || "",
-      class: r.class || "",
-      pack_qty: r.pack_qty ?? null,
-      box_qty: r.box_qty ?? null,
-      min_edit: null,
-      max_edit: null,
-      from_doc: true,
-      doc_min_final: r.min_val ?? null,
-      doc_max_final: r.max_val ?? null,
-    }));
-  }, []);
 
   const hasFilters = storeFilter.length > 0 || typeStoreFilter.length > 0
     || itemTypeFilter.length > 0 || buyingFilter.length > 0
@@ -594,23 +549,32 @@ export default function MinmaxCalPage() {
       if (classFilter.length) params.p_classes = classFilter;
       if (skuFilter.length) params.p_skus = skuFilter;
       if (barcodeFilter.length) params.p_barcodes = barcodeFilter;
-      // ดึงแบบ pagination — PostgREST จำกัด db-max-rows = 1000 ต่อ request
-      // ต้อง loop หลายรอบจนกว่าจะหมด (เหมือน loadLatestDocRows)
       setPhasePct(30);
-      const all: any[] = [];
-      let offset = 0;
-      const BATCH = RPC_BATCH; // 5000 (ภายในยังถูก clamp โดย postgrest แต่ขอเผื่อ)
-      while (true) {
+      const CONCURRENCY_VIEW = 4;
+      const fetchViewRange = async (from: number): Promise<any[]> => {
         const { data: viewData, error: viewErr } = await (supabase as any)
           .rpc("get_minmax_view_by_stores", params)
-          .range(offset, offset + BATCH - 1);
+          .range(from, from + RPC_BATCH - 1);
         if (viewErr) throw viewErr;
-        const batch = viewData || [];
-        all.push(...batch);
-        // อัปเดต progress (โดยประมาณ)
-        setPhaseLabel(`กำลังดึงข้อมูล Min/Max จาก View... (${all.length.toLocaleString()} แถว)`);
-        if (batch.length < BATCH) break;
-        offset += BATCH;
+        return viewData || [];
+      };
+      const all: any[] = [];
+      const first = await fetchViewRange(0);
+      all.push(...first);
+      setPhaseLabel(`กำลังดึงข้อมูล Min/Max จาก View... (${all.length.toLocaleString()} แถว)`);
+      if (first.length >= RPC_BATCH) {
+        let nextFrom = RPC_BATCH;
+        let done = false;
+        while (!done) {
+          const offsets = Array.from({ length: CONCURRENCY_VIEW }, (_, i) => nextFrom + i * RPC_BATCH);
+          const results = await Promise.all(offsets.map(off => fetchViewRange(off)));
+          for (const chunk of results) {
+            all.push(...chunk);
+            setPhaseLabel(`กำลังดึงข้อมูล Min/Max จาก View... (${all.length.toLocaleString()} แถว)`);
+            if (chunk.length < RPC_BATCH) { done = true; break; }
+          }
+          nextFrom += CONCURRENCY_VIEW * RPC_BATCH;
+        }
       }
       setPhasePct(80);
       const ms = Math.round(performance.now() - t0);
@@ -970,19 +934,33 @@ export default function MinmaxCalPage() {
     try {
       const t0 = performance.now();
       const all: any[] = [];
-      let offset = 0;
       const params = buildReportParams();
-      while (true) {
+      const CONCURRENCY_EXP = 4;
+      const fetchExpRange = async (from: number): Promise<any[]> => {
         if (cancelExportRef.current) throw new Error("__CANCELLED__");
         const { data, error } = await (supabase as any)
           .rpc("get_minmax_view_by_stores", params)
-          .range(offset, offset + RPC_BATCH - 1);
+          .range(from, from + RPC_BATCH - 1);
         if (error) throw error;
-        const batch = data || [];
-        all.push(...batch);
-        setExportProgress({ loaded: all.length, total: all.length, label: `ดึงข้อมูล... ${all.length.toLocaleString()} แถว` });
-        if (batch.length < RPC_BATCH) break;
-        offset += RPC_BATCH;
+        return data || [];
+      };
+      const firstExp = await fetchExpRange(0);
+      all.push(...firstExp);
+      setExportProgress({ loaded: all.length, total: all.length, label: `ดึงข้อมูล... ${all.length.toLocaleString()} แถว` });
+      if (firstExp.length >= RPC_BATCH) {
+        let nextFrom = RPC_BATCH;
+        let done = false;
+        while (!done) {
+          if (cancelExportRef.current) throw new Error("__CANCELLED__");
+          const offsets = Array.from({ length: CONCURRENCY_EXP }, (_, i) => nextFrom + i * RPC_BATCH);
+          const results = await Promise.all(offsets.map(off => fetchExpRange(off)));
+          for (const chunk of results) {
+            all.push(...chunk);
+            setExportProgress({ loaded: all.length, total: all.length, label: `ดึงข้อมูล... ${all.length.toLocaleString()} แถว` });
+            if (chunk.length < RPC_BATCH) { done = true; break; }
+          }
+          nextFrom += CONCURRENCY_EXP * RPC_BATCH;
+        }
       }
       // RPC already applied all filters; cancel check
       if (cancelExportRef.current) throw new Error("__CANCELLED__");
