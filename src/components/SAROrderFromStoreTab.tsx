@@ -2062,7 +2062,14 @@ export default function SAROrderFromStoreTab() {
                                   {filteredRows.length === 0
                                     ? <tr><td colSpan={9} className="text-center py-4 text-muted-foreground">ไม่พบผลลัพธ์</td></tr>
                                     : filteredRows.map(({ store, po, ro, rowIdx }) => (
-                                    <tr key={`${store}-${rowIdx}`} className="border-t hover:bg-muted/20">
+                                    <tr key={`${store}-${rowIdx}`} className={cn(
+                                      "border-t",
+                                      rowIdx === 0
+                                        ? allStoreRows.findIndex(r => r.store === store) % 2 === 0
+                                          ? "bg-blue-50/40 hover:bg-blue-100/60"
+                                          : "bg-emerald-50/40 hover:bg-emerald-100/60"
+                                        : "bg-amber-50/30 hover:bg-amber-100/50"
+                                    )}>
                                       <td className="px-3 py-1.5 font-medium truncate max-w-[160px]" title={store}>
                                         {rowIdx === 0 ? store.replace(/^\d+-/, "") : <span className="text-muted-foreground/40">↳</span>}
                                       </td>
