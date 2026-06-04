@@ -18,7 +18,7 @@ import {
   Loader2, Calculator, Download, ChevronLeft, ChevronRight, Database, Search, X,
   FileSpreadsheet, Pencil, Check, CheckSquare, Columns, XCircle, Save, Eye,
   ChevronDown, ChevronUp as ChevronUpIcon, RefreshCw, Filter, Play, Trash2,
-  FolderOpen, CalendarDays, BarChart3, Info, CheckCircle2, Clock,
+  FolderOpen, CalendarDays, BarChart3, Info, CheckCircle2, Clock, RotateCcw,
 } from "lucide-react";
 import { SRRReportTab } from "@/components/SRRReportTab";
 import { SRRReport2Tab } from "@/components/SRRReport2Tab";
@@ -2719,63 +2719,63 @@ function SRRDCItemPage() {
                           <span className="text-xs flex-1">{formatCellValue(val, col.key)}</span>
                           {(val as number) !== 0 ? (
                             <button
-                              className="text-[9px] text-destructive hover:underline px-0.5"
+                              className="inline-flex items-center justify-center w-4 h-4 rounded border border-red-400 text-red-500 hover:bg-red-50"
                               onClick={e => { e.stopPropagation(); updateAvgSales(row.id, col.key as any, "0"); }}
                               title="Clear เป็น 0"
-                            >Clear</button>
+                            ><X className="w-2.5 h-2.5" /></button>
                           ) : (
                             <button
-                              className="text-[9px] text-primary hover:underline px-0.5"
+                              className="inline-flex items-center justify-center w-4 h-4 rounded border border-sky-400 text-sky-500 hover:bg-sky-50"
                               onClick={e => { e.stopPropagation(); updateAvgSales(row.id, col.key as any, String(row[`orig_${col.key}` as keyof SRRRow])); }}
                               title="คืนค่าเดิม"
-                            >Restore</button>
+                            ><RotateCcw className="w-2.5 h-2.5" /></button>
                           )}
                         </div>
                       ) : showEditColumns && col.key === "stock_dc" ? (
                         <div className="flex items-center gap-0.5">
                           <span className="text-xs flex-1">{formatCellValue(val, col.key)}</span>
                           {(val as number) !== 0 ? (
-                            <button className="text-[9px] text-destructive hover:underline px-0.5" onClick={e => { e.stopPropagation(); updateNumericField(row.id, "stock_dc", "0"); }} title="Clear Stock DC เป็น 0">Clear</button>
+                            <button className="inline-flex items-center justify-center w-4 h-4 rounded border border-red-400 text-red-500 hover:bg-red-50" onClick={e => { e.stopPropagation(); updateNumericField(row.id, "stock_dc", "0"); }} title="Clear Stock DC เป็น 0"><X className="w-2.5 h-2.5" /></button>
                           ) : (
-                            <button className="text-[9px] text-primary hover:underline px-0.5" onClick={e => { e.stopPropagation(); updateNumericField(row.id, "stock_dc", String(row.orig_stock_dc)); }} title="คืนค่า Stock DC เดิม">Restore</button>
+                            <button className="inline-flex items-center justify-center w-4 h-4 rounded border border-sky-400 text-sky-500 hover:bg-sky-50" onClick={e => { e.stopPropagation(); updateNumericField(row.id, "stock_dc", String(row.orig_stock_dc)); }} title="คืนค่า Stock DC เดิม"><RotateCcw className="w-2.5 h-2.5" /></button>
                           )}
                         </div>
                       ) : showEditColumns && col.key === "tt_stock_store" ? (
                         <div className="flex items-center gap-0.5">
                           <span className="text-xs flex-1">{formatCellValue(val, col.key)}</span>
-                          <button className="text-[9px] text-destructive hover:underline px-0.5" onClick={e => { e.stopPropagation(); updateStoreStocks(row.id, { stock_jmart: 0, stock_kokkok: 0, stock_kokkok_fc: 0, stock_udee: 0 }); }} title="Clear Store Stocks ทั้งหมดเป็น 0">Clear</button>
-                          <button className="text-[9px] text-primary hover:underline px-0.5" onClick={e => { e.stopPropagation(); updateStoreStocks(row.id, { stock_jmart: row.orig_stock_jmart, stock_kokkok: row.orig_stock_kokkok, stock_kokkok_fc: row.orig_stock_kokkok_fc, stock_udee: row.orig_stock_udee }); }} title="คืนค่า Store Stocks เดิมทั้งหมด">Restore</button>
+                          <button className="inline-flex items-center justify-center w-4 h-4 rounded border border-red-400 text-red-500 hover:bg-red-50" onClick={e => { e.stopPropagation(); updateStoreStocks(row.id, { stock_jmart: 0, stock_kokkok: 0, stock_kokkok_fc: 0, stock_udee: 0 }); }} title="Clear Store Stocks ทั้งหมดเป็น 0"><X className="w-2.5 h-2.5" /></button>
+                          <button className="inline-flex items-center justify-center w-4 h-4 rounded border border-sky-400 text-sky-500 hover:bg-sky-50" onClick={e => { e.stopPropagation(); updateStoreStocks(row.id, { stock_jmart: row.orig_stock_jmart, stock_kokkok: row.orig_stock_kokkok, stock_kokkok_fc: row.orig_stock_kokkok_fc, stock_udee: row.orig_stock_udee }); }} title="คืนค่า Store Stocks เดิมทั้งหมด"><RotateCcw className="w-2.5 h-2.5" /></button>
                         </div>
                       ) : showEditColumns && (col.key === "min_jmart" || col.key === "min_kokkok" || col.key === "min_kokkok_fc" || col.key === "min_udee" || col.key === "stock_jmart" || col.key === "stock_kokkok" || col.key === "stock_kokkok_fc" || col.key === "stock_udee") ? (
                         <div className="flex items-center gap-0.5">
                           <span className="text-xs flex-1">{formatCellValue(val, col.key)}</span>
                           {(val as number) !== 0 ? (
                             <button
-                              className="text-[9px] text-destructive hover:underline px-0.5"
+                              className="inline-flex items-center justify-center w-4 h-4 rounded border border-red-400 text-red-500 hover:bg-red-50"
                               onClick={e => { e.stopPropagation(); updateNumericField(row.id, col.key as any, "0"); }}
                               title="Clear เป็น 0"
-                            >Clear</button>
+                            ><X className="w-2.5 h-2.5" /></button>
                           ) : (
                             <button
-                              className="text-[9px] text-primary hover:underline px-0.5"
+                              className="inline-flex items-center justify-center w-4 h-4 rounded border border-sky-400 text-sky-500 hover:bg-sky-50"
                               onClick={e => { e.stopPropagation(); updateNumericField(row.id, col.key as any, String(row[`orig_${col.key}` as keyof SRRRow])); }}
                               title="คืนค่าเดิม"
-                            >Restore</button>
+                            ><RotateCcw className="w-2.5 h-2.5" /></button>
                           )}
                         </div>
                       ) : showEditColumns && col.key === "on_order" ? (
                         <div className="flex items-center gap-0.5">
                           <span className="text-xs flex-1">{formatCellValue(val, col.key)}</span>
                           <button
-                            className="text-[9px] text-destructive hover:underline px-0.5"
+                            className="inline-flex items-center justify-center w-4 h-4 rounded border border-red-400 text-red-500 hover:bg-red-50"
                             onClick={e => { e.stopPropagation(); updateOnOrder(row.id, 0); }}
                             title="ล้างค่า ON ORDER"
-                          >Clear</button>
+                          ><X className="w-2.5 h-2.5" /></button>
                           <button
-                            className="text-[9px] text-primary hover:underline px-0.5"
+                            className="inline-flex items-center justify-center w-4 h-4 rounded border border-sky-400 text-sky-500 hover:bg-sky-50"
                             onClick={e => { e.stopPropagation(); updateOnOrder(row.id, row.orig_on_order); }}
                             title="คืนค่า ON ORDER เดิม"
-                          >Restore</button>
+                          ><RotateCcw className="w-2.5 h-2.5" /></button>
                         </div>
                       ) : isEditable && col.key === "order_uom_edit" ? (
                         <Input

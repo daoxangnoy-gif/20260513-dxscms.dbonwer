@@ -44,6 +44,7 @@ import {
   Upload,
   BarChart3,
   Info,
+  RotateCcw,
 } from "lucide-react";
 import { SRRReportTab } from "@/components/SRRReportTab";
 import { SRRReport2Tab } from "@/components/SRRReport2Tab";
@@ -3340,15 +3341,15 @@ export default function SRRDirectPage() {
                         <div className="flex items-center gap-0.5">
                           <span className="text-xs flex-1">{displayVal}</span>
                           <button
-                            className="text-[9px] text-destructive hover:underline px-0.5"
+                            className="inline-flex items-center justify-center w-4 h-4 rounded border border-red-400 text-red-500 hover:bg-red-50"
                             onClick={(e) => { e.stopPropagation(); updateOnOrderStore(row.id, 0); }}
                             title="ล้างค่า ON ORDER"
-                          >Clear</button>
+                          ><X className="w-2.5 h-2.5" /></button>
                           <button
-                            className="text-[9px] text-primary hover:underline px-0.5"
+                            className="inline-flex items-center justify-center w-4 h-4 rounded border border-sky-400 text-sky-500 hover:bg-sky-50"
                             onClick={(e) => { e.stopPropagation(); updateOnOrderStore(row.id, row.orig_on_order_store); }}
                             title="คืนค่า ON ORDER เดิม"
-                          >Restore</button>
+                          ><RotateCcw className="w-2.5 h-2.5" /></button>
                         </div>
                       ) : showEdit && col.key === "order_uom_edit" ? (
                         <Input
