@@ -2068,15 +2068,25 @@ export default function SAROrderFromStoreTab() {
                                       const poSelected = po ? selectedResultIds.has(po.id) : false;
                                       const roSelected = ro ? selectedResultIds.has(ro.id) : false;
                                       return (
-                                        <tr key={`${store}-${rowIdx}`} className="border-t">
+                                        <tr key={`${store}-${rowIdx}`} className="border-t"
+                                          onClick={(e) => {
+                                            const side = (e.target as HTMLElement).closest("[data-side]")?.getAttribute("data-side");
+                                            if (side === "po" && po) toggleDoc(po.id);
+                                            else if (side === "ro" && ro) toggleDoc(ro.id);
+                                          }}
+                                        >
                                           <td className="px-3 py-1.5 font-medium truncate max-w-[160px]" title={store}>
                                             {rowIdx === 0 ? store.replace(/^\d+-/, "") : <span className="text-muted-foreground/40">↳</span>}
                                           </td>
-                                          {/* PO side — click to select */}
-                                          <td className={cn("px-2 py-1.5 border-l text-center cursor-pointer", po && (poSelected ? "bg-blue-100" : "hover:bg-blue-50"))} onClick={togglePO}>
-                                            {po && <Checkbox checked={poSelected} onCheckedChange={() => {}} />}
+                                          {/* PO side */}
+                                          <td data-side="po" className={cn("px-2 py-1.5 border-l text-center cursor-pointer select-none", po && (poSelected ? "bg-blue-100" : "hover:bg-blue-50"))}>
+                                            {po && (
+                                              <div className={cn("w-4 h-4 rounded border-2 mx-auto flex items-center justify-center", poSelected ? "bg-blue-600 border-blue-600" : "border-gray-400 bg-white")}>
+                                                {poSelected && <span className="text-white text-[10px] font-bold leading-none">✓</span>}
+                                              </div>
+                                            )}
                                           </td>
-                                          <td className={cn("px-2 py-1.5 font-mono cursor-pointer", po && (poSelected ? "bg-blue-100" : "hover:bg-blue-50"))} onClick={togglePO}>
+                                          <td data-side="po" className={cn("px-2 py-1.5 font-mono cursor-pointer select-none", po && (poSelected ? "bg-blue-100" : "hover:bg-blue-50"))}>
                                             {po
                                               ? <div className="flex items-center gap-1">
                                                   <span className="truncate max-w-[160px]" title={po.doc_name}>{po.doc_name}</span>
@@ -2085,7 +2095,7 @@ export default function SAROrderFromStoreTab() {
                                               : <span className="text-muted-foreground/50 italic text-[11px]">—</span>
                                             }
                                           </td>
-                                          <td className={cn("px-2 py-1.5 text-right tabular-nums text-muted-foreground cursor-pointer", po && (poSelected ? "bg-blue-100" : "hover:bg-blue-50"))} onClick={togglePO}>
+                                          <td data-side="po" className={cn("px-2 py-1.5 text-right tabular-nums text-muted-foreground cursor-pointer select-none", po && (poSelected ? "bg-blue-100" : "hover:bg-blue-50"))}>
                                             {po ? po.item_count.toLocaleString() : ""}
                                           </td>
                                           <td className="px-2 py-1.5" onClick={e => e.stopPropagation()}>
@@ -2094,17 +2104,21 @@ export default function SAROrderFromStoreTab() {
                                               <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" onClick={() => deleteResultDoc(po.id, po.doc_name)}><Trash2 className="w-3 h-3" /></Button>
                                             </div>}
                                           </td>
-                                          {/* RO side — click to select */}
-                                          <td className={cn("px-2 py-1.5 border-l text-center cursor-pointer", ro && (roSelected ? "bg-emerald-100" : "hover:bg-emerald-50"))} onClick={toggleRO}>
-                                            {ro && <Checkbox checked={roSelected} onCheckedChange={() => {}} />}
+                                          {/* RO side */}
+                                          <td data-side="ro" className={cn("px-2 py-1.5 border-l text-center cursor-pointer select-none", ro && (roSelected ? "bg-emerald-100" : "hover:bg-emerald-50"))}>
+                                            {ro && (
+                                              <div className={cn("w-4 h-4 rounded border-2 mx-auto flex items-center justify-center", roSelected ? "bg-emerald-600 border-emerald-600" : "border-gray-400 bg-white")}>
+                                                {roSelected && <span className="text-white text-[10px] font-bold leading-none">✓</span>}
+                                              </div>
+                                            )}
                                           </td>
-                                          <td className={cn("px-2 py-1.5 font-mono cursor-pointer", ro && (roSelected ? "bg-emerald-100" : "hover:bg-emerald-50"))} onClick={toggleRO}>
+                                          <td data-side="ro" className={cn("px-2 py-1.5 font-mono cursor-pointer select-none", ro && (roSelected ? "bg-emerald-100" : "hover:bg-emerald-50"))}>
                                             {ro
                                               ? <span className="truncate block max-w-[160px]" title={ro.doc_name}>{ro.doc_name}</span>
                                               : <span className="text-muted-foreground/50 italic text-[11px]">—</span>
                                             }
                                           </td>
-                                          <td className={cn("px-2 py-1.5 text-right tabular-nums text-muted-foreground cursor-pointer", ro && (roSelected ? "bg-emerald-100" : "hover:bg-emerald-50"))} onClick={toggleRO}>
+                                          <td data-side="ro" className={cn("px-2 py-1.5 text-right tabular-nums text-muted-foreground cursor-pointer select-none", ro && (roSelected ? "bg-emerald-100" : "hover:bg-emerald-50"))}>
                                             {ro ? ro.item_count.toLocaleString() : ""}
                                           </td>
                                           <td className="px-2 py-1.5" onClick={e => e.stopPropagation()}>
