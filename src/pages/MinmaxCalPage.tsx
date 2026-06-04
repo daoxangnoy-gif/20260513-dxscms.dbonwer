@@ -142,21 +142,41 @@ function fmtDocName() {
 // Fetch RPC in batches to bypass PostgREST 1000-row limit.
 // PostgREST hard caps each response at 1000 even when range asks for more.
 async function fetchAllCalc(params: any, onProgress?: (loaded: number, batches: number) => void, isCancelled?: () => boolean): Promise<any[]> {
+  const CONCURRENCY = 4;
   const all: any[] = [];
-  let offset = 0;
   let batches = 0;
-  while (true) {
+
+  const fetchRange = async (from: number): Promise<any[]> => {
     if (isCancelled?.()) throw new Error("__CANCELLED__");
     const { data, error } = await (supabase as any)
       .rpc("get_minmax_calc_all", params)
-      .range(offset, offset + RPC_BATCH - 1);
+      .range(from, from + RPC_BATCH - 1);
     if (error) throw error;
-    const batch = data || [];
-    all.push(...batch);
-    batches++;
-    onProgress?.(all.length, batches);
-    if (batch.length < RPC_BATCH) break;
-    offset += RPC_BATCH;
+    return data || [];
+  };
+
+  // probe แรก
+  const first = await fetchRange(0);
+  all.push(...first);
+  batches++;
+  onProgress?.(all.length, batches);
+  if (first.length < RPC_BATCH) return all;
+
+  // ดึงที่เหลือแบบ parallel CONCURRENCY batch พร้อมกัน
+  let nextFrom = RPC_BATCH;
+  let done = false;
+  while (!done) {
+    if (isCancelled?.()) throw new Error("__CANCELLED__");
+    const offsets: number[] = [];
+    for (let i = 0; i < CONCURRENCY; i++) offsets.push(nextFrom + i * RPC_BATCH);
+    const results = await Promise.all(offsets.map(off => fetchRange(off)));
+    for (const chunk of results) {
+      all.push(...chunk);
+      batches++;
+      onProgress?.(all.length, batches);
+      if (chunk.length < RPC_BATCH) { done = true; break; }
+    }
+    nextFrom += CONCURRENCY * RPC_BATCH;
   }
   return all;
 }
