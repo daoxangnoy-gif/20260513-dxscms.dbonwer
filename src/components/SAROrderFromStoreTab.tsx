@@ -287,6 +287,7 @@ export default function SAROrderFromStoreTab() {
   const [perROChunk, setPerROChunk] = useState(50);
   const [perPOChunk, setPerPOChunk] = useState(50);
   const [collapsedBatches, setCollapsedBatches] = useState<Set<string>>(new Set());
+  const [batchSearches, setBatchSearches] = useState<Record<string, string>>({});
 
   // ============================================================
   // IMPORT TAB — logic
@@ -1802,10 +1803,7 @@ export default function SAROrderFromStoreTab() {
                   <Button size="sm" variant="outline" onClick={loadResultDocs} disabled={resultDocsLoading}><RefreshCw className={cn("w-3.5 h-3.5 mr-1", resultDocsLoading && "animate-spin")} />Refresh</Button>
                   <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setCollapsedBatches(new Set())}>Expand All</Button>
                   <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => {
-                    const allKeys = new Set(resultDocs.map(doc => {
-                      const ids = [...(doc.source_doc_ids || [])].sort().join(",");
-                      return ids || doc.doc_name.replace(/-(?:PO|RO)-.*/, "");
-                    }));
+                    const allKeys = new Set(resultDocs.map(doc => new Date(doc.created_at).toLocaleDateString("en-CA")));
                     setCollapsedBatches(allKeys);
                   }}>Collapse All</Button>
                   {selectedResultIds.size > 1 && (
@@ -1926,35 +1924,29 @@ export default function SAROrderFromStoreTab() {
                     );
                   })()}
                 </div>
-                {/* Batch-grouped panel */}
+                {/* Date-grouped panel */}
                 {(() => {
-                  const getBatchKey = (doc: OfsResultDoc): string => {
-                    const ids = [...(doc.source_doc_ids || [])].sort().join(",");
-                    if (ids) return ids;
-                    return doc.doc_name.replace(/-(?:PO|RO)-.*/, "");
-                  };
-                  const formatBatchLabel = (docs: OfsResultDoc[]): string => {
-                    const prefix = docs[0]?.doc_name.replace(/-(?:PO|RO)-.*/, "") ?? "";
-                    if (/^\d{12}$/.test(prefix)) {
-                      const [y, mo, d, h, mi] = [prefix.slice(0,4), prefix.slice(4,6), prefix.slice(6,8), prefix.slice(8,10), prefix.slice(10,12)];
-                      return `${d}/${mo}/${y} ${h}:${mi}`;
-                    }
-                    return prefix || new Date(docs[0]?.created_at ?? "").toLocaleString();
+                  const getDateKey = (doc: OfsResultDoc): string =>
+                    new Date(doc.created_at).toLocaleDateString("en-CA"); // YYYY-MM-DD
+                  const formatDateLabel = (key: string): string => {
+                    const [y, mo, d] = key.split("-");
+                    return `${d}/${mo}/${y}`;
                   };
                   const toggleDoc = (id: string) => {
                     setSelectedResultIds(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
                     setSummedRows(null); setListExportCount({ dc: 0, d2s: 0 }); setVendorFilter(null); setVendorList([]);
                   };
 
-                  const batchMap = new Map<string, OfsResultDoc[]>();
+                  // Group by date
+                  const dateMap = new Map<string, OfsResultDoc[]>();
                   for (const doc of resultDocs) {
-                    const key = getBatchKey(doc);
-                    if (!batchMap.has(key)) batchMap.set(key, []);
-                    batchMap.get(key)!.push(doc);
+                    const key = getDateKey(doc);
+                    if (!dateMap.has(key)) dateMap.set(key, []);
+                    dateMap.get(key)!.push(doc);
                   }
-                  const batches = Array.from(batchMap.entries())
+                  const batches = Array.from(dateMap.entries())
                     .map(([key, docs]) => ({ key, docs, latestAt: docs.reduce((mx, d) => d.created_at > mx ? d.created_at : mx, "") }))
-                    .sort((a, b) => b.latestAt.localeCompare(a.latestAt));
+                    .sort((a, b) => b.key.localeCompare(a.key));
 
                   if (resultDocsLoading) return (
                     <div className="flex-1 flex items-center justify-center"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
@@ -1965,20 +1957,42 @@ export default function SAROrderFromStoreTab() {
 
                   return (
                     <div className="flex-1 overflow-auto">
-                      {batches.map(({ key, docs, latestAt }) => {
+                      {batches.map(({ key, docs }) => {
                         const isCollapsed = collapsedBatches.has(key);
-                        const storeMap = new Map<string, { po?: OfsResultDoc; ro?: OfsResultDoc }>();
+                        const search = (batchSearches[key] ?? "").toLowerCase().trim();
+
+                        // Build store rows: each store may have multiple PO/RO from different save times
+                        // Group by store → collect all PO and RO docs sorted by created_at
+                        const storeMap = new Map<string, { po: OfsResultDoc[]; ro: OfsResultDoc[] }>();
                         for (const doc of docs) {
-                          if (!storeMap.has(doc.store_name)) storeMap.set(doc.store_name, {});
-                          if (doc.doc_type === "PO") storeMap.get(doc.store_name)!.po = doc;
-                          else storeMap.get(doc.store_name)!.ro = doc;
+                          if (!storeMap.has(doc.store_name)) storeMap.set(doc.store_name, { po: [], ro: [] });
+                          if (doc.doc_type === "PO") storeMap.get(doc.store_name)!.po.push(doc);
+                          else storeMap.get(doc.store_name)!.ro.push(doc);
                         }
-                        const storeRows = Array.from(storeMap.entries()).map(([store, { po, ro }]) => ({ store, po, ro }));
+                        // Expand into rows: max(po.length, ro.length) rows per store
+                        type StoreRow = { store: string; po?: OfsResultDoc; ro?: OfsResultDoc; rowIdx: number };
+                        const allStoreRows: StoreRow[] = [];
+                        for (const [store, { po, ro }] of storeMap) {
+                          const len = Math.max(po.length, ro.length, 1);
+                          for (let i = 0; i < len; i++) {
+                            allStoreRows.push({ store, po: po[i], ro: ro[i], rowIdx: i });
+                          }
+                        }
+
+                        const filteredRows = search
+                          ? allStoreRows.filter(r =>
+                              r.store.toLowerCase().includes(search) ||
+                              (r.po?.doc_name ?? "").toLowerCase().includes(search) ||
+                              (r.ro?.doc_name ?? "").toLowerCase().includes(search)
+                            )
+                          : allStoreRows;
+
                         const batchDocIds = docs.map(d => d.id);
                         const allSelected = batchDocIds.length > 0 && batchDocIds.every(id => selectedResultIds.has(id));
                         const someSelected = !allSelected && batchDocIds.some(id => selectedResultIds.has(id));
                         const poDocs = docs.filter(d => d.doc_type === "PO");
                         const roDocs = docs.filter(d => d.doc_type === "RO");
+                        const uniqueStores = storeMap.size;
 
                         const toggleBatch = () => {
                           setSelectedResultIds(s => {
@@ -1992,7 +2006,7 @@ export default function SAROrderFromStoreTab() {
 
                         return (
                           <div key={key} className="border-b last:border-b-0">
-                            {/* Batch header */}
+                            {/* Date header */}
                             <div className="px-3 py-2 flex items-center gap-2 bg-muted/50 border-b text-xs font-semibold select-none">
                               <div onClick={e => e.stopPropagation()}>
                                 <Checkbox
@@ -2002,16 +2016,30 @@ export default function SAROrderFromStoreTab() {
                                 />
                               </div>
                               <button
-                                className="flex items-center gap-1.5 flex-1 text-left hover:text-primary"
+                                className="flex items-center gap-1.5 hover:text-primary shrink-0"
                                 onClick={() => setCollapsedBatches(s => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; })}
                               >
                                 {isCollapsed ? <ChevronRight className="w-3.5 h-3.5 shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 shrink-0" />}
-                                <span className="font-mono">{formatBatchLabel(docs)}</span>
-                                <span className="font-normal text-muted-foreground">— {storeRows.length} สาขา</span>
-                                {poDocs.length > 0 && <Badge className="bg-blue-100 text-blue-700 border-blue-300 text-[10px] font-normal">PO {poDocs.length}</Badge>}
-                                {roDocs.length > 0 && <Badge className="bg-emerald-100 text-emerald-700 border-emerald-300 text-[10px] font-normal">RO {roDocs.length}</Badge>}
+                                <span className="font-mono text-sm">{formatDateLabel(key)}</span>
                               </button>
-                              <span className="text-[10px] font-normal text-muted-foreground">{new Date(latestAt).toLocaleString()}</span>
+                              <span className="font-normal text-muted-foreground shrink-0">— {uniqueStores} สาขา</span>
+                              {poDocs.length > 0 && <Badge className="bg-blue-100 text-blue-700 border-blue-300 text-[10px] font-normal shrink-0">PO {poDocs.length}</Badge>}
+                              {roDocs.length > 0 && <Badge className="bg-emerald-100 text-emerald-700 border-emerald-300 text-[10px] font-normal shrink-0">RO {roDocs.length}</Badge>}
+                              {/* Search input */}
+                              <div className="flex items-center gap-1 ml-2" onClick={e => e.stopPropagation()}>
+                                <Search className="w-3 h-3 text-muted-foreground shrink-0" />
+                                <input
+                                  type="text"
+                                  value={batchSearches[key] ?? ""}
+                                  onChange={e => setBatchSearches(prev => ({ ...prev, [key]: e.target.value }))}
+                                  placeholder="เสิร์ช Store / Doc..."
+                                  className="h-6 px-2 text-[11px] border rounded bg-background font-normal w-44 focus:outline-none focus:ring-1 focus:ring-primary/50"
+                                />
+                                {(batchSearches[key] ?? "") && (
+                                  <button className="text-muted-foreground hover:text-foreground text-xs" onClick={() => setBatchSearches(prev => ({ ...prev, [key]: "" }))}>✕</button>
+                                )}
+                                {search && <span className="text-[10px] text-muted-foreground font-normal">{filteredRows.length}/{allStoreRows.length}</span>}
+                              </div>
                             </div>
 
                             {/* Store rows */}
@@ -2031,9 +2059,13 @@ export default function SAROrderFromStoreTab() {
                                   </tr>
                                 </thead>
                                 <tbody>
-                                  {storeRows.map(({ store, po, ro }) => (
-                                    <tr key={store} className="border-t hover:bg-muted/20">
-                                      <td className="px-3 py-1.5 font-medium truncate max-w-[160px]" title={store}>{store.replace(/^\d+-/, "")}</td>
+                                  {filteredRows.length === 0
+                                    ? <tr><td colSpan={9} className="text-center py-4 text-muted-foreground">ไม่พบผลลัพธ์</td></tr>
+                                    : filteredRows.map(({ store, po, ro, rowIdx }) => (
+                                    <tr key={`${store}-${rowIdx}`} className="border-t hover:bg-muted/20">
+                                      <td className="px-3 py-1.5 font-medium truncate max-w-[160px]" title={store}>
+                                        {rowIdx === 0 ? store.replace(/^\d+-/, "") : <span className="text-muted-foreground/40">↳</span>}
+                                      </td>
                                       {/* PO */}
                                       <td className="px-2 py-1.5 border-l text-center" onClick={e => e.stopPropagation()}>
                                         {po && <Checkbox checked={selectedResultIds.has(po.id)} onCheckedChange={() => toggleDoc(po.id)} />}
