@@ -2074,7 +2074,7 @@ export default function SAROrderFromStoreTab() {
                                           </td>
                                           {/* PO side — click to select */}
                                           <td className={cn("px-2 py-1.5 border-l text-center cursor-pointer", po && (poSelected ? "bg-blue-100" : "hover:bg-blue-50"))} onClick={togglePO}>
-                                            {po && <Checkbox checked={poSelected} onCheckedChange={togglePO} onClick={e => e.stopPropagation()} />}
+                                            {po && <Checkbox checked={poSelected} onCheckedChange={() => {}} />}
                                           </td>
                                           <td className={cn("px-2 py-1.5 font-mono cursor-pointer", po && (poSelected ? "bg-blue-100" : "hover:bg-blue-50"))} onClick={togglePO}>
                                             {po
@@ -2096,7 +2096,7 @@ export default function SAROrderFromStoreTab() {
                                           </td>
                                           {/* RO side — click to select */}
                                           <td className={cn("px-2 py-1.5 border-l text-center cursor-pointer", ro && (roSelected ? "bg-emerald-100" : "hover:bg-emerald-50"))} onClick={toggleRO}>
-                                            {ro && <Checkbox checked={roSelected} onCheckedChange={toggleRO} onClick={e => e.stopPropagation()} />}
+                                            {ro && <Checkbox checked={roSelected} onCheckedChange={() => {}} />}
                                           </td>
                                           <td className={cn("px-2 py-1.5 font-mono cursor-pointer", ro && (roSelected ? "bg-emerald-100" : "hover:bg-emerald-50"))} onClick={toggleRO}>
                                             {ro
