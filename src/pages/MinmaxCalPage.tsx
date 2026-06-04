@@ -888,20 +888,28 @@ export default function MinmaxCalPage() {
       }
       const totalSec = ((performance.now() - t0) / 1000).toFixed(1);
 
-      // STEP 3/4 — sync minmax_cal_documents ด้วย merge_minmax_doc
-      step(3, `อัปเดต Min/Max Document...`, 90);
-      await rpcWithRetry(
-        () => (supabase as any).rpc("merge_minmax_doc", {
-          p_payload: payload,
-          p_create_if_missing: true,
-          p_user_id: user.id,
-          p_n_factor: nFactor,
-          p_doc_name: saveName || null,
-          p_doc_id: null,
-          p_force_new: false,
-        }),
-        "merge_minmax_doc",
-      );
+      // STEP 3/4 — sync minmax_cal_documents ด้วย merge_minmax_doc (chunk เหมือน upsert)
+      let mergeDocId: string | null = null;
+      for (let ci = 0; ci < chunks.length; ci++) {
+        const slice = chunks[ci];
+        const pct = 90 + Math.round(((ci + 1) / chunks.length) * 5);
+        step(3, `อัปเดต Min/Max Document... batch ${ci + 1}/${chunks.length}`, pct);
+        const { data: mergeResult } = await rpcWithRetry(
+          () => (supabase as any).rpc("merge_minmax_doc", {
+            p_payload: slice,
+            p_create_if_missing: true,
+            p_user_id: user.id,
+            p_n_factor: nFactor,
+            p_doc_name: saveName || null,
+            p_doc_id: mergeDocId,
+            p_force_new: ci === 0 && !mergeDocId ? false : false,
+          }),
+          `merge_minmax_doc chunk ${ci + 1}/${chunks.length}`,
+        );
+        if (ci === 0 && mergeResult?.[0]?.doc_id) {
+          mergeDocId = mergeResult[0].doc_id;
+        }
+      }
 
       // STEP 4/4 — เสร็จ
       step(4, `บันทึกสำเร็จ · ${payload.length.toLocaleString()} แถว (${totalSec}s)`, 95);
