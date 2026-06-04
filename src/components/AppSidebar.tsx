@@ -91,13 +91,14 @@ export default function AppSidebar({
   useEffect(() => {
     if (currentPage !== "data_control") return;
     const loadCounts = async () => {
-      const results: Record<string, number> = {};
-      for (const t of DATA_TABLES) {
-        if (t.name === "range_store") continue;
-        const { count } = await supabase.from(t.name).select("*", { count: "exact", head: true });
-        results[t.name] = count || 0;
-      }
-      setCounts(results);
+      const tables = DATA_TABLES.filter(t => t.name !== "range_store");
+      const entries = await Promise.all(
+        tables.map(async t => {
+          const { count } = await supabase.from(t.name).select("*", { count: "exact", head: true });
+          return [t.name, count || 0] as const;
+        })
+      );
+      setCounts(Object.fromEntries(entries));
     };
     loadCounts();
   }, [currentPage]);
