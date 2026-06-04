@@ -278,6 +278,7 @@ export default function SAROrderFromStoreTab() {
   const [summedRows, setSummedRows] = useState<ProcessedRow[] | null>(null);
   const [sumLoading, setSumLoading] = useState(false);
   const [listExportCount, setListExportCount] = useState<{ dc: number; d2s: number }>({ dc: 0, d2s: 0 });
+  const [docExportCounts, setDocExportCounts] = useState<Map<string, number>>(new Map());
   const [vendorFilterOpen, setVendorFilterOpen] = useState(false);
   const [vendorList, setVendorList] = useState<{ vendor_code: string; vendor_name: string; spc_name: string }[]>([]);
   const [vendorFilterLoading, setVendorFilterLoading] = useState(false);
@@ -1893,12 +1894,12 @@ export default function SAROrderFromStoreTab() {
                               const rows: ProcessedRow[] = fetched.flat().flatMap((d: any) => ((d.data || []) as ProcessedRow[]).map(r => ({ ...r, _doc_type: d.doc_type })));
                               await exportPOD2S(rows);
                               setListExportCount(c => ({ ...c, d2s: c.d2s + 1 }));
+                              setDocExportCounts(prev => { const next = new Map(prev); selPoIds.forEach(id => next.set(id, (next.get(id) || 0) + 1)); return next; });
                             } finally { setSumLoading(false); }
                           }}
                           disabled={sumLoading}
                         >
                           <FileSpreadsheet className="w-3.5 h-3.5 mr-1" />Export PO D2S
-                          {listExportCount.d2s > 0 && <span className="ml-1 text-[9px] bg-blue-200 text-blue-800 px-1 rounded">{listExportCount.d2s}x</span>}
                         </Button>
                         <Button size="sm" variant="outline" className="h-7 text-xs text-amber-700 border-amber-300 hover:bg-amber-50"
                           onClick={handleSumDocQty} disabled={sumLoading}
@@ -1910,50 +1911,97 @@ export default function SAROrderFromStoreTab() {
                             onClick={async () => { await exportPODC(summedRows); setListExportCount(c => ({ ...c, dc: c.dc + 1 })); }}
                           >
                             <FileSpreadsheet className="w-3.5 h-3.5 mr-1" />Export PO DC ({summedRows.length} SKU)
-                            {listExportCount.dc > 0 && <span className="ml-1 text-[9px] bg-blue-200 text-blue-800 px-1 rounded">{listExportCount.dc}x</span>}
                           </Button>
                         )}
                       </div>
                     );
                   })()}
                 </div>
-                <div className="flex-1 overflow-auto">
-                  <table className="w-full text-xs">
-                    <thead className="bg-muted sticky top-0 z-10">
-                      <tr>
-                        <th className="px-2 py-1.5 w-8"><Checkbox checked={resultDocs.length > 0 && selectedResultIds.size === resultDocs.length} onCheckedChange={c => setSelectedResultIds(c ? new Set(resultDocs.map(d => d.id)) : new Set())} /></th>
-                        <th className="px-2 py-1.5 text-left">Doc Name</th>
-                        <th className="px-2 py-1.5 text-left">Type</th>
-                        <th className="px-2 py-1.5 text-left">Store</th>
-                        <th className="px-2 py-1.5 text-right">Items</th>
-                        <th className="px-2 py-1.5 text-left">วันที่</th>
-                        <th className="px-2 py-1.5 w-32"></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {resultDocsLoading
-                        ? <tr><td colSpan={7} className="text-center py-8"><Loader2 className="w-5 h-5 animate-spin mx-auto text-muted-foreground" /></td></tr>
-                        : resultDocs.length === 0
-                          ? <tr><td colSpan={7} className="text-center py-8 text-muted-foreground">ยังไม่มี Result Doc</td></tr>
-                          : resultDocs.map(d => (
-                            <tr key={d.id} className={cn("border-t hover:bg-muted/40 cursor-pointer", selectedResultIds.has(d.id) && "bg-primary/5")}
-                              onClick={() => { setSelectedResultIds(s => { const n = new Set(s); n.has(d.id) ? n.delete(d.id) : n.add(d.id); return n; }); setSummedRows(null); setListExportCount({ dc: 0, d2s: 0 }); setVendorFilter(null); setVendorList([]); }}
-                            >
-                              <td className="px-2 py-1 text-center" onClick={e => e.stopPropagation()}><Checkbox checked={selectedResultIds.has(d.id)} onCheckedChange={() => { setSelectedResultIds(s => { const n = new Set(s); n.has(d.id) ? n.delete(d.id) : n.add(d.id); return n; }); setSummedRows(null); setListExportCount({ dc: 0, d2s: 0 }); setVendorFilter(null); setVendorList([]); }} /></td>
-                              <td className="px-2 py-1 font-mono">{d.doc_name}</td>
-                              <td className="px-2 py-1"><Badge className={cn("text-[10px] px-1.5 border", d.doc_type === "RO" ? "bg-emerald-100 text-emerald-700 border-emerald-300" : "bg-blue-100 text-blue-700 border-blue-300")}>{d.doc_type}</Badge></td>
-                              <td className="px-2 py-1">{d.store_name}</td>
-                              <td className="px-2 py-1 text-right">{d.item_count.toLocaleString()}</td>
-                              <td className="px-2 py-1 text-muted-foreground">{new Date(d.created_at).toLocaleString()}</td>
-                              <td className="px-2 py-1 flex gap-1 justify-end">
-                                <Button size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={() => openResultDoc(d)} disabled={viewLoading}>Open</Button>
-                                <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" onClick={() => deleteResultDoc(d.id, d.doc_name)}><Trash2 className="w-3 h-3" /></Button>
-                              </td>
-                            </tr>
-                          ))}
-                    </tbody>
-                  </table>
-                </div>
+                {/* PO / RO split panel */}
+                {(() => {
+                  const poDocs = resultDocs.filter(d => d.doc_type === "PO");
+                  const roDocs = resultDocs.filter(d => d.doc_type === "RO");
+                  const toggleDoc = (id: string) => {
+                    setSelectedResultIds(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+                    setSummedRows(null); setListExportCount({ dc: 0, d2s: 0 }); setVendorFilter(null); setVendorList([]);
+                  };
+                  const renderPanel = (docs: typeof resultDocs, type: "PO" | "RO") => (
+                    <div className="flex-1 flex flex-col min-w-0 border-r last:border-r-0">
+                      {/* Panel header */}
+                      <div className={cn("px-3 py-1.5 flex items-center gap-2 shrink-0 border-b font-semibold text-xs",
+                        type === "PO" ? "bg-blue-50 text-blue-700" : "bg-emerald-50 text-emerald-700")}>
+                        <Checkbox
+                          checked={docs.length > 0 && docs.every(d => selectedResultIds.has(d.id))}
+                          onCheckedChange={c => {
+                            setSelectedResultIds(s => {
+                              const n = new Set(s);
+                              docs.forEach(d => c ? n.add(d.id) : n.delete(d.id));
+                              return n;
+                            });
+                            setSummedRows(null); setListExportCount({ dc: 0, d2s: 0 }); setVendorFilter(null); setVendorList([]);
+                          }}
+                        />
+                        <Badge className={cn("text-[10px] px-1.5 border", type === "RO" ? "bg-emerald-100 text-emerald-700 border-emerald-300" : "bg-blue-100 text-blue-700 border-blue-300")}>{type}</Badge>
+                        <span>{docs.length} docs</span>
+                        {docs.filter(d => selectedResultIds.has(d.id)).length > 0 &&
+                          <span className="ml-auto text-[10px] font-normal text-muted-foreground">เลือก {docs.filter(d => selectedResultIds.has(d.id)).length}</span>}
+                      </div>
+                      {/* Panel table */}
+                      <div className="flex-1 overflow-auto">
+                        {resultDocsLoading
+                          ? <div className="flex items-center justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
+                          : docs.length === 0
+                            ? <div className="text-center py-8 text-xs text-muted-foreground">ไม่มี {type} Doc</div>
+                            : <table className="w-full text-xs">
+                                <thead className="bg-muted sticky top-0 z-10">
+                                  <tr>
+                                    <th className="px-2 py-1.5 w-6"></th>
+                                    <th className="px-2 py-1.5 text-left">Doc Name</th>
+                                    <th className="px-2 py-1.5 text-left">Store</th>
+                                    <th className="px-2 py-1.5 text-right">Items</th>
+                                    <th className="px-2 py-1.5 text-left">วันที่</th>
+                                    <th className="px-2 py-1.5 w-20"></th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {docs.map(d => (
+                                    <tr key={d.id} className={cn("border-t hover:bg-muted/40 cursor-pointer", selectedResultIds.has(d.id) && "bg-primary/5")}
+                                      onClick={() => toggleDoc(d.id)}>
+                                      <td className="px-2 py-1 text-center" onClick={e => e.stopPropagation()}>
+                                        <Checkbox checked={selectedResultIds.has(d.id)} onCheckedChange={() => toggleDoc(d.id)} />
+                                      </td>
+                                      <td className="px-2 py-1 font-mono">
+                                        <div className="flex items-center gap-1">
+                                          <span className="truncate max-w-[140px]">{d.doc_name}</span>
+                                          {(docExportCounts.get(d.id) ?? 0) > 0 && (
+                                            <span className="shrink-0 text-[9px] bg-blue-100 text-blue-700 border border-blue-300 px-1 rounded leading-tight">{docExportCounts.get(d.id)}x</span>
+                                          )}
+                                        </div>
+                                      </td>
+                                      <td className="px-2 py-1 truncate max-w-[100px]">{d.store_name}</td>
+                                      <td className="px-2 py-1 text-right tabular-nums">{d.item_count.toLocaleString()}</td>
+                                      <td className="px-2 py-1 text-muted-foreground whitespace-nowrap">{new Date(d.created_at).toLocaleString()}</td>
+                                      <td className="px-2 py-1" onClick={e => e.stopPropagation()}>
+                                        <div className="flex gap-1 justify-end">
+                                          <Button size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={() => openResultDoc(d)} disabled={viewLoading}>Open</Button>
+                                          <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" onClick={() => deleteResultDoc(d.id, d.doc_name)}><Trash2 className="w-3 h-3" /></Button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                        }
+                      </div>
+                    </div>
+                  );
+                  return (
+                    <div className="flex-1 flex overflow-hidden">
+                      {renderPanel(poDocs, "PO")}
+                      {renderPanel(roDocs, "RO")}
+                    </div>
+                  );
+                })()}
               </>
             ) : (
               // Detail view
