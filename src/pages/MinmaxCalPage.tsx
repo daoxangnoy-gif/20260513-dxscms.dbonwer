@@ -845,7 +845,7 @@ export default function MinmaxCalPage() {
     if (!user) { toast({ title: "ต้องเข้าสู่ระบบ", variant: "destructive" }); return; }
     if (rows.length === 0) { toast({ title: "ยังไม่มีข้อมูลให้บันทึก", variant: "destructive" }); return; }
     setSaving(true);
-    const TOTAL_STEPS = 3;
+    const TOTAL_STEPS = 4;
     const step = (i: number, label: string, basePct: number) => {
       setSaveStep({ idx: i, total: TOTAL_STEPS, label });
       setSaveStatus(label);
@@ -924,8 +924,21 @@ export default function MinmaxCalPage() {
       }
       const totalSec = ((performance.now() - t0) / 1000).toFixed(1);
 
-      // STEP 3/3 — เสร็จ
-      step(3, `บันทึกสำเร็จ · ${payload.length.toLocaleString()} แถว (${totalSec}s)`, 95);
+      // STEP 3/4 — sync minmax_cal_documents ด้วย merge_minmax_doc
+      step(3, `อัปเดต Min/Max Document...`, 90);
+      await rpcWithRetry(
+        () => (supabase as any).rpc("merge_minmax_doc", {
+          p_payload: payload,
+          p_create_if_missing: true,
+          p_user_id: user.id,
+          p_n_factor: nFactor,
+          p_doc_name: saveName || null,
+        }),
+        "merge_minmax_doc",
+      );
+
+      // STEP 4/4 — เสร็จ
+      step(4, `บันทึกสำเร็จ · ${payload.length.toLocaleString()} แถว (${totalSec}s)`, 95);
       toast({
         title: "บันทึก Min/Max View สำเร็จ",
         description: `${payload.length.toLocaleString()} แถว → ตาราง minmax (${totalSec}s)`,
