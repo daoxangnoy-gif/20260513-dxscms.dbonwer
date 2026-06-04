@@ -268,7 +268,8 @@ export default function SAROrderFromStoreTab() {
   // ---- RESULT DOCS TAB ----
   const [resultDocs, setResultDocs] = useState<OfsResultDoc[]>([]);
   const [resultDocsLoading, setResultDocsLoading] = useState(false);
-  const [selectedResultIds, setSelectedResultIds] = useState<Set<string>>(new Set());
+  const [selectedPoIds, setSelectedPoIds] = useState<Set<string>>(new Set());
+  const [selectedRoIds, setSelectedRoIds] = useState<Set<string>>(new Set());
   const [viewItems, setViewItems] = useState<ProcessedRow[] | null>(null);
   const [viewTitle, setViewTitle] = useState("");
   const [viewDocType, setViewDocType] = useState<"RO" | "PO" | "MIXED" | null>(null);
@@ -911,7 +912,7 @@ export default function SAROrderFromStoreTab() {
   };
 
   const showSelectedResultDocs = async () => {
-    const ids = Array.from(selectedResultIds);
+    const ids = [...Array.from(selectedPoIds), ...Array.from(selectedRoIds)];
     if (!ids.length) return;
     setViewLoading(true);
     try {
@@ -933,7 +934,8 @@ export default function SAROrderFromStoreTab() {
     if (!confirm(`ลบ "${name}"?`)) return;
     await (supabase as any).from("ofs_result_docs").delete().eq("id", id);
     setResultDocs(d => d.filter(x => x.id !== id));
-    setSelectedResultIds(s => { const n = new Set(s); n.delete(id); return n; });
+    setSelectedPoIds(s => { const n = new Set(s); n.delete(id); return n; });
+    setSelectedRoIds(s => { const n = new Set(s); n.delete(id); return n; });
     if (viewItems) { setViewItems(null); setViewTitle(""); setViewDocType(null); }
   };
 
@@ -1151,7 +1153,7 @@ export default function SAROrderFromStoreTab() {
   };
 
   const loadVendorListForFilter = async () => {
-    const poIds = Array.from(selectedResultIds).filter(id => resultDocs.find(d => d.id === id)?.doc_type === "PO");
+    const poIds = Array.from(selectedPoIds);
     if (!poIds.length) return;
     setVendorFilterLoading(true);
     try {
@@ -1183,7 +1185,7 @@ export default function SAROrderFromStoreTab() {
   };
 
   const handleSumDocQty = async () => {
-    const poIds = Array.from(selectedResultIds).filter(id => resultDocs.find(d => d.id === id)?.doc_type === "PO");
+    const poIds = Array.from(selectedPoIds);
     if (!poIds.length) return;
     setSumLoading(true);
     try {
@@ -1799,19 +1801,19 @@ export default function SAROrderFromStoreTab() {
               <>
                 <div className="border-b px-4 py-2 flex items-center gap-2 flex-wrap shrink-0 bg-muted/20">
                   <div className="text-sm font-semibold">Result Docs</div>
-                  {selectedResultIds.size > 0 && <Badge variant="secondary" className="text-xs">เลือก {selectedResultIds.size}</Badge>}
+                  {(selectedPoIds.size + selectedRoIds.size) > 0 && <Badge variant="secondary" className="text-xs">เลือก {selectedPoIds.size + selectedRoIds.size}</Badge>}
                   <Button size="sm" variant="outline" onClick={loadResultDocs} disabled={resultDocsLoading}><RefreshCw className={cn("w-3.5 h-3.5 mr-1", resultDocsLoading && "animate-spin")} />Refresh</Button>
                   <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setCollapsedBatches(new Set())}>Expand All</Button>
                   <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => {
                     const allKeys = new Set(resultDocs.map(doc => new Date(doc.created_at).toLocaleDateString("en-CA")));
                     setCollapsedBatches(allKeys);
                   }}>Collapse All</Button>
-                  {selectedResultIds.size > 1 && (
-                    <Button size="sm" variant="outline" onClick={showSelectedResultDocs} disabled={viewLoading}>{viewLoading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : null}Show Selected ({selectedResultIds.size})</Button>
+                  {(selectedPoIds.size + selectedRoIds.size) > 1 && (
+                    <Button size="sm" variant="outline" onClick={showSelectedResultDocs} disabled={viewLoading}>{viewLoading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : null}Show Selected ({selectedPoIds.size + selectedRoIds.size})</Button>
                   )}
                   {/* Multi-PO actions: show when ≥2 PO docs selected */}
                   {(() => {
-                    const selPoIds = Array.from(selectedResultIds).filter(id => resultDocs.find(d => d.id === id)?.doc_type === "PO");
+                    const selPoIds = Array.from(selectedPoIds);
                     if (selPoIds.length < 1) return null;
                     return (
                       <div className="flex items-center gap-1.5 ml-1 pl-2 border-l flex-wrap">
@@ -1932,10 +1934,9 @@ export default function SAROrderFromStoreTab() {
                     const [y, mo, d] = key.split("-");
                     return `${d}/${mo}/${y}`;
                   };
-                  const toggleDoc = (id: string) => {
-                    setSelectedResultIds(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
-                    setSummedRows(null); setListExportCount({ dc: 0, d2s: 0 }); setVendorFilter(null); setVendorList([]);
-                  };
+                  const clearExtra = () => { setSummedRows(null); setListExportCount({ dc: 0, d2s: 0 }); setVendorFilter(null); setVendorList([]); };
+                  const togglePoDoc = (id: string) => { setSelectedPoIds(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }); clearExtra(); };
+                  const toggleRoDoc = (id: string) => { setSelectedRoIds(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; }); clearExtra(); };
 
                   // Group by date
                   const dateMap = new Map<string, OfsResultDoc[]>();
@@ -1987,33 +1988,44 @@ export default function SAROrderFromStoreTab() {
                             )
                           : allStoreRows;
 
-                        const batchDocIds = docs.map(d => d.id);
-                        const allSelected = batchDocIds.length > 0 && batchDocIds.every(id => selectedResultIds.has(id));
-                        const someSelected = !allSelected && batchDocIds.some(id => selectedResultIds.has(id));
                         const poDocs = docs.filter(d => d.doc_type === "PO");
                         const roDocs = docs.filter(d => d.doc_type === "RO");
                         const uniqueStores = storeMap.size;
+                        const poDocIds = poDocs.map(d => d.id);
+                        const roDocIds = roDocs.map(d => d.id);
+                        const allPoSelected = poDocIds.length > 0 && poDocIds.every(id => selectedPoIds.has(id));
+                        const somePoSelected = !allPoSelected && poDocIds.some(id => selectedPoIds.has(id));
+                        const allRoSelected = roDocIds.length > 0 && roDocIds.every(id => selectedRoIds.has(id));
+                        const someRoSelected = !allRoSelected && roDocIds.some(id => selectedRoIds.has(id));
 
-                        const toggleBatch = () => {
-                          setSelectedResultIds(s => {
-                            const n = new Set(s);
-                            if (allSelected) batchDocIds.forEach(id => n.delete(id));
-                            else batchDocIds.forEach(id => n.add(id));
-                            return n;
-                          });
-                          setSummedRows(null); setListExportCount({ dc: 0, d2s: 0 }); setVendorFilter(null); setVendorList([]);
-                        };
+                        const toggleBatchPO = () => { setSelectedPoIds(s => { const n = new Set(s); if (allPoSelected) poDocIds.forEach(id => n.delete(id)); else poDocIds.forEach(id => n.add(id)); return n; }); clearExtra(); };
+                        const toggleBatchRO = () => { setSelectedRoIds(s => { const n = new Set(s); if (allRoSelected) roDocIds.forEach(id => n.delete(id)); else roDocIds.forEach(id => n.add(id)); return n; }); clearExtra(); };
 
                         return (
                           <div key={key} className="border-b last:border-b-0">
                             {/* Date header */}
                             <div className="px-3 py-2 flex items-center gap-2 bg-slate-700 text-white border-b text-xs font-semibold select-none">
-                              <div onClick={e => e.stopPropagation()}>
-                                <Checkbox
-                                  checked={allSelected}
-                                  className={cn("border-slate-400 data-[state=checked]:bg-white data-[state=checked]:text-slate-800", someSelected ? "opacity-60" : "")}
-                                  onCheckedChange={toggleBatch}
-                                />
+                              {/* PO select-all */}
+                              <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+                                <div
+                                  className={cn("w-4 h-4 rounded border-2 flex items-center justify-center cursor-pointer", allPoSelected ? "bg-blue-400 border-blue-400" : somePoSelected ? "bg-blue-200 border-blue-400" : "border-slate-400 bg-transparent")}
+                                  onClick={toggleBatchPO}
+                                  title="Select All PO"
+                                >
+                                  {(allPoSelected || somePoSelected) && <span className="text-white text-[9px] font-bold leading-none">✓</span>}
+                                </div>
+                                <span className="text-[10px] text-blue-300 font-normal">PO</span>
+                              </div>
+                              {/* RO select-all */}
+                              <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+                                <div
+                                  className={cn("w-4 h-4 rounded border-2 flex items-center justify-center cursor-pointer", allRoSelected ? "bg-emerald-400 border-emerald-400" : someRoSelected ? "bg-emerald-200 border-emerald-400" : "border-slate-400 bg-transparent")}
+                                  onClick={toggleBatchRO}
+                                  title="Select All RO"
+                                >
+                                  {(allRoSelected || someRoSelected) && <span className="text-white text-[9px] font-bold leading-none">✓</span>}
+                                </div>
+                                <span className="text-[10px] text-emerald-300 font-normal">RO</span>
                               </div>
                               <button
                                 className="flex items-center gap-1.5 hover:text-slate-200 shrink-0"
@@ -2061,20 +2073,18 @@ export default function SAROrderFromStoreTab() {
                                 <tbody>
                                   {filteredRows.length === 0
                                     ? <tr><td colSpan={9} className="text-center py-4 text-muted-foreground">ไม่พบผลลัพธ์</td></tr>
-                                    : filteredRows.map(({ store, po, ro, rowIdx }) => (
-                                    {(() => {
-                                      const togglePO = po ? () => toggleDoc(po.id) : undefined;
-                                      const toggleRO = ro ? () => toggleDoc(ro.id) : undefined;
-                                      const poSelected = po ? selectedResultIds.has(po.id) : false;
-                                      const roSelected = ro ? selectedResultIds.has(ro.id) : false;
+                                    : filteredRows.map(({ store, po, ro, rowIdx }) => {
+                                    return (() => {
+                                      const poSelected = po ? selectedPoIds.has(po.id) : false;
+                                      const roSelected = ro ? selectedRoIds.has(ro.id) : false;
                                       return (
                                         <tr key={`${store}-${rowIdx}`} className="border-t"
                                           onClick={(e) => {
                                             const td = (e.target as HTMLElement).closest("td");
                                             if (!td) return;
                                             const idx = (td as HTMLTableCellElement).cellIndex;
-                                            if (idx >= 1 && idx <= 3 && po) toggleDoc(po.id);
-                                            else if (idx >= 5 && idx <= 7 && ro) toggleDoc(ro.id);
+                                            if (idx >= 1 && idx <= 3 && po) togglePoDoc(po.id);
+                                            else if (idx >= 5 && idx <= 7 && ro) toggleRoDoc(ro.id);
                                           }}
                                         >
                                           <td className="px-3 py-1.5 font-medium truncate max-w-[160px]" title={store}>
@@ -2131,8 +2141,8 @@ export default function SAROrderFromStoreTab() {
                                           </td>
                                         </tr>
                                       );
-                                    })()}
-                                  ))}
+                                    })();
+                                  })}
                                 </tbody>
                               </table>
                             )}
