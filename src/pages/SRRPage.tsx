@@ -59,6 +59,13 @@ import {
 export { applyHighPrecisionFormat, getLocalPOBatches } from "@/lib/srrUtils";
 export { ListImportPO } from "@/components/ListImportPO";
 
+// --- Module-level RPC cache (shared across all component mounts in this session) ---
+const _rpcCache: {
+  preFilterOptions?: { data: any; ts: number };
+  hierarchyOptions?: { data: any; ts: number; skipDefaults: boolean };
+} = {};
+const RPC_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 // --- Multi-Select Dropdown ---
 function MultiSelect({ label, options, selected, onChange, searchable = true, compact = false }: {
   label: string;
@@ -771,23 +778,40 @@ function SRRDCItemPage() {
         toast({ title: "Error loading SPC list", description: err.message, variant: "destructive" });
       }
       try {
-        const { data } = await supabase.rpc("get_srr_pre_filter_options" as any);
-        const row = (data as any[])?.[0];
-        if (row) {
+        const now = Date.now();
+        let preRow: any = null;
+        if (_rpcCache.preFilterOptions && now - _rpcCache.preFilterOptions.ts < RPC_CACHE_TTL) {
+          preRow = _rpcCache.preFilterOptions.data;
+        } else {
+          const { data } = await supabase.rpc("get_srr_pre_filter_options" as any);
+          preRow = (data as any[])?.[0];
+          if (preRow) _rpcCache.preFilterOptions = { data: preRow, ts: now };
+        }
+        if (preRow) {
           setPreFilterOptions({
-            itemTypes: (row.item_types || []).map((v: string) => ({ value: v, display: v })),
-            buyingStatuses: (row.buying_statuses || []).map((v: string) => ({ value: v, display: v })),
-            poGroups: (row.po_groups || []).map((v: string) => ({ value: v, display: v })),
+            itemTypes: (preRow.item_types || []).map((v: string) => ({ value: v, display: v })),
+            buyingStatuses: (preRow.buying_statuses || []).map((v: string) => ({ value: v, display: v })),
+            poGroups: (preRow.po_groups || []).map((v: string) => ({ value: v, display: v })),
           });
         }
       } catch (err: any) {
         console.error("Pre-filter options load failed:", err);
       }
       try {
+        const now = Date.now();
         const { hasActiveFilterTemplates } = await import("@/lib/filterTemplates");
         const skipDefaults = await hasActiveFilterTemplates("srr_dc");
-        const { data } = await supabase.rpc("get_srr_hierarchy_options" as any, { p_skip_default_filters: skipDefaults });
-        if (Array.isArray(data)) setHierarchyRows(data as any);
+        if (_rpcCache.hierarchyOptions &&
+            now - _rpcCache.hierarchyOptions.ts < RPC_CACHE_TTL &&
+            _rpcCache.hierarchyOptions.skipDefaults === skipDefaults) {
+          setHierarchyRows(_rpcCache.hierarchyOptions.data);
+        } else {
+          const { data } = await supabase.rpc("get_srr_hierarchy_options" as any, { p_skip_default_filters: skipDefaults });
+          if (Array.isArray(data)) {
+            setHierarchyRows(data as any);
+            _rpcCache.hierarchyOptions = { data, ts: now, skipDefaults };
+          }
+        }
       } catch (err: any) {
         console.error("Hierarchy options load failed:", err);
       }
