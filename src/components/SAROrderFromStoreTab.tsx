@@ -923,7 +923,10 @@ export default function SAROrderFromStoreTab() {
       );
       const types = new Set((data || []).map((d: any) => d.doc_type));
       setViewItems(merged);
-      setViewTitle(`${ids.length} docs selected`);
+      const poCount = (data || []).filter((d: any) => d.doc_type === "PO").length;
+      const roCount = (data || []).filter((d: any) => d.doc_type === "RO").length;
+      const parts = [poCount > 0 && `PO ${poCount}`, roCount > 0 && `RO ${roCount}`].filter(Boolean);
+      setViewTitle(`Open All Selected — ${parts.join(" + ")}`);
       setViewDocType(types.size === 1 ? (types.values().next().value as "RO" | "PO") : "MIXED");
       setViewPage(0); setViewExportCount({ dc: 0, d2s: 0 });
     } catch (e: any) { toast({ title: "Load error", description: e.message, variant: "destructive" }); }
@@ -1808,8 +1811,17 @@ export default function SAROrderFromStoreTab() {
                     const allKeys = new Set(resultDocs.map(doc => new Date(doc.created_at).toLocaleDateString("en-CA")));
                     setCollapsedBatches(allKeys);
                   }}>Collapse All</Button>
-                  {(selectedPoIds.size + selectedRoIds.size) > 1 && (
-                    <Button size="sm" variant="outline" onClick={showSelectedResultDocs} disabled={viewLoading}>{viewLoading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : null}Show Selected ({selectedPoIds.size + selectedRoIds.size})</Button>
+                  {(selectedPoIds.size + selectedRoIds.size) >= 1 && (
+                    <Button size="sm" variant="default" onClick={showSelectedResultDocs} disabled={viewLoading}
+                      className="h-7 text-xs bg-primary hover:bg-primary/90"
+                    >
+                      {viewLoading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5 mr-1" />}
+                      Open All Selected
+                      <span className="ml-1.5 flex items-center gap-0.5">
+                        {selectedPoIds.size > 0 && <span className="bg-blue-400/40 text-white text-[9px] px-1 rounded">PO {selectedPoIds.size}</span>}
+                        {selectedRoIds.size > 0 && <span className="bg-emerald-400/40 text-white text-[9px] px-1 rounded">RO {selectedRoIds.size}</span>}
+                      </span>
+                    </Button>
                   )}
                   {/* Multi-PO actions: show when ≥2 PO docs selected */}
                   {(() => {
