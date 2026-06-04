@@ -1800,6 +1800,14 @@ export default function SAROrderFromStoreTab() {
                   <div className="text-sm font-semibold">Result Docs</div>
                   {selectedResultIds.size > 0 && <Badge variant="secondary" className="text-xs">เลือก {selectedResultIds.size}</Badge>}
                   <Button size="sm" variant="outline" onClick={loadResultDocs} disabled={resultDocsLoading}><RefreshCw className={cn("w-3.5 h-3.5 mr-1", resultDocsLoading && "animate-spin")} />Refresh</Button>
+                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setCollapsedBatches(new Set())}>Expand All</Button>
+                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => {
+                    const allKeys = new Set(resultDocs.map(doc => {
+                      const ids = [...(doc.source_doc_ids || [])].sort().join(",");
+                      return ids || doc.doc_name.replace(/-(?:PO|RO)-.*/, "");
+                    }));
+                    setCollapsedBatches(allKeys);
+                  }}>Collapse All</Button>
                   {selectedResultIds.size > 1 && (
                     <Button size="sm" variant="outline" onClick={showSelectedResultDocs} disabled={viewLoading}>{viewLoading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : null}Show Selected ({selectedResultIds.size})</Button>
                   )}
