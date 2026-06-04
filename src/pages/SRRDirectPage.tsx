@@ -1046,6 +1046,8 @@ export default function SRRDirectPage() {
   // Tab 2 display
   const [showData, setShowData] = useState<D2SRow[]>(d2sStateRef.current?.showData || []);
   const [page, setPage] = useState(d2sStateRef.current?.page || 0);
+  // Immutable original on_order_store — keyed by row.id, set once when data loads, never mutated
+  const origOnOrderStoreRef = useRef<Map<string, number>>(new Map());
   const [pageSize, setPageSize] = useState(d2sStateRef.current?.pageSize || 30);
 
   // Tab 2: Custom Safety Days per Rank (persisted)
@@ -2165,6 +2167,10 @@ export default function SRRDirectPage() {
           return (a.store_name || "").localeCompare(b.store_name || "");
         });
         const _excluded = await (await import("@/lib/filterTemplates")).applyExcludeFilters(merged as any[], "srr_direct");
+        // Snapshot orig_on_order_store for Restore (immutable — never changed by Clear)
+        const origMap = new Map<string, number>();
+        (_excluded as any[]).forEach((r: any) => origMap.set(r.id, Number(r.on_order_store) || 0));
+        origOnOrderStoreRef.current = origMap;
         setShowData(_excluded as any);
         setSelectedRows(new Set());
         setActiveCell(null);
@@ -2478,6 +2484,10 @@ export default function SRRDirectPage() {
     }));
 
     const _excluded2 = await (await import("@/lib/filterTemplates")).applyExcludeFilters(merged as any[], "srr_direct");
+    // Snapshot orig_on_order_store for Restore (immutable)
+    const origMap2 = new Map<string, number>();
+    (_excluded2 as any[]).forEach((r: any) => origMap2.set(r.id, Number(r.on_order_store) || 0));
+    origOnOrderStoreRef.current = origMap2;
     setShowData(_excluded2 as any);
     setPage(0);
     setSelectedRows(new Set());
@@ -2502,10 +2512,16 @@ export default function SRRDirectPage() {
   };
 
   const restoreAllOnOrderStore = () => {
-    setShowData((rows) => rows.map((r) => recalcD2SRow({ ...r, on_order_store: r.orig_on_order_store })));
+    setShowData((rows) => rows.map((r) => {
+      const orig = origOnOrderStoreRef.current.get(r.id) ?? r.orig_on_order_store ?? 0;
+      return recalcD2SRow({ ...r, on_order_store: orig });
+    }));
     setVendorDocs((prev) => prev.map((doc) => ({
       ...doc,
-      data: doc.data.map((r) => recalcD2SRow({ ...r, on_order_store: r.orig_on_order_store })),
+      data: doc.data.map((r) => {
+        const orig = origOnOrderStoreRef.current.get(r.id) ?? r.orig_on_order_store ?? 0;
+        return recalcD2SRow({ ...r, on_order_store: orig });
+      }),
     })));
   };
 
@@ -3347,8 +3363,8 @@ export default function SRRDirectPage() {
                           ><X className="w-2.5 h-2.5" /></button>
                           <button
                             className="inline-flex items-center justify-center w-4 h-4 rounded border border-sky-400 text-sky-500 hover:bg-sky-50"
-                            onClick={(e) => { e.stopPropagation(); updateOnOrderStore(row.id, row.orig_on_order_store); }}
-                            title="คืนค่า ON ORDER เดิม"
+                            onClick={(e) => { e.stopPropagation(); const orig = origOnOrderStoreRef.current.get(row.id) ?? row.orig_on_order_store ?? 0; updateOnOrderStore(row.id, orig); }}
+                            title={`คืนค่า ON ORDER เดิม (${origOnOrderStoreRef.current.get(row.id) ?? row.orig_on_order_store ?? 0})`}
                           ><RotateCcw className="w-2.5 h-2.5" /></button>
                         </div>
                       ) : showEdit && col.key === "order_uom_edit" ? (
