@@ -897,6 +897,8 @@ export default function MinmaxCalPage() {
           p_user_id: user.id,
           p_n_factor: nFactor,
           p_doc_name: saveName || null,
+          p_doc_id: null,
+          p_force_new: false,
         }),
         "merge_minmax_doc",
       );
