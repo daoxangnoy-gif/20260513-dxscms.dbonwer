@@ -1874,7 +1874,6 @@ export default function SAROrderFromStoreTab() {
                                 </>
                               );
                             })()}
-                            </div>
                           </PopoverContent>
                         </Popover>
                         <div className="flex items-center gap-1">
