@@ -2007,38 +2007,38 @@ export default function SAROrderFromStoreTab() {
                         return (
                           <div key={key} className="border-b last:border-b-0">
                             {/* Date header */}
-                            <div className="px-3 py-2 flex items-center gap-2 bg-muted/50 border-b text-xs font-semibold select-none">
+                            <div className="px-3 py-2 flex items-center gap-2 bg-slate-700 text-white border-b text-xs font-semibold select-none">
                               <div onClick={e => e.stopPropagation()}>
                                 <Checkbox
                                   checked={allSelected}
-                                  className={someSelected ? "opacity-60" : ""}
+                                  className={cn("border-slate-400 data-[state=checked]:bg-white data-[state=checked]:text-slate-800", someSelected ? "opacity-60" : "")}
                                   onCheckedChange={toggleBatch}
                                 />
                               </div>
                               <button
-                                className="flex items-center gap-1.5 hover:text-primary shrink-0"
+                                className="flex items-center gap-1.5 hover:text-slate-200 shrink-0"
                                 onClick={() => setCollapsedBatches(s => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; })}
                               >
                                 {isCollapsed ? <ChevronRight className="w-3.5 h-3.5 shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 shrink-0" />}
                                 <span className="font-mono text-sm">{formatDateLabel(key)}</span>
                               </button>
-                              <span className="font-normal text-muted-foreground shrink-0">— {uniqueStores} สาขา</span>
-                              {poDocs.length > 0 && <Badge className="bg-blue-100 text-blue-700 border-blue-300 text-[10px] font-normal shrink-0">PO {poDocs.length}</Badge>}
-                              {roDocs.length > 0 && <Badge className="bg-emerald-100 text-emerald-700 border-emerald-300 text-[10px] font-normal shrink-0">RO {roDocs.length}</Badge>}
+                              <span className="font-normal text-slate-300 shrink-0">— {uniqueStores} สาขา</span>
+                              {poDocs.length > 0 && <Badge className="bg-blue-400/30 text-blue-100 border-blue-400/50 text-[10px] font-normal shrink-0">PO {poDocs.length}</Badge>}
+                              {roDocs.length > 0 && <Badge className="bg-emerald-400/30 text-emerald-100 border-emerald-400/50 text-[10px] font-normal shrink-0">RO {roDocs.length}</Badge>}
                               {/* Search input */}
                               <div className="flex items-center gap-1 ml-2" onClick={e => e.stopPropagation()}>
-                                <Search className="w-3 h-3 text-muted-foreground shrink-0" />
+                                <Search className="w-3 h-3 text-slate-400 shrink-0" />
                                 <input
                                   type="text"
                                   value={batchSearches[key] ?? ""}
                                   onChange={e => setBatchSearches(prev => ({ ...prev, [key]: e.target.value }))}
                                   placeholder="เสิร์ช Store / Doc..."
-                                  className="h-6 px-2 text-[11px] border rounded bg-background font-normal w-44 focus:outline-none focus:ring-1 focus:ring-primary/50"
+                                  className="h-6 px-2 text-[11px] border border-slate-500 rounded bg-slate-600 text-white placeholder:text-slate-400 font-normal w-44 focus:outline-none focus:ring-1 focus:ring-slate-300"
                                 />
                                 {(batchSearches[key] ?? "") && (
-                                  <button className="text-muted-foreground hover:text-foreground text-xs" onClick={() => setBatchSearches(prev => ({ ...prev, [key]: "" }))}>✕</button>
+                                  <button className="text-slate-300 hover:text-white text-xs" onClick={() => setBatchSearches(prev => ({ ...prev, [key]: "" }))}>✕</button>
                                 )}
-                                {search && <span className="text-[10px] text-muted-foreground font-normal">{filteredRows.length}/{allStoreRows.length}</span>}
+                                {search && <span className="text-[10px] text-slate-300 font-normal">{filteredRows.length}/{allStoreRows.length}</span>}
                               </div>
                             </div>
 
@@ -2062,14 +2062,7 @@ export default function SAROrderFromStoreTab() {
                                   {filteredRows.length === 0
                                     ? <tr><td colSpan={9} className="text-center py-4 text-muted-foreground">ไม่พบผลลัพธ์</td></tr>
                                     : filteredRows.map(({ store, po, ro, rowIdx }) => (
-                                    <tr key={`${store}-${rowIdx}`} className={cn(
-                                      "border-t",
-                                      rowIdx === 0
-                                        ? allStoreRows.findIndex(r => r.store === store) % 2 === 0
-                                          ? "bg-blue-50/40 hover:bg-blue-100/60"
-                                          : "bg-emerald-50/40 hover:bg-emerald-100/60"
-                                        : "bg-amber-50/30 hover:bg-amber-100/50"
-                                    )}>
+                                    <tr key={`${store}-${rowIdx}`} className="border-t hover:bg-muted/20">
                                       <td className="px-3 py-1.5 font-medium truncate max-w-[160px]" title={store}>
                                         {rowIdx === 0 ? store.replace(/^\d+-/, "") : <span className="text-muted-foreground/40">↳</span>}
                                       </td>
