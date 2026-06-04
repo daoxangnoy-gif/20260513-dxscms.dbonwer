@@ -2062,60 +2062,60 @@ export default function SAROrderFromStoreTab() {
                                   {filteredRows.length === 0
                                     ? <tr><td colSpan={9} className="text-center py-4 text-muted-foreground">ไม่พบผลลัพธ์</td></tr>
                                     : filteredRows.map(({ store, po, ro, rowIdx }) => (
-                                    <tr key={`${store}-${rowIdx}`} className="border-t hover:bg-primary/10 cursor-pointer"
-                                      onClick={() => {
-                                        setSelectedResultIds(s => {
-                                          const n = new Set(s);
-                                          const docsInRow = [po, ro].filter(Boolean) as OfsResultDoc[];
-                                          const allChecked = docsInRow.every(d => n.has(d.id));
-                                          if (allChecked) docsInRow.forEach(d => n.delete(d.id));
-                                          else docsInRow.forEach(d => n.add(d.id));
-                                          return n;
-                                        });
-                                        setSummedRows(null); setListExportCount({ dc: 0, d2s: 0 }); setVendorFilter(null); setVendorList([]);
-                                      }}
-                                    >
-                                      <td className="px-3 py-1.5 font-medium truncate max-w-[160px]" title={store}>
-                                        {rowIdx === 0 ? store.replace(/^\d+-/, "") : <span className="text-muted-foreground/40">↳</span>}
-                                      </td>
-                                      {/* PO */}
-                                      <td className="px-2 py-1.5 border-l text-center" onClick={e => e.stopPropagation()}>
-                                        {po && <Checkbox checked={selectedResultIds.has(po.id)} onCheckedChange={() => toggleDoc(po.id)} />}
-                                      </td>
-                                      <td className="px-2 py-1.5 font-mono">
-                                        {po
-                                          ? <div className="flex items-center gap-1">
-                                              <span className="truncate max-w-[160px]" title={po.doc_name}>{po.doc_name}</span>
-                                              {(docExportCounts.get(po.id) ?? 0) > 0 && <span className="shrink-0 text-[9px] bg-blue-100 text-blue-700 border border-blue-300 px-1 rounded">{docExportCounts.get(po.id)}x</span>}
-                                            </div>
-                                          : <span className="text-muted-foreground/50 italic text-[11px]">—</span>
-                                        }
-                                      </td>
-                                      <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">{po ? po.item_count.toLocaleString() : ""}</td>
-                                      <td className="px-2 py-1.5" onClick={e => e.stopPropagation()}>
-                                        {po && <div className="flex gap-0.5 justify-end">
-                                          <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={() => openResultDoc(po)} disabled={viewLoading}>Open</Button>
-                                          <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" onClick={() => deleteResultDoc(po.id, po.doc_name)}><Trash2 className="w-3 h-3" /></Button>
-                                        </div>}
-                                      </td>
-                                      {/* RO */}
-                                      <td className="px-2 py-1.5 border-l text-center" onClick={e => e.stopPropagation()}>
-                                        {ro && <Checkbox checked={selectedResultIds.has(ro.id)} onCheckedChange={() => toggleDoc(ro.id)} />}
-                                      </td>
-                                      <td className="px-2 py-1.5 font-mono">
-                                        {ro
-                                          ? <span className="truncate block max-w-[160px]" title={ro.doc_name}>{ro.doc_name}</span>
-                                          : <span className="text-muted-foreground/50 italic text-[11px]">—</span>
-                                        }
-                                      </td>
-                                      <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">{ro ? ro.item_count.toLocaleString() : ""}</td>
-                                      <td className="px-2 py-1.5" onClick={e => e.stopPropagation()}>
-                                        {ro && <div className="flex gap-0.5 justify-end">
-                                          <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={() => openResultDoc(ro)} disabled={viewLoading}>Open</Button>
-                                          <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" onClick={() => deleteResultDoc(ro.id, ro.doc_name)}><Trash2 className="w-3 h-3" /></Button>
-                                        </div>}
-                                      </td>
-                                    </tr>
+                                    {(() => {
+                                      const togglePO = po ? () => toggleDoc(po.id) : undefined;
+                                      const toggleRO = ro ? () => toggleDoc(ro.id) : undefined;
+                                      const poSelected = po ? selectedResultIds.has(po.id) : false;
+                                      const roSelected = ro ? selectedResultIds.has(ro.id) : false;
+                                      return (
+                                        <tr key={`${store}-${rowIdx}`} className="border-t">
+                                          <td className="px-3 py-1.5 font-medium truncate max-w-[160px]" title={store}>
+                                            {rowIdx === 0 ? store.replace(/^\d+-/, "") : <span className="text-muted-foreground/40">↳</span>}
+                                          </td>
+                                          {/* PO side — click to select */}
+                                          <td className={cn("px-2 py-1.5 border-l text-center cursor-pointer", po && (poSelected ? "bg-blue-100" : "hover:bg-blue-50"))} onClick={togglePO}>
+                                            {po && <Checkbox checked={poSelected} onCheckedChange={togglePO} onClick={e => e.stopPropagation()} />}
+                                          </td>
+                                          <td className={cn("px-2 py-1.5 font-mono cursor-pointer", po && (poSelected ? "bg-blue-100" : "hover:bg-blue-50"))} onClick={togglePO}>
+                                            {po
+                                              ? <div className="flex items-center gap-1">
+                                                  <span className="truncate max-w-[160px]" title={po.doc_name}>{po.doc_name}</span>
+                                                  {(docExportCounts.get(po.id) ?? 0) > 0 && <span className="shrink-0 text-[9px] bg-blue-100 text-blue-700 border border-blue-300 px-1 rounded">{docExportCounts.get(po.id)}x</span>}
+                                                </div>
+                                              : <span className="text-muted-foreground/50 italic text-[11px]">—</span>
+                                            }
+                                          </td>
+                                          <td className={cn("px-2 py-1.5 text-right tabular-nums text-muted-foreground cursor-pointer", po && (poSelected ? "bg-blue-100" : "hover:bg-blue-50"))} onClick={togglePO}>
+                                            {po ? po.item_count.toLocaleString() : ""}
+                                          </td>
+                                          <td className="px-2 py-1.5" onClick={e => e.stopPropagation()}>
+                                            {po && <div className="flex gap-0.5 justify-end">
+                                              <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={() => openResultDoc(po)} disabled={viewLoading}>Open</Button>
+                                              <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" onClick={() => deleteResultDoc(po.id, po.doc_name)}><Trash2 className="w-3 h-3" /></Button>
+                                            </div>}
+                                          </td>
+                                          {/* RO side — click to select */}
+                                          <td className={cn("px-2 py-1.5 border-l text-center cursor-pointer", ro && (roSelected ? "bg-emerald-100" : "hover:bg-emerald-50"))} onClick={toggleRO}>
+                                            {ro && <Checkbox checked={roSelected} onCheckedChange={toggleRO} onClick={e => e.stopPropagation()} />}
+                                          </td>
+                                          <td className={cn("px-2 py-1.5 font-mono cursor-pointer", ro && (roSelected ? "bg-emerald-100" : "hover:bg-emerald-50"))} onClick={toggleRO}>
+                                            {ro
+                                              ? <span className="truncate block max-w-[160px]" title={ro.doc_name}>{ro.doc_name}</span>
+                                              : <span className="text-muted-foreground/50 italic text-[11px]">—</span>
+                                            }
+                                          </td>
+                                          <td className={cn("px-2 py-1.5 text-right tabular-nums text-muted-foreground cursor-pointer", ro && (roSelected ? "bg-emerald-100" : "hover:bg-emerald-50"))} onClick={toggleRO}>
+                                            {ro ? ro.item_count.toLocaleString() : ""}
+                                          </td>
+                                          <td className="px-2 py-1.5" onClick={e => e.stopPropagation()}>
+                                            {ro && <div className="flex gap-0.5 justify-end">
+                                              <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={() => openResultDoc(ro)} disabled={viewLoading}>Open</Button>
+                                              <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-destructive" onClick={() => deleteResultDoc(ro.id, ro.doc_name)}><Trash2 className="w-3 h-3" /></Button>
+                                            </div>}
+                                          </td>
+                                        </tr>
+                                      );
+                                    })()}
                                   ))}
                                 </tbody>
                               </table>
