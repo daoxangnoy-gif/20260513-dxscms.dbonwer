@@ -209,24 +209,23 @@ export async function loadSnapshots(dateKey: string): Promise<SnapshotDoc[]> {
 }
 
 // Load all snapshots within 30 days
+// Load recent snapshots — metadata only (NO data column) for fast initial load
+// data column is huge JSONB — only load it via loadSnapshotBatch when user actually needs it
 export async function loadRecentSnapshots(onProgress?: (loaded: number) => void): Promise<SnapshotDoc[]> {
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - 30);
-  const cutoffStr = cutoff.toISOString().split("T")[0];
-
+  const cutoffStr = getCutoffDateKey(3);
   const data = await fetchAllPaged<any>(
-    () => supabase
+    () => (supabase as any)
       .from("srr_snapshots")
-      .select("*")
+      .select("id, vendor_code, vendor_display, spc_name, date_key, created_at, item_count, suggest_count, edit_count, edited_columns, source, user_id")
       .gte("date_key", cutoffStr)
       .order("date_key", { ascending: false }),
     1000,
-    50_000,
+    20_000,
     onProgress
   );
   return data.map((r: any) => ({
     ...r,
-    data: r.data || [],
+    data: [],           // data loaded on-demand via loadSnapshotBatch
     edited_columns: r.edited_columns || [],
   })) as SnapshotDoc[];
 }

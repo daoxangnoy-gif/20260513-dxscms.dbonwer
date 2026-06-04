@@ -161,7 +161,7 @@ export default function ReportPage() {
 
       // Latest snapshot per vendor → suggest count + sku detail
       setLoadStep("Loading snapshots...");
-      const recent = await loadRecentSnapshots();
+      const recent = await loadRecentSnapshots(); // metadata only — data:[] — used for suggest_count/item_count only
       const latestSnapByVendor = new Map<string, any>();
       for (const snap of recent) {
         const cur = latestSnapByVendor.get(snap.vendor_code);
