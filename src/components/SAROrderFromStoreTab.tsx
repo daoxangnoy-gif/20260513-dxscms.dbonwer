@@ -2070,9 +2070,11 @@ export default function SAROrderFromStoreTab() {
                                       return (
                                         <tr key={`${store}-${rowIdx}`} className="border-t"
                                           onClick={(e) => {
-                                            const side = (e.target as HTMLElement).closest("[data-side]")?.getAttribute("data-side");
-                                            if (side === "po" && po) toggleDoc(po.id);
-                                            else if (side === "ro" && ro) toggleDoc(ro.id);
+                                            const td = (e.target as HTMLElement).closest("td");
+                                            if (!td) return;
+                                            const idx = (td as HTMLTableCellElement).cellIndex;
+                                            if (idx >= 1 && idx <= 3 && po) toggleDoc(po.id);
+                                            else if (idx >= 5 && idx <= 7 && ro) toggleDoc(ro.id);
                                           }}
                                         >
                                           <td className="px-3 py-1.5 font-medium truncate max-w-[160px]" title={store}>
