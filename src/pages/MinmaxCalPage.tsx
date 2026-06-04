@@ -857,9 +857,9 @@ export default function MinmaxCalPage() {
         step(2, `ลบค่าเก่าตาม scope ก่อนบันทึก`, 12);
         let delCnt = 0;
         if (!hasStoreScope) {
-          // ไม่มี filter = full recalc → ลบทั้งหมด
+          // ไม่มี filter = full recalc → ลบทั้งหมด (ส่ง null เพื่อให้ PostgREST จับคู่ function signature ได้ถูก)
           const { data, error: delErr } = await (supabase as any)
-            .rpc("delete_minmax_by_filter", {});
+            .rpc("delete_minmax_by_filter", { p_stores: null });
           if (delErr) throw delErr;
           delCnt = Number(data) || 0;
         } else if (typeStoreFilter.length > 0) {
