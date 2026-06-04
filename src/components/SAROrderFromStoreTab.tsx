@@ -1047,7 +1047,7 @@ export default function SAROrderFromStoreTab() {
     const allStores = [...new Set(rows.map(r => r.store_name).filter(Boolean))];
 
     const [dmRows, stRows, poCostRows] = await Promise.all([
-      allSkus.length ? queryInChunks<any>("data_master", "sku_code", allSkus, "sku_code,vendor_code,vendor_display_name,main_barcode,unit_of_measure") : Promise.resolve([]),
+      allSkus.length ? queryInChunks<any>("data_master", "sku_code", allSkus, "sku_code,vendor_code,vendor_display_name,main_barcode,unit_of_measure,po_group") : Promise.resolve([]),
       allStores.length ? (async () => {
         const chunks: string[][] = [];
         for (let i = 0; i < allStores.length; i += 500) chunks.push(allStores.slice(i, i + 500));
@@ -1072,10 +1072,11 @@ export default function SAROrderFromStoreTab() {
       unit_uom: r.unit_uom || vcMap.get(r.sku_code)?.unit_of_measure || r.unit_of_measure || "Unit",
       ship_to: r.ship_to || shipMap.get(r.store_name) || "",
       po_cost_unit: r.po_cost_unit != null ? r.po_cost_unit : (poCostMap.has(r.sku_code) ? poCostMap.get(r.sku_code)! : null),
+      po_group: (r as any).po_group || vcMap.get(r.sku_code)?.po_group || "",
     }));
   };
 
-  // PO DC — group by vendor_code only, split by perPOChunk → srr_dc_po template
+  // PO DC — group by vendor_code → sub-group by po_group → split by perPOChunk (เหมือน SRR)
   const exportPODC = async (rows: ProcessedRow[]) => {
     const target = rows.filter(r => (!r._doc_type || r._doc_type === "PO") && r.qty_import > 0);
     if (!target.length) { toast({ title: "ไม่มีรายการ PO", variant: "destructive" }); return; }
@@ -1084,7 +1085,8 @@ export default function SAROrderFromStoreTab() {
       const enriched = await enrichRowsForExport(target);
       if (vendorFilter !== null && vendorFilter.size === 0) { toast({ title: "ไม่มี Vendor ที่เลือก", description: "กรุณาเลือก Vendor อย่างน้อย 1 รายการ", variant: "destructive" }); return; }
       const filtered = vendorFilter !== null ? enriched.filter(r => vendorFilter.has(r.vendor_code || "")) : enriched;
-      // vendor_code → sku_code → { qty, row }
+
+      // vendor_code → sku_code → { qty, row } (merge qty ถ้า sku ซ้ำ)
       const byVendor = new Map<string, Map<string, { qty: number; row: ProcessedRow }>>();
       for (const r of filtered) {
         const vc = r.vendor_code || "(no vendor)";
@@ -1094,15 +1096,24 @@ export default function SAROrderFromStoreTab() {
         if (!skuMap.has(r.sku_code)) skuMap.set(r.sku_code, { qty: rowQty, row: r });
         else skuMap.get(r.sku_code)!.qty += rowQty;
       }
+
       const out: any[] = [];
       for (const [vc, skuMap] of byVendor) {
-        const items = Array.from(skuMap.values());
-        for (let start = 0; start < items.length; start += perChunk) {
-          const chunkNum = Math.floor(start / perChunk) + 1;
-          const totalChunks = Math.ceil(items.length / perChunk);
-          const groupKey = totalChunks > 1 ? `${vc}-${chunkNum}` : vc;
-          items.slice(start, start + perChunk).forEach(({ qty, row }, idx) => {
-            out.push(toSrrPoRow(row, qty, idx === 0, groupKey, false));
+        // sub-group by po_group (fallback: vendor_code) — เหมือน SRR
+        const groupMap = new Map<string, { qty: number; row: ProcessedRow }[]>();
+        for (const item of skuMap.values()) {
+          const pg = ((item.row as any).po_group || "").trim() || vc;
+          if (!groupMap.has(pg)) groupMap.set(pg, []);
+          groupMap.get(pg)!.push(item);
+        }
+        for (const [groupKey, gItems] of groupMap) {
+          const chunks: { qty: number; row: ProcessedRow }[][] = [];
+          for (let i = 0; i < gItems.length; i += perChunk) chunks.push(gItems.slice(i, i + perChunk));
+          chunks.forEach((chunk, ci) => {
+            const chunkGroupKey = chunks.length > 1 ? `${groupKey}-${ci + 1}` : groupKey;
+            chunk.forEach(({ qty, row }, idx) => {
+              out.push(toSrrPoRow(row, qty, idx === 0, chunkGroupKey, false));
+            });
           });
         }
       }
