@@ -2062,7 +2062,19 @@ export default function SAROrderFromStoreTab() {
                                   {filteredRows.length === 0
                                     ? <tr><td colSpan={9} className="text-center py-4 text-muted-foreground">ไม่พบผลลัพธ์</td></tr>
                                     : filteredRows.map(({ store, po, ro, rowIdx }) => (
-                                    <tr key={`${store}-${rowIdx}`} className="border-t hover:bg-muted/20">
+                                    <tr key={`${store}-${rowIdx}`} className="border-t hover:bg-primary/10 cursor-pointer"
+                                      onClick={() => {
+                                        setSelectedResultIds(s => {
+                                          const n = new Set(s);
+                                          const docsInRow = [po, ro].filter(Boolean) as OfsResultDoc[];
+                                          const allChecked = docsInRow.every(d => n.has(d.id));
+                                          if (allChecked) docsInRow.forEach(d => n.delete(d.id));
+                                          else docsInRow.forEach(d => n.add(d.id));
+                                          return n;
+                                        });
+                                        setSummedRows(null); setListExportCount({ dc: 0, d2s: 0 }); setVendorFilter(null); setVendorList([]);
+                                      }}
+                                    >
                                       <td className="px-3 py-1.5 font-medium truncate max-w-[160px]" title={store}>
                                         {rowIdx === 0 ? store.replace(/^\d+-/, "") : <span className="text-muted-foreground/40">↳</span>}
                                       </td>
