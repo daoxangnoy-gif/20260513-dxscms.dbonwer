@@ -42,6 +42,10 @@ export function useDataTable(tableName: TableName) {
   const { toast } = useToast();
   const pageSize = 30;
 
+  const clearSidebarCountCache = () => {
+    try { sessionStorage.removeItem("sidebar_table_counts"); } catch {}
+  };
+
   const columns = TABLE_COLUMNS[tableName];
 
   // Reset search/filter state when switching to a different table (menu)
@@ -320,6 +324,7 @@ export function useDataTable(tableName: TableName) {
       }
 
       toast({ title: `${mode === "update" ? "Update" : "Import"} สำเร็จ`, description: `ประมวลผล ${processed} แถว` });
+      clearSidebarCountCache();
       await fetchData();
     } catch (err: any) {
       toast({ title: "Import Error", description: err.message, variant: "destructive" });
@@ -421,6 +426,7 @@ export function useDataTable(tableName: TableName) {
       const { error } = await supabase.from(tableName).delete().neq("id", "00000000-0000-0000-0000-000000000000");
       if (error) throw error;
       toast({ title: "ลบข้อมูลสำเร็จ" });
+      clearSidebarCountCache();
       setData([]); setTotalCount(0);
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -466,6 +472,7 @@ export function useDataTable(tableName: TableName) {
         if (error) throw error;
       }
       toast({ title: "ลบสำเร็จ", description: `${ids.length} แถว` });
+      clearSidebarCountCache();
       await fetchData();
     } catch (err: any) {
       toast({ title: "Delete Error", description: err.message, variant: "destructive" });
@@ -490,6 +497,7 @@ export function useDataTable(tableName: TableName) {
       const { error } = await supabase.from(tableName).update(updateData as any).eq("id", editingRow);
       if (error) throw error;
       toast({ title: "บันทึกสำเร็จ" });
+      clearSidebarCountCache();
       setEditingRow(null); setEditedData({});
       await fetchData();
     } catch (err: any) {

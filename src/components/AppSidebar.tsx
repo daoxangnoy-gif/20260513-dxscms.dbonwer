@@ -90,6 +90,18 @@ export default function AppSidebar({
 
   useEffect(() => {
     if (currentPage !== "data_control") return;
+    const CACHE_KEY = "sidebar_table_counts";
+    const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+    try {
+      const cached = sessionStorage.getItem(CACHE_KEY);
+      if (cached) {
+        const { ts, data } = JSON.parse(cached);
+        if (Date.now() - ts < CACHE_TTL) {
+          setCounts(data);
+          return;
+        }
+      }
+    } catch {}
     const loadCounts = async () => {
       const tables = DATA_TABLES.filter(t => t.name !== "range_store");
       const entries = await Promise.all(
@@ -98,7 +110,9 @@ export default function AppSidebar({
           return [t.name, count || 0] as const;
         })
       );
-      setCounts(Object.fromEntries(entries));
+      const data = Object.fromEntries(entries);
+      setCounts(data);
+      try { sessionStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), data })); } catch {}
     };
     loadCounts();
   }, [currentPage]);
