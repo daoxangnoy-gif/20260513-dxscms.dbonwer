@@ -72,6 +72,7 @@ import {
   getSnapshotBatches,
   loadSnapshotBatch,
   mergeSnapshotBatches,
+  pruneOldSnapshots,
   type SnapshotBatch,
 } from "@/lib/snapshotService";
 import { ListImportPO, getLocalPOBatches, applyHighPrecisionFormat } from "@/components/ListImportPO";
@@ -1277,6 +1278,7 @@ export default function SRRDirectPage() {
         });
     }
     // Load distinct snapshot dates (for Filter Date dropdown)
+    pruneOldSnapshots(["srr_d2s_snapshots"]).catch(() => {});
     Promise.all([getD2SSnapshotDates(), getSnapshotBatches("srr_d2s_snapshots")])
       .then(([dates, batches]) => {
         setSnapshotDates(dates);
@@ -2236,6 +2238,7 @@ export default function SRRDirectPage() {
             }
           } catch {}
           savedNote = " · บันทึกแล้ว";
+          pruneOldSnapshots(["srr_d2s_snapshots"]).catch(() => {});
         } catch (saveErr: any) {
           console.error("Auto-save D2S to DB failed:", saveErr);
           toast({ title: "⚠️ บันทึก DB ไม่สำเร็จ", description: saveErr.message, variant: "destructive" });
