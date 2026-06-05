@@ -2026,9 +2026,10 @@ export default function SRRDirectPage() {
         setLoadingDetail(`SPC ${spcName} · กำลังคำนวณ Min/Max/Stock/Sales (${filteredRaw.length.toLocaleString()} rows)`);
         let calculated = buildD2SRows(filteredRaw);
 
-        // Apply Pack/Box (qty) from latest Range Store snapshot
+        // Apply Pack/Box (qty) from latest Range Store snapshot — targeted fetch by SKU
         try {
-          const pbMap = await getLatestRangeStorePackBox();
+          const skus = [...new Set(calculated.map(r => r.sku_code).filter(Boolean))];
+          const pbMap = await getLatestRangeStorePackBox(skus);
           if (pbMap.size > 0) {
             calculated = calculated.map(r => {
               const pb = pbMap.get(r.sku_code);
@@ -2473,9 +2474,10 @@ export default function SRRDirectPage() {
       return (a.store_name || "").localeCompare(b.store_name || "");
     });
 
-    // Overlay Pack/Box (qty) from latest Range Store — fixes legacy docs saved without pack/box
+    // Overlay Pack/Box (qty) from latest Range Store — targeted fetch by SKU
     try {
-      const pbMap = await getLatestRangeStorePackBox();
+      const skus = [...new Set(merged.map((r) => r.sku_code).filter(Boolean))];
+      const pbMap = await getLatestRangeStorePackBox(skus);
       if (pbMap.size > 0) {
         merged = merged.map((r) => {
           if ((r as any).pack != null && (r as any).box != null) return r;
