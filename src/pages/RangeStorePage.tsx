@@ -236,6 +236,7 @@ export default function RangeStorePage() {
   const [prepAvgStores, setPrepAvgStores] = useState<string[]>(cache.prepareFilter.avgStores);
   const [prepRangeStores, setPrepRangeStores] = useState<string[]>(cache.prepareFilter.rangeStores);
   const [prepTypeStores, setPrepTypeStores] = useState<string[]>(cache.prepareFilter.typeStores);
+  const [prepFetchAll, setPrepFetchAll] = useState(false);
   // Pre-Prepare row filter (Hierarchy + Attributes + SKU) — บังคับเลือก ≥1 อย่างก่อน Read
   const [prepDivGroups, setPrepDivGroups] = useState<string[]>([]);
   const [prepDivisions, setPrepDivisions] = useState<string[]>([]);
@@ -460,9 +461,10 @@ export default function RangeStorePage() {
         p_avg_stores: prepAvgStores.length > 0 ? prepAvgStores : null,
         p_range_stores: prepRangeStores.length > 0 ? prepRangeStores : null,
         p_type_stores: prepTypeStores.length > 0 ? prepTypeStores : null,
+        p_strict_range: prepFetchAll,
       };
       const rawRows: any[] = await rpcAllParallel("read_range_store_view", params, {
-        batch: 1000, concurrency: 6, signal: ctrl.signal, onProgress,
+        batch: 2000, concurrency: 6, signal: ctrl.signal, onProgress,
       });
       if (ctrl.signal.aborted) throw new Error("ABORTED");
       const rows: any[] = await (await import("@/lib/filterTemplates")).applyExcludeFilters(rawRows, "range_store");
@@ -2104,6 +2106,17 @@ export default function RangeStorePage() {
           onChange={(e) => setPrepSkuText(e.target.value)}
           className="h-7 w-44 text-xs"
         />
+        {(prepAvgStores.length > 0 || prepRangeStores.length > 0 || prepTypeStores.length > 0) && (
+          <label className="flex items-center gap-1.5 cursor-pointer select-none text-xs text-muted-foreground hover:text-foreground">
+            <input
+              type="checkbox"
+              checked={prepFetchAll}
+              onChange={e => setPrepFetchAll(e.target.checked)}
+              className="w-3.5 h-3.5 accent-primary"
+            />
+            ดึงทั้งหมด
+          </label>
+        )}
         {(prepAvgStores.length > 0 || prepRangeStores.length > 0 || prepTypeStores.length > 0 ||
           prepDivGroups.length > 0 || prepDivisions.length > 0 || prepDepartments.length > 0 ||
           prepSubDepts.length > 0 || prepClasses.length > 0 || prepItemTypes.length > 0 ||
