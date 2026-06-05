@@ -34,7 +34,7 @@ import {
   deleteSnapshotDocuments, getSnapshotDates, loadSnapshots,
   cleanupOldSnapshots, savePODocument, loadSavedPODocs, deletePODocument,
   buildSnapshotBatchesFromDocs, getSnapshotBatches, loadSnapshotBatch,
-  mergeSnapshotBatches, pruneOldSnapshots, type SnapshotBatch,
+  mergeSnapshotBatches, pruneOldSnapshots, type SnapshotBatch, fetchSnapshotDataByIds,
 } from "@/lib/snapshotService";
 import { SnapshotBatchPicker } from "@/components/SnapshotBatchPicker";
 import { SrrImportFilter, type SrrImportMode, type ImportedItem, type ImportedVendor } from "@/components/SrrImportFilter";
@@ -1877,6 +1877,21 @@ function SRRDCItemPage() {
     }
     if (vendorFilter.length > 0) {
       docs = docs.filter(d => vendorFilter.includes(d.vendor_code));
+    }
+
+    // Lazy-load data for docs that haven't been fetched yet
+    const unloaded = docs.filter(d => d.data.length === 0 && d.item_count > 0);
+    if (unloaded.length > 0) {
+      const dataMap = await fetchSnapshotDataByIds(unloaded.map(d => d.id));
+      setVendorDocs(prev => prev.map(d => {
+        if (!dataMap.has(d.id)) return d;
+        return { ...d, data: patchSnapshotRows(dataMap.get(d.id) as SRRRow[]) };
+      }));
+      // Sync local docs reference with newly loaded data
+      docs = docs.map(d => dataMap.has(d.id)
+        ? { ...d, data: patchSnapshotRows(dataMap.get(d.id) as SRRRow[]) }
+        : d
+      );
     }
 
     // Merge data

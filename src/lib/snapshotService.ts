@@ -164,7 +164,9 @@ export async function getSnapshotBatches(table: "srr_snapshots" | "srr_d2s_snaps
   }));
 }
 
-// Load snapshots for a specific batch (created_at within the same MINUTE)
+const SNAPSHOT_META_FIELDS = "id, vendor_code, vendor_display, spc_name, date_key, created_at, updated_at, item_count, suggest_count, edit_count, edited_columns, source, user_id";
+
+// Load snapshots for a specific batch (created_at within the same MINUTE) — metadata only, data loaded lazily
 export async function loadSnapshotBatch(
   createdAtIso: string,
   table: "srr_snapshots" | "srr_d2s_snapshots" = "srr_snapshots"
@@ -176,7 +178,7 @@ export async function loadSnapshotBatch(
   const data = await fetchAllPaged<any>(
     () => (supabase as any)
       .from(table)
-      .select("*")
+      .select(SNAPSHOT_META_FIELDS)
       .gte("created_at", start.toISOString())
       .lt("created_at", end.toISOString())
       .order("spc_name", { ascending: true }),
@@ -185,17 +187,17 @@ export async function loadSnapshotBatch(
   );
   return data.map((r: any) => ({
     ...r,
-    data: r.data || [],
+    data: [],            // loaded on-demand via fetchSnapshotDataByIds
     edited_columns: r.edited_columns || [],
   }));
 }
 
-// Load snapshots for a specific date
+// Load snapshots for a specific date — metadata only, data loaded lazily
 export async function loadSnapshots(dateKey: string): Promise<SnapshotDoc[]> {
   const data = await fetchAllPaged<any>(
     () => supabase
       .from("srr_snapshots")
-      .select("*")
+      .select(SNAPSHOT_META_FIELDS as any)
       .eq("date_key", dateKey)
       .order("spc_name", { ascending: true }),
     1000,
@@ -203,7 +205,7 @@ export async function loadSnapshots(dateKey: string): Promise<SnapshotDoc[]> {
   );
   return data.map((r: any) => ({
     ...r,
-    data: r.data || [],
+    data: [],            // loaded on-demand via fetchSnapshotDataByIds
     edited_columns: r.edited_columns || [],
   })) as SnapshotDoc[];
 }
@@ -319,6 +321,25 @@ export async function saveSnapshots(
     });
   }
 
+}
+
+// Fetch only the `data` field for a list of snapshot ids — used for lazy loading
+export async function fetchSnapshotDataByIds(
+  ids: string[],
+  table: "srr_snapshots" | "srr_d2s_snapshots" = "srr_snapshots"
+): Promise<Map<string, any[]>> {
+  const result = new Map<string, any[]>();
+  const chunkSize = 100;
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const chunk = ids.slice(i, i + chunkSize);
+    const { data, error } = await (supabase as any)
+      .from(table)
+      .select("id, data")
+      .in("id", chunk);
+    if (error) throw error;
+    for (const row of data || []) result.set(row.id, row.data || []);
+  }
+  return result;
 }
 
 // Update a single snapshot's data (for edits)
