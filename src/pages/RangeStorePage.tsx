@@ -260,6 +260,8 @@ export default function RangeStorePage() {
 
   const [loadingPhase, setLoadingPhase] = useState<string | null>(null);
   const [loadProgress, setLoadProgress] = useState<{ loaded: number; total: number | null } | null>(null);
+  const [loadElapsed, setLoadElapsed] = useState(0);
+  const loadTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [snapshots, setSnapshots] = useState<any[]>([]);
   const [previewSnap, setPreviewSnap] = useState<any | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -397,11 +399,25 @@ export default function RangeStorePage() {
 
   // Fast prepare: ดึงจาก MV โดยส่ง filter เข้า DB ก่อน → DB ตัด jsonb keys ที่ไม่ต้องการ → payload เล็ก
   // Incremental: ถ้ามีข้อมูลเดิมอยู่แล้ว → merge per_store/avg_per_store เข้ากับของเดิม (ไม่ทับ)
+  function startLoadTimer() {
+    setLoadElapsed(0);
+    if (loadTimerRef.current) clearInterval(loadTimerRef.current);
+    const t0 = Date.now();
+    loadTimerRef.current = setInterval(() => {
+      setLoadElapsed(Math.floor((Date.now() - t0) / 100) / 10);
+    }, 100);
+  }
+
+  function stopLoadTimer() {
+    if (loadTimerRef.current) { clearInterval(loadTimerRef.current); loadTimerRef.current = null; }
+  }
+
   function stopPrepare() {
     if (prepareAbortRef.current) {
       prepareAbortRef.current.abort();
       prepareAbortRef.current = null;
     }
+    stopLoadTimer();
     setLoadingPhase(null);
     setLoadProgress(null);
     toast.info("ยุดการโหลดแล้ว");
@@ -440,6 +456,7 @@ export default function RangeStorePage() {
     prepareAbortRef.current = ctrl;
     setLoadingPhase("read-view");
     setLoadProgress({ loaded: 0, total: null });
+    startLoadTimer();
     try {
       const onProgress = (loaded: number, totalEst: number | null) => {
         setLoadProgress(prev => ({
@@ -560,6 +577,7 @@ export default function RangeStorePage() {
         rangeStores: [...prepRangeStores],
         typeStores: [...prepTypeStores],
       };
+      stopLoadTimer();
       setLoadingPhase(null);
       setLoadProgress(null);
       rerender();
@@ -569,6 +587,7 @@ export default function RangeStorePage() {
       toast.success(`Prepare ${mode} ${cache.master.length.toLocaleString()} SKU ${filterTag} · ${ms}ms`);
       console.log(`[RangeStore] prepare ${mode}: +${rows.length} rows, total ${cache.master.length} · ${ms}ms · hasStoreFilter=${hasStoreFilter}`);
     } catch (err: any) {
+      stopLoadTimer();
       setLoadingPhase(null);
       setLoadProgress(null);
       if (err?.message === "ABORTED") {
@@ -1965,7 +1984,13 @@ export default function RangeStorePage() {
         {loadingPhase && (
           <span className="text-[11px] inline-flex items-center gap-1.5 text-primary">
             <Loader2 className="h-3 w-3 animate-spin" />
-            <span>{loadingPhase}</span>
+            <span>
+              {loadingPhase === "read-view" ? "กำลังดึงข้อมูล Range Store..." :
+               loadingPhase === "stores" ? "กำลังโหลดรายการสาขา..." :
+               loadingPhase === "sync-view" ? "กำลัง Sync ข้อมูล..." :
+               loadingPhase === "clearing" ? "กำลังล้างข้อมูล..." :
+               loadingPhase}
+            </span>
             {loadProgress && (() => {
               const { loaded, total } = loadProgress;
               const pct = total && total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : null;
@@ -1984,6 +2009,7 @@ export default function RangeStorePage() {
                 </span>
               );
             })()}
+            <span className="tabular-nums text-muted-foreground">{loadElapsed.toFixed(1)}s</span>
             <Button
               variant="ghost"
               size="sm"
