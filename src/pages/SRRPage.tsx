@@ -64,7 +64,24 @@ const _rpcCache: {
   preFilterOptions?: { data: any; ts: number };
   hierarchyOptions?: { data: any; ts: number; skipDefaults: boolean };
 } = {};
-const RPC_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const RPC_CACHE_TTL = 30 * 60 * 1000; // 30 minutes — vendor/division data changes rarely
+
+const SESSION_KEY_PRE = "srr_pre_filter_options";
+const SESSION_KEY_HIER = "srr_hierarchy_options";
+
+function sessionCacheGet<T>(key: string, ttl: number): T | null {
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    const { data, ts } = JSON.parse(raw);
+    if (Date.now() - ts > ttl) { sessionStorage.removeItem(key); return null; }
+    return { data, ts } as T;
+  } catch { return null; }
+}
+
+function sessionCacheSet(key: string, data: any): void {
+  try { sessionStorage.setItem(key, JSON.stringify({ data, ts: Date.now() })); } catch {}
+}
 
 // --- Multi-Select Dropdown ---
 function MultiSelect({ label, options, selected, onChange, searchable = true, compact = false }: {
@@ -780,12 +797,22 @@ function SRRDCItemPage() {
       try {
         const now = Date.now();
         let preRow: any = null;
+        // 1st: in-memory cache, 2nd: sessionStorage, 3rd: DB
         if (_rpcCache.preFilterOptions && now - _rpcCache.preFilterOptions.ts < RPC_CACHE_TTL) {
           preRow = _rpcCache.preFilterOptions.data;
         } else {
-          const { data } = await supabase.rpc("get_srr_pre_filter_options" as any);
-          preRow = (data as any[])?.[0];
-          if (preRow) _rpcCache.preFilterOptions = { data: preRow, ts: now };
+          const session = sessionCacheGet<{ data: any; ts: number }>(SESSION_KEY_PRE, RPC_CACHE_TTL);
+          if (session) {
+            preRow = session.data;
+            _rpcCache.preFilterOptions = { data: preRow, ts: session.ts };
+          } else {
+            const { data } = await supabase.rpc("get_srr_pre_filter_options" as any);
+            preRow = (data as any[])?.[0];
+            if (preRow) {
+              _rpcCache.preFilterOptions = { data: preRow, ts: now };
+              sessionCacheSet(SESSION_KEY_PRE, preRow);
+            }
+          }
         }
         if (preRow) {
           setPreFilterOptions({
@@ -801,15 +828,25 @@ function SRRDCItemPage() {
         const now = Date.now();
         const { hasActiveFilterTemplates } = await import("@/lib/filterTemplates");
         const skipDefaults = await hasActiveFilterTemplates("srr_dc");
+        // 1st: in-memory cache, 2nd: sessionStorage, 3rd: DB
         if (_rpcCache.hierarchyOptions &&
             now - _rpcCache.hierarchyOptions.ts < RPC_CACHE_TTL &&
             _rpcCache.hierarchyOptions.skipDefaults === skipDefaults) {
           setHierarchyRows(_rpcCache.hierarchyOptions.data);
         } else {
-          const { data } = await supabase.rpc("get_srr_hierarchy_options" as any, { p_skip_default_filters: skipDefaults });
-          if (Array.isArray(data)) {
-            setHierarchyRows(data as any);
-            _rpcCache.hierarchyOptions = { data, ts: now, skipDefaults };
+          const session = sessionCacheGet<{ data: any; ts: number }>(
+            `${SESSION_KEY_HIER}_${skipDefaults}`, RPC_CACHE_TTL
+          );
+          if (session) {
+            setHierarchyRows(session.data);
+            _rpcCache.hierarchyOptions = { data: session.data, ts: session.ts, skipDefaults };
+          } else {
+            const { data } = await supabase.rpc("get_srr_hierarchy_options" as any, { p_skip_default_filters: skipDefaults });
+            if (Array.isArray(data)) {
+              setHierarchyRows(data as any);
+              _rpcCache.hierarchyOptions = { data, ts: now, skipDefaults };
+              sessionCacheSet(`${SESSION_KEY_HIER}_${skipDefaults}`, data);
+            }
           }
         }
       } catch (err: any) {
