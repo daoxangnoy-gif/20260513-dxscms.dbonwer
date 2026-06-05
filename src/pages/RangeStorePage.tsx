@@ -464,7 +464,7 @@ export default function RangeStorePage() {
         p_strict_range: prepFetchAll,
       };
       const rawRows: any[] = await rpcAllParallel("read_range_store_view", params, {
-        batch: 2000, concurrency: 6, signal: ctrl.signal, onProgress,
+        batch: 1000, concurrency: 6, signal: ctrl.signal, onProgress,
       });
       if (ctrl.signal.aborted) throw new Error("ABORTED");
       const rows: any[] = await (await import("@/lib/filterTemplates")).applyExcludeFilters(rawRows, "range_store");
