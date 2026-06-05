@@ -4413,7 +4413,7 @@ export default function SRRDirectPage() {
         })}
         onDeleteDoc={(d) => deleteVendorDoc(d.id)}
         onDeleteDocs={(ids) => deleteDocsByIds(ids)}
-        onOpenDoc={(d) => {
+        onOpenDoc={async (d) => {
           const doc = vendorDocs.find((x) => x.id === d.id);
           if (!doc) return;
           const src = (doc.source || "filter") as "filter" | "vendor" | "import";
@@ -4422,14 +4422,20 @@ export default function SRRDirectPage() {
           setVendorFilter([doc.vendor_code]);
           setStoreFilter([doc.store_name]);
           setOrderDayFilter([]); setItemTypeFilter([]); setTypeStoreFilter([]); setBuyingStatusFilter([]); setPoGroupFilter([]);
-          setShowData(doc.data);
+          let rowData = doc.data;
+          if (rowData.length === 0 && doc.item_count > 0) {
+            const dataMap = await fetchSnapshotDataByIds([doc.id], "srr_d2s_snapshots");
+            rowData = dataMap.get(doc.id) || [];
+            setVendorDocs((prev) => prev.map((x) => x.id === doc.id ? { ...x, data: rowData } : x));
+          }
+          setShowData(rowData);
           setPage(0);
           setSelectedRows(new Set());
           setActiveCell(null);
           setActiveTab("show-edit");
           setDocsDialogOpen(false);
         }}
-        onOpenDocs={(ds) => {
+        onOpenDocs={async (ds) => {
           const docs = ds.map((d) => vendorDocs.find((x) => x.id === d.id)).filter(Boolean) as typeof vendorDocs;
           if (docs.length === 0) return;
           const src = (docs[0].source || "filter") as "filter" | "vendor" | "import";
@@ -4438,9 +4444,18 @@ export default function SRRDirectPage() {
           setVendorFilter([...new Set(docs.map((x) => x.vendor_code))]);
           setStoreFilter([...new Set(docs.map((x) => x.store_name).filter(Boolean))]);
           setOrderDayFilter([]); setItemTypeFilter([]); setTypeStoreFilter([]); setBuyingStatusFilter([]); setPoGroupFilter([]);
+          const unloadedDocs = docs.filter((x) => x.data.length === 0 && x.item_count > 0);
+          let loadedMap = new Map<string, any[]>();
+          if (unloadedDocs.length > 0) {
+            loadedMap = await fetchSnapshotDataByIds(unloadedDocs.map((x) => x.id), "srr_d2s_snapshots");
+            setVendorDocs((prev) => prev.map((x) => loadedMap.has(x.id) ? { ...x, data: loadedMap.get(x.id) as any[] } : x));
+          }
           const seen = new Set<string>();
           const merged: any[] = [];
-          for (const doc of docs) for (const r of doc.data) { if (seen.has(r.id)) continue; seen.add(r.id); merged.push(r); }
+          for (const doc of docs) {
+            const rows = loadedMap.has(doc.id) ? loadedMap.get(doc.id) as any[] : doc.data;
+            for (const r of rows) { if (seen.has(r.id)) continue; seen.add(r.id); merged.push(r); }
+          }
           setShowData(merged);
           setPage(0);
           setSelectedRows(new Set());
