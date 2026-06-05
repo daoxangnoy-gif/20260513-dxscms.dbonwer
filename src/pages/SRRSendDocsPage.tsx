@@ -1233,13 +1233,24 @@ export default function SRRSendDocsPage() {
         clearDestDraft();
         return;
       }
-      await openDestination(ship);
+      // Preload PO info only (same async part as openDestination, but without overwriting dest state)
+      const allCodes = new Set<string>(ship.origin_codes || []);
+      movements.filter(m => m.shipment_id === ship.id).forEach(m => (m.codes || []).forEach(c => allCodes.add(c)));
+      const missingPo = Array.from(allCodes).filter(c => !poInfoMap[c]);
+      if (missingPo.length > 0) {
+        const map = await fetchPoInfo(missingPo);
+        setPoInfoMap(prev => ({ ...prev, ...map }));
+      }
+      // Set all state from draft in one batch — do NOT call openDestination() which would overwrite destCodes
+      setActiveShipment(ship);
       setDestCodes(d.destCodes || []);
       setDestLocation(d.destLocation || "");
       setDestDepositor(d.destDepositor || "");
       setDestReceiver(d.destReceiver || "");
       setDestNotes(d.destNotes || "");
       setDestAction(d.destAction || "arrived");
+      setCompareResult(null);
+      setDestOpen(true);
       setMainTab("scan");
       setHasDestDraft(false);
     } catch { /* ignore */ }
@@ -1795,6 +1806,18 @@ export default function SRRSendDocsPage() {
                 return (
                   <Button variant="outline" className="border-orange-400 text-orange-600 hover:bg-orange-50" onClick={restoreDraft}>
                     <ScanLine className="w-4 h-4 mr-2" />สแกนต่อ ({count} รายการค้างอยู่)
+                  </Button>
+                );
+              } catch { return null; }
+            })()}
+            {hasDestDraft && (() => {
+              try {
+                const d = JSON.parse(localStorage.getItem(DEST_DRAFT_KEY) || "{}");
+                const count = d.destCodes?.length ?? 0;
+                const shipName = items.find(s => s.id === d.shipmentId)?.doc_name || "";
+                return (
+                  <Button variant="outline" className="border-blue-400 text-blue-600 hover:bg-blue-50" onClick={restoreDestDraft}>
+                    <Truck className="w-4 h-4 mr-2" />สะแกนตรวจรับต่อ — {shipName} ({count} รายการ)
                   </Button>
                 );
               } catch { return null; }
