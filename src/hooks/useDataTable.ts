@@ -96,7 +96,7 @@ export function useDataTable(tableName: TableName) {
   const fetchData = async () => {
     setLoading(true);
     try {
-      let query: any = supabase.from(tableName).select("*", { count: "exact" });
+      let query: any = supabase.from(tableName).select("*", { count: "planned" });
       query = applyChipFilters(query);
       const { data: rows, count, error } = await query.range(page * pageSize, (page + 1) * pageSize - 1);
       if (error) throw error;
