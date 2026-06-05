@@ -860,16 +860,19 @@ function SRRDCItemPage() {
     });
   }, [docsForTab2]);
 
-  // Derive filter options from vendorDocs data (mode-scoped)
+  // Derive filter options from vendorDocs (mode-scoped)
+  // vendors: from doc metadata (always available); row-level options: from loaded data only (populated after Show)
   const docDerivedOptions = useMemo(() => {
-    const allRows = docsForTab2.flatMap(d => d.data);
     const vendors = new Map<string, string>();
+    for (const d of docsForTab2) {
+      if (d.vendor_code) vendors.set(d.vendor_code, d.vendor_display || d.vendor_code);
+    }
+    const allRows = docsForTab2.flatMap(d => d.data);
     const orderDays = new Set<string>();
     const itemTypes = new Set<string>();
     const buyingStatuses = new Set<string>();
     const poGroups = new Set<string>();
     for (const row of allRows) {
-      if (row.vendor_code) vendors.set(row.vendor_code, row.vendor_display || row.vendor_code);
       if (row.order_day) orderDays.add(row.order_day);
       if (row.item_type) itemTypes.add(row.item_type);
       if (row.buying_status) buyingStatuses.add(row.buying_status);
@@ -886,13 +889,12 @@ function SRRDCItemPage() {
 
   // Update vendor options when doc SPC selection changes (mode-scoped)
   useEffect(() => {
-    const allRows = docsForTab2.flatMap(d => d.data);
-    let filtered = allRows;
-    if (selectedDocSpc.length > 0) filtered = filtered.filter(r => selectedDocSpc.includes(r.spc_name));
-    if (orderDayFilter.length > 0) filtered = filtered.filter(r => orderDayFilter.includes(r.order_day));
+    // Derive vendor options from doc metadata (always available, no need to wait for data load)
+    let filteredDocs = docsForTab2;
+    if (selectedDocSpc.length > 0) filteredDocs = filteredDocs.filter(d => selectedDocSpc.includes(d.spc_name));
     const seen = new Map<string, string>();
-    for (const r of filtered) {
-      if (r.vendor_code && !seen.has(r.vendor_code)) seen.set(r.vendor_code, r.vendor_display || r.vendor_code);
+    for (const d of filteredDocs) {
+      if (d.vendor_code && !seen.has(d.vendor_code)) seen.set(d.vendor_code, d.vendor_display || d.vendor_code);
     }
     const vList = [...seen.entries()].map(([k, v]) => ({ value: k, display: `${k} - ${v}` })).sort((a, b) => a.value.localeCompare(b.value));
     setVendorOptions(vList);
@@ -3681,7 +3683,7 @@ function SRRDCItemPage() {
         })}
         onDeleteDoc={(d) => deleteVendorDoc(d.id)}
         onDeleteDocs={(ids) => deleteDocsByIds(ids)}
-        onOpenDoc={(d) => {
+        onOpenDoc={async (d) => {
           const doc = vendorDocs.find((x) => x.id === d.id);
           if (!doc) return;
           const src = (doc.source || "filter") as "filter" | "vendor" | "import";
@@ -3689,14 +3691,20 @@ function SRRDCItemPage() {
           setSelectedDocSpc([doc.spc_name]);
           setVendorFilter([doc.vendor_code]);
           setOrderDayFilter([]); setItemTypeFilter([]); setBuyingStatusFilter([]); setPoGroupFilter([]);
-          setShowData(doc.data);
+          let rowData = doc.data;
+          if (rowData.length === 0 && doc.item_count > 0) {
+            const dataMap = await fetchSnapshotDataByIds([doc.id]);
+            rowData = patchSnapshotRows((dataMap.get(doc.id) || []) as SRRRow[]);
+            setVendorDocs(prev => prev.map(x => x.id === doc.id ? { ...x, data: rowData } : x));
+          }
+          setShowData(rowData);
           setPage(0);
           setSelectedRows(new Set());
           setActiveCell(null);
           setActiveTab("show-edit");
           setDocsDialogOpen(false);
         }}
-        onOpenDocs={(ds) => {
+        onOpenDocs={async (ds) => {
           const docs = ds.map((d) => vendorDocs.find((x) => x.id === d.id)).filter(Boolean) as typeof vendorDocs;
           if (docs.length === 0) return;
           const src = (docs[0].source || "filter") as "filter" | "vendor" | "import";
@@ -3704,9 +3712,21 @@ function SRRDCItemPage() {
           setSelectedDocSpc([...new Set(docs.map((x) => x.spc_name))]);
           setVendorFilter([...new Set(docs.map((x) => x.vendor_code))]);
           setOrderDayFilter([]); setItemTypeFilter([]); setBuyingStatusFilter([]); setPoGroupFilter([]);
+          const unloadedDocs = docs.filter(x => x.data.length === 0 && x.item_count > 0);
+          let loadedMap = new Map<string, any[]>();
+          if (unloadedDocs.length > 0) {
+            loadedMap = await fetchSnapshotDataByIds(unloadedDocs.map(x => x.id));
+            setVendorDocs(prev => prev.map(x => loadedMap.has(x.id)
+              ? { ...x, data: patchSnapshotRows((loadedMap.get(x.id) || []) as SRRRow[]) }
+              : x
+            ));
+          }
           const seen = new Set<string>();
           const merged: any[] = [];
-          for (const doc of docs) for (const r of doc.data) { if (seen.has(r.id)) continue; seen.add(r.id); merged.push(r); }
+          for (const doc of docs) {
+            const rows = loadedMap.has(doc.id) ? patchSnapshotRows((loadedMap.get(doc.id) || []) as SRRRow[]) : doc.data;
+            for (const r of rows) { if (seen.has(r.id)) continue; seen.add(r.id); merged.push(r); }
+          }
           setShowData(merged);
           setPage(0);
           setSelectedRows(new Set());
