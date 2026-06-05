@@ -68,6 +68,7 @@ import { SnapshotBatchPicker } from "@/components/SnapshotBatchPicker";
 import {
   buildSnapshotBatchesFromDocs,
   deleteSnapshotDocuments,
+  fetchSnapshotDataByIds,
   getSnapshotBatches,
   loadSnapshotBatch,
   mergeSnapshotBatches,
@@ -194,17 +195,19 @@ function isoToDateKey(iso: string): string {
   return iso.replace(/-/g, "").substring(0, 8);
 }
 
+const D2S_META_FIELDS = "id, vendor_code, vendor_display, spc_name, store_name, type_store, date_key, created_at, updated_at, item_count, suggest_count, edit_count, edited_columns, source, user_id";
+
 async function loadD2SSnapshots(): Promise<any[]> {
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - 30);
   const cutoffStr = cutoff.toISOString().split("T")[0];
   const { data, error } = await (supabase as any)
     .from("srr_d2s_snapshots")
-    .select("*")
+    .select(D2S_META_FIELDS)
     .gte("date_key", cutoffStr)
     .order("date_key", { ascending: false });
   if (error) throw error;
-  return data || [];
+  return (data || []).map((r: any) => ({ ...r, data: [] }));
 }
 
 // Get distinct snapshot dates (YYYY-MM-DD) within last 30 days
@@ -222,15 +225,15 @@ async function getD2SSnapshotDates(): Promise<string[]> {
   return dates;
 }
 
-// Load snapshots for a specific date (YYYY-MM-DD)
+// Load snapshots for a specific date (YYYY-MM-DD) — metadata only, data loaded lazily
 async function loadD2SSnapshotsByDate(dateKey: string): Promise<any[]> {
   const { data, error } = await (supabase as any)
     .from("srr_d2s_snapshots")
-    .select("*")
+    .select(D2S_META_FIELDS)
     .eq("date_key", dateKey)
     .order("spc_name", { ascending: true });
   if (error) throw error;
-  return data || [];
+  return (data || []).map((r: any) => ({ ...r, data: [] }));
 }
 
 async function saveD2SSnapshots(
@@ -2436,6 +2439,18 @@ export default function SRRDirectPage() {
     let docs = docsForTab2;
     if (selectedDocSpc.length > 0) docs = docs.filter((d) => selectedDocSpc.includes(d.spc_name));
     if (vendorFilter.length > 0) docs = docs.filter((d) => vendorFilter.includes(d.vendor_code));
+
+    // Lazy-load data for docs that haven't been fetched yet
+    const unloaded = docs.filter((d) => d.data.length === 0 && d.item_count > 0);
+    if (unloaded.length > 0) {
+      const dataMap = await fetchSnapshotDataByIds(unloaded.map((d) => d.id), "srr_d2s_snapshots");
+      setVendorDocs((prev) => prev.map((d) => {
+        if (!dataMap.has(d.id)) return d;
+        return { ...d, data: dataMap.get(d.id) as any[] };
+      }));
+      docs = docs.map((d) => dataMap.has(d.id) ? { ...d, data: dataMap.get(d.id) as any[] } : d);
+    }
+
     let merged = docs.flatMap((d) => d.data);
     if (orderDayFilter.length > 0) merged = merged.filter((r) => orderDayFilter.includes(r.order_day));
     if (itemTypeFilter.length > 0) merged = merged.filter((r) => itemTypeFilter.includes(r.item_type));
