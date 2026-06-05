@@ -2126,7 +2126,7 @@ export default function RangeStorePage() {
               setPrepAvgStores([]); setPrepRangeStores([]); setPrepTypeStores([]);
               setPrepDivGroups([]); setPrepDivisions([]); setPrepDepartments([]);
               setPrepSubDepts([]); setPrepClasses([]); setPrepItemTypes([]);
-              setPrepBuyings([]); setPrepOwners([]); setPrepSkuText("");
+              setPrepBuyings([]); setPrepOwners([]); setPrepSkuText(""); setPrepFetchAll(false);
             }}>
             <X className="h-3.5 w-3.5" />
           </Button>
