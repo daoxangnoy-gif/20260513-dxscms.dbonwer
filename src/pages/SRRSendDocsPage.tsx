@@ -1110,6 +1110,7 @@ export default function SRRSendDocsPage() {
 
   // create / edit dialog state
   const SCAN_DRAFT_KEY = "send_docs_scan_draft";
+  const DEST_DRAFT_KEY = "send_docs_dest_draft";
   const [createOpen, setCreateOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [depositorName, setDepositorName] = useState("");
@@ -1186,6 +1187,68 @@ export default function SRRSendDocsPage() {
   const [compareResult, setCompareResult] = useState<{
     matched: number; missing: string[]; extra: string[];
   } | null>(null);
+
+  // ===== Dest scan draft: persist destCodes + state to localStorage =====
+  const [hasDestDraft, setHasDestDraft] = useState(false);
+
+  // Auto-save dest draft whenever user scans in the scan tab
+  useEffect(() => {
+    if (!activeShipment || mainTab !== "scan") return;
+    if (destCodes.length === 0 && !destLocation && !destDepositor) return;
+    const draft = {
+      shipmentId: activeShipment.id,
+      destCodes,
+      destLocation,
+      destDepositor,
+      destReceiver,
+      destNotes,
+      destAction,
+    };
+    localStorage.setItem(DEST_DRAFT_KEY, JSON.stringify(draft));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [destCodes, destLocation, destDepositor, destReceiver, destNotes, destAction, mainTab]);
+
+  // Check for existing dest draft after items load
+  useEffect(() => {
+    if (loading) return;
+    try {
+      const raw = localStorage.getItem(DEST_DRAFT_KEY);
+      if (!raw) return;
+      const d = JSON.parse(raw);
+      if ((d.destCodes?.length ?? 0) > 0 && d.shipmentId) {
+        const shipExists = items.some(s => s.id === d.shipmentId);
+        setHasDestDraft(shipExists);
+      }
+    } catch { /* ignore */ }
+  }, [loading, items]);
+
+  const restoreDestDraft = async () => {
+    try {
+      const raw = localStorage.getItem(DEST_DRAFT_KEY);
+      if (!raw) return;
+      const d = JSON.parse(raw);
+      const ship = items.find(s => s.id === d.shipmentId);
+      if (!ship) {
+        toast({ title: "ไม่พบเอกสารที่ค้างอยู่", description: "เอกสารอาจถูกลบหรือย้ายไปแล้ว", variant: "destructive" });
+        clearDestDraft();
+        return;
+      }
+      await openDestination(ship);
+      setDestCodes(d.destCodes || []);
+      setDestLocation(d.destLocation || "");
+      setDestDepositor(d.destDepositor || "");
+      setDestReceiver(d.destReceiver || "");
+      setDestNotes(d.destNotes || "");
+      setDestAction(d.destAction || "arrived");
+      setMainTab("scan");
+      setHasDestDraft(false);
+    } catch { /* ignore */ }
+  };
+
+  const clearDestDraft = () => {
+    localStorage.removeItem(DEST_DRAFT_KEY);
+    setHasDestDraft(false);
+  };
 
   // Adjust doc dialog state (เคลียร์เอกสารส่วนต่างจากจุด arrived ใดๆ ไปยังจุดอื่น)
   const [adjustOpen, setAdjustOpen] = useState(false);
@@ -1471,7 +1534,7 @@ export default function SRRSendDocsPage() {
     await load();
 
     if (isClosed) {
-      setDestOpen(false); setMainTab("deposit");
+      clearDestDraft(); setDestOpen(false); setMainTab("deposit");
     } else {
       // After "arrived" save — show popup asking ฝากต่อ / จบ
       setPopupStep("choose");
@@ -1555,7 +1618,7 @@ export default function SRRSendDocsPage() {
       user_id: user.id,
     });
     setArrivedPopupOpen(false);
-    setDestOpen(false); setMainTab("deposit");
+    clearDestDraft(); setDestOpen(false); setMainTab("deposit");
     await load();
   };
 
@@ -1987,8 +2050,33 @@ export default function SRRSendDocsPage() {
 
         <TabsContent value="scan" className="mt-3">
           {!activeShipment && (
-            <div className="text-sm text-muted-foreground p-6 border rounded-lg bg-card text-center">
-              ยังไม่ได้เลือก shipment — กลับไปแท็บ <b>ฝากเอกสาร</b> แล้วกดปุ่ม <b>"ถึงปลายทาง"</b> ที่รายการที่ต้องการ
+            <div className="space-y-3">
+              {hasDestDraft && (() => {
+                try {
+                  const d = JSON.parse(localStorage.getItem(DEST_DRAFT_KEY) || "{}");
+                  const count = d.destCodes?.length ?? 0;
+                  const shipName = items.find(s => s.id === d.shipmentId)?.doc_name || d.shipmentId;
+                  return (
+                    <div className="p-4 border border-orange-300 rounded-lg bg-orange-50 flex items-center justify-between gap-3">
+                      <div className="text-sm">
+                        <div className="font-semibold text-orange-700">มีรายการสะแกนตรวจรับค้างอยู่</div>
+                        <div className="text-orange-600 text-xs mt-0.5">เอกสาร: <b>{shipName}</b> — สะแกนไปแล้ว <b>{count}</b> รายการ</div>
+                      </div>
+                      <div className="flex gap-2 shrink-0">
+                        <Button variant="outline" className="border-orange-400 text-orange-600 hover:bg-orange-100 h-8 text-sm" onClick={restoreDestDraft}>
+                          <ScanLine className="w-4 h-4 mr-1" />สะแกนต่อ
+                        </Button>
+                        <Button variant="ghost" size="sm" className="text-muted-foreground h-8" onClick={() => { if (window.confirm(`ยืนยันล้างรายการสะแกนค้างอยู่ ${count} รายการ?`)) clearDestDraft(); }}>
+                          ล้าง
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                } catch { return null; }
+              })()}
+              <div className="text-sm text-muted-foreground p-6 border rounded-lg bg-card text-center">
+                ยังไม่ได้เลือก shipment — กลับไปแท็บ <b>ฝากเอกสาร</b> แล้วกดปุ่ม <b>"ถึงปลายทาง"</b> ที่รายการที่ต้องการ
+              </div>
             </div>
           )}
         </TabsContent>
