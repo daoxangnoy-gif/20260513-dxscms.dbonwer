@@ -432,6 +432,29 @@ async function fetchD2SDataRPCFast(
 // when filters didn't change → instant re-display.
 const D2S_RPC_CACHE = new Map<string, { ts: number; rows: any[] }>();
 const D2S_RPC_CACHE_TTL_MS = 5 * 60 * 1000;
+
+// --- Cache for filter option RPCs (30 min) ---
+const D2S_FILTER_CACHE_TTL = 30 * 60 * 1000;
+const _d2sFilterCache: {
+  preFilterOptions?: { data: any; ts: number };
+  hierarchyOptions?: { data: any; ts: number; skipDefaults: boolean };
+} = {};
+const D2S_SESSION_KEY_PRE = "srr_pre_filter_options";
+const D2S_SESSION_KEY_HIER = "srr_hierarchy_options";
+
+function d2sSessionCacheGet<T>(key: string, ttl: number): T | null {
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    const parsed: { data: T; ts: number } = JSON.parse(raw);
+    if (Date.now() - parsed.ts > ttl) return null;
+    return parsed as T;
+  } catch { return null; }
+}
+
+function d2sSessionCacheSet(key: string, data: any): void {
+  try { sessionStorage.setItem(key, JSON.stringify({ data, ts: Date.now() })); } catch {}
+}
 function makeRpcCacheKey(p: Record<string, any>): string {
   const norm: Record<string, any> = {};
   for (const k of Object.keys(p).sort()) {
@@ -1213,25 +1236,61 @@ export default function SRRDirectPage() {
         );
       },
     );
-    supabase.rpc("get_srr_pre_filter_options" as any).then(({ data }) => {
-      const row = (data as any[])?.[0];
-      if (row) {
+    (async () => {
+      const now = Date.now();
+      let preRow: any = null;
+      if (_d2sFilterCache.preFilterOptions && now - _d2sFilterCache.preFilterOptions.ts < D2S_FILTER_CACHE_TTL) {
+        preRow = _d2sFilterCache.preFilterOptions.data;
+      } else {
+        const session = d2sSessionCacheGet<{ data: any; ts: number }>(D2S_SESSION_KEY_PRE, D2S_FILTER_CACHE_TTL);
+        if (session) {
+          preRow = session.data;
+          _d2sFilterCache.preFilterOptions = { data: preRow, ts: session.ts };
+        } else {
+          const { data } = await supabase.rpc("get_srr_pre_filter_options" as any);
+          preRow = (data as any[])?.[0];
+          if (preRow) {
+            _d2sFilterCache.preFilterOptions = { data: preRow, ts: now };
+            d2sSessionCacheSet(D2S_SESSION_KEY_PRE, preRow);
+          }
+        }
+      }
+      if (preRow) {
         setPreFilterOptions({
-          itemTypes: (row.item_types || []).map((v: string) => ({ value: v, display: v })),
-          buyingStatuses: (row.buying_statuses || []).map((v: string) => ({ value: v, display: v })),
-          poGroups: (row.po_groups || []).map((v: string) => ({ value: v, display: v })),
-          stores: (row.stores || []).map((s: any) => ({
+          itemTypes: (preRow.item_types || []).map((v: string) => ({ value: v, display: v })),
+          buyingStatuses: (preRow.buying_statuses || []).map((v: string) => ({ value: v, display: v })),
+          poGroups: (preRow.po_groups || []).map((v: string) => ({ value: v, display: v })),
+          stores: (preRow.stores || []).map((s: any) => ({
             value: s.store_name,
             display: `${s.store_name} (${s.type_store})`,
           })),
         });
       }
-    });
+    })();
     (async () => {
+      const now = Date.now();
       const { hasActiveFilterTemplates } = await import("@/lib/filterTemplates");
       const skipDefaults = await hasActiveFilterTemplates("srr_direct");
-      const { data } = await supabase.rpc("get_srr_hierarchy_options" as any, { p_skip_default_filters: skipDefaults });
-      if (Array.isArray(data)) setHierarchyRows(data as any);
+      if (_d2sFilterCache.hierarchyOptions &&
+          now - _d2sFilterCache.hierarchyOptions.ts < D2S_FILTER_CACHE_TTL &&
+          _d2sFilterCache.hierarchyOptions.skipDefaults === skipDefaults) {
+        setHierarchyRows(_d2sFilterCache.hierarchyOptions.data);
+      } else {
+        const session = d2sSessionCacheGet<{ data: any; ts: number }>(
+          `${D2S_SESSION_KEY_HIER}_${skipDefaults}`, D2S_FILTER_CACHE_TTL
+        );
+        if (session) {
+          setHierarchyRows(session.data);
+          _d2sFilterCache.hierarchyOptions = { data: session.data, ts: session.ts, skipDefaults };
+        } else {
+          const { data } = await supabase.rpc("get_srr_hierarchy_options" as any, { p_skip_default_filters: skipDefaults });
+          if (Array.isArray(data)) {
+            setHierarchyRows(data as any);
+            _d2sFilterCache.hierarchyOptions = { data, ts: now, skipDefaults };
+            d2sSessionCacheSet(`${D2S_SESSION_KEY_HIER}_${skipDefaults}`, data);
+          }
+        }
+      }
     })();
     supabase
       .from("store_type")
