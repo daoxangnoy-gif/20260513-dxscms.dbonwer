@@ -140,11 +140,16 @@ function fmtDocName() {
 }
 
 // Fetch RPC in batches to bypass PostgREST 1000-row limit.
-// PostgREST hard caps each response at 1000 even when range asks for more.
-async function fetchAllCalc(params: any, onProgress?: (loaded: number, batches: number) => void, isCancelled?: () => boolean): Promise<any[]> {
-  const CONCURRENCY = 4;
-  const all: any[] = [];
-  let batches = 0;
+// Uses a true pool (CONCURRENCY slots) — each slot re-fires immediately when done,
+// so we never wait for the slowest batch in a "round" before launching the next.
+// onBatch is called as soon as each batch arrives (streaming display).
+async function fetchAllCalcStream(
+  params: any,
+  onBatch: (rows: any[]) => void,
+  onProgress?: (loaded: number, batches: number) => void,
+  isCancelled?: () => boolean,
+): Promise<void> {
+  const CONCURRENCY = 6;
 
   const fetchRange = async (from: number): Promise<any[]> => {
     if (isCancelled?.()) throw new Error("__CANCELLED__");
@@ -155,30 +160,47 @@ async function fetchAllCalc(params: any, onProgress?: (loaded: number, batches: 
     return data || [];
   };
 
-  // probe แรก
+  // Probe batch 0 first so we know if there are more pages
   const first = await fetchRange(0);
-  all.push(...first);
-  batches++;
-  onProgress?.(all.length, batches);
-  if (first.length < RPC_BATCH) return all;
+  onBatch(first);
+  onProgress?.(first.length, 1);
+  if (first.length < RPC_BATCH) return;
 
-  // ดึงที่เหลือแบบ parallel CONCURRENCY batch พร้อมกัน
+  // True pool: each slot fires a new request the moment it finishes
   let nextFrom = RPC_BATCH;
   let done = false;
-  while (!done) {
-    if (isCancelled?.()) throw new Error("__CANCELLED__");
-    const offsets: number[] = [];
-    for (let i = 0; i < CONCURRENCY; i++) offsets.push(nextFrom + i * RPC_BATCH);
-    const results = await Promise.all(offsets.map(off => fetchRange(off)));
-    for (const chunk of results) {
-      all.push(...chunk);
-      batches++;
-      onProgress?.(all.length, batches);
-      if (chunk.length < RPC_BATCH) { done = true; break; }
-    }
-    nextFrom += CONCURRENCY * RPC_BATCH;
+  let totalLoaded = first.length;
+  let batchCount = 1;
+  const active = new Set<Promise<void>>();
+
+  const launchOne = () => {
+    if (done) return;
+    const from = nextFrom;
+    nextFrom += RPC_BATCH;
+    let p: Promise<void>;
+    p = fetchRange(from).then((chunk) => {
+      active.delete(p!);
+      if (isCancelled?.()) return;
+      totalLoaded += chunk.length;
+      batchCount++;
+      onBatch(chunk);
+      onProgress?.(totalLoaded, batchCount);
+      if (chunk.length < RPC_BATCH) {
+        done = true;
+      } else {
+        launchOne(); // slot is free → fire next immediately
+      }
+    });
+    active.add(p);
+  };
+
+  // Fill all slots
+  for (let i = 0; i < CONCURRENCY; i++) launchOne();
+
+  // Wait until all active slots complete
+  while (active.size > 0) {
+    await Promise.race(active);
   }
-  return all;
 }
 
 export default function MinmaxCalPage() {
@@ -344,97 +366,87 @@ export default function MinmaxCalPage() {
       if (skuFilter.length) params.p_sku_codes = skuFilter;
       if (barcodeFilter.length) params.p_barcodes = barcodeFilter;
 
-      // Fetch all calc rows in batches
-      setPhasePct(15);
-      let lastBatchCount = 0;
-      const fetched = await fetchAllCalc(params, (loaded, batches) => {
-        lastBatchCount = batches;
-        setPhaseLabel(`อ่าน batch #${batches} · รวม ${loaded.toLocaleString()} แถว`);
-        setPhasePct(Math.min(60, 15 + batches * 5));
-      }, () => cancelCalcRef.current);
-      const fetchMs = Math.round(performance.now() - t0);
-      setPhasePct(60);
-      setPhaseLabel(`รับข้อมูล ${fetched.length.toLocaleString()} แถว · ${fetchMs}ms`);
-      checkCancel();
-      await new Promise(r => setTimeout(r, 0));
-      checkCancel();
-
-      const calcRows: CalcRow[] = fetched.map((r: any) => {
-        // unit_pick ดึงจาก Data Cal (RPC get_minmax_calc_all → mm_up)
+      // Map a raw DB batch → CalcRow[]
+      const mapBatch = (rawRows: any[]): CalcRow[] => rawRows.map((r: any) => {
         const up = Number(r.unit_pick) || 1;
-        const upEdit = up; // เริ่มต้นยังไม่มี edit → ใช้ค่า default
         const avg = Number(r.avg_sale) || 0;
         const rank = r.rank_sale || "D";
         const rm = rank === "A" ? 21 : rank === "B" ? 14 : rank === "C" ? 10 : 7;
-
-        // ===== Min Cal (สูตรใหม่) =====
         let minCal: number;
         let isDefMin = false;
         let floored = false;
         if (avg === 0) {
-          minCal = 2;             // Case 1: default (ส้ม)
-          isDefMin = true;
+          minCal = 2; isDefMin = true;
         } else {
           const raw = Math.ceil(avg * rm);
-          if (raw > 0 && raw < 3) {
-            minCal = 3;            // Case 2: floored (ฟ้า)
-            floored = true;
-          } else {
-            minCal = raw;          // Case 3: ปกติ
-          }
+          if (raw > 0 && raw < 3) { minCal = 3; floored = true; }
+          else { minCal = raw; }
         }
-
-        // ===== Max Cal (สูตรใหม่) = Min + avg*N + UnitPickEdit =====
-        let maxRecalc = Math.ceil(minCal + avg * nFactor + upEdit);
-        if (avg === 0 && maxRecalc < 4) maxRecalc = 4;       // Case 1 floor
-        else if (floored && maxRecalc < 6) maxRecalc = 6;     // Case 2 floor
+        let maxRecalc = Math.ceil(minCal + avg * n + up);
+        if (avg === 0 && maxRecalc < 4) maxRecalc = 4;
+        else if (floored && maxRecalc < 6) maxRecalc = 6;
         return {
-          sku_code: r.sku_code,
-          product_name_la: r.product_name_la,
-          product_name_en: r.product_name_en,
-          main_barcode: r.main_barcode,
-          unit_of_measure: r.unit_of_measure,
-          store_name: r.store_name,
-          type_store: r.type_store,
-          size_store: r.size_store,
-          unit_pick: up,
-          unit_pick_edit: null,
-          avg_sale: avg,
-          rank_sale: rank,
-          rank_factor: Number(r.rank_factor) || 7,
-          min_cal: minCal,
-          max_cal: maxRecalc,
-          is_default_min: isDefMin,
-          min_floored: floored,
-          item_type: r.item_type || "",
-          buying_status: r.buying_status || "",
-          division: r.division || "",
-          department: r.department || "",
-          sub_department: r.sub_department || "",
-          class: r.class || "",
+          sku_code: r.sku_code, product_name_la: r.product_name_la,
+          product_name_en: r.product_name_en, main_barcode: r.main_barcode,
+          unit_of_measure: r.unit_of_measure, store_name: r.store_name,
+          type_store: r.type_store, size_store: r.size_store,
+          unit_pick: up, unit_pick_edit: null, avg_sale: avg,
+          rank_sale: rank, rank_factor: Number(r.rank_factor) || 7,
+          min_cal: minCal, max_cal: maxRecalc,
+          is_default_min: isDefMin, min_floored: floored,
+          item_type: r.item_type || "", buying_status: r.buying_status || "",
+          division: r.division || "", department: r.department || "",
+          sub_department: r.sub_department || "", class: r.class || "",
           pack_qty: r.pack_qty == null ? null : Number(r.pack_qty),
           box_qty: r.box_qty == null ? null : Number(r.box_qty),
-          min_edit: null,
-          max_edit: null,
+          min_edit: null, max_edit: null,
         };
       });
 
-      // Phase 2 (Doc merge) — removed: Cal returns ONLY computed rows.
-      // Save Doc upserts directly to `minmax`; the View button loads existing rows when needed.
-      const finalRows: CalcRow[] = calcRows;
-      const mergeMs = 0;
-      const mergedFromDoc = 0;
+      // Streaming fetch: แสดงผลทันทีหลัง batch แรกมาถึง (~9s) แทนที่จะรอครบ 41s+
+      setPhasePct(15);
+      let lastBatchCount = 0;
+      let firstBatchDisplayed = false;
+      const { applyExcludeFilters } = await import("@/lib/filterTemplates");
+      const allFetched: any[] = [];
 
-      setPhaseTimes({ fetch: fetchMs, merge: mergeMs, rowCount: calcRows.length, docCount: mergedFromDoc, readBatches: lastBatchCount });
+      await fetchAllCalcStream(
+        params,
+        (rawBatch) => {
+          allFetched.push(...rawBatch);
+          const mapped = mapBatch(rawBatch);
+          if (!firstBatchDisplayed) {
+            // Batch แรก: แสดงทันที ผู้ใช้เห็นข้อมูลโดยไม่ต้องรอทั้งหมด
+            setRows(mapped);
+            setHasData(true);
+            setPage(0);
+            firstBatchDisplayed = true;
+          } else {
+            // Batch ถัดไป: append ต่อท้าย
+            setRows(prev => [...prev, ...mapped]);
+          }
+        },
+        (loaded, batches) => {
+          lastBatchCount = batches;
+          setPhaseLabel(`อ่าน batch #${batches} · รวม ${loaded.toLocaleString()} แถว`);
+          setPhasePct(Math.min(90, 15 + batches * 7));
+        },
+        () => cancelCalcRef.current,
+      );
+      checkCancel();
 
-      const _excluded = await (await import("@/lib/filterTemplates")).applyExcludeFilters(finalRows as any[], "minmax_cal");
+      const fetchMs = Math.round(performance.now() - t0);
+
+      // Apply exclude filters to full dataset ที่โหลดครบแล้ว
+      const allMapped = mapBatch(allFetched);
+      const _excluded = await applyExcludeFilters(allMapped as any[], "minmax_cal");
       setRows(_excluded as any);
-      setHasData(true);
-      setPage(0);
+
+      setPhaseTimes({ fetch: fetchMs, merge: 0, rowCount: allMapped.length, docCount: 0, readBatches: lastBatchCount });
       setPhasePct(100); setPhaseLabel("");
       toast({
         title: "คำนวณเสร็จสิ้น",
-        description: `Calc ${calcRows.length.toLocaleString()} แถว`,
+        description: `Calc ${allMapped.length.toLocaleString()} แถว · ${(fetchMs / 1000).toFixed(1)}s`,
       });
     } catch (err: any) {
       if (err?.message === "__CANCELLED__") {
