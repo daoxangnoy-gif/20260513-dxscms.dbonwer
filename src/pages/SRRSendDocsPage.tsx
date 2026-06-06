@@ -1265,6 +1265,48 @@ export default function SRRSendDocsPage() {
     setHasDestDraft(false);
   };
 
+  // ปิด Draft + จบล็อต: อ่าน shipmentId จาก draft → หาตำแหน่ง arrived ล่าสุด → update status matched/mismatch + insert closed
+  const dismissDestDraft = async () => {
+    if (!user) return;
+    try {
+      const raw = localStorage.getItem(DEST_DRAFT_KEY);
+      if (!raw) { clearDestDraft(); return; }
+      const d = JSON.parse(raw);
+      const ship = items.find(s => s.id === d.shipmentId);
+      if (!ship) { clearDestDraft(); return; }
+
+      const hist = movements
+        .filter(m => m.shipment_id === ship.id)
+        .slice()
+        .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+      const lastArrived = [...hist].reverse().find(m => m.action === "arrived");
+
+      if (lastArrived) {
+        const lastArrivedTime = new Date(lastArrived.created_at).getTime();
+        const lastForward = hist
+          .filter(m => m.action === "forward" && new Date(m.created_at).getTime() < lastArrivedTime)
+          .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0];
+        const incomingCodes = lastForward?.codes || ship.origin_codes || [];
+        const arrivedSet = new Set(lastArrived.codes || []);
+        const missVsIncoming = incomingCodes.filter(c => !arrivedSet.has(c)).length;
+        const extraVsIncoming = (lastArrived.codes || []).filter(c => !new Set(incomingCodes).has(c)).length;
+        await supabase.from("document_shipments").update({
+          status: missVsIncoming === 0 && extraVsIncoming === 0 ? "matched" : "mismatch",
+          compared_at: new Date().toISOString(),
+        }).eq("id", ship.id);
+        await supabase.from("document_movements" as any).insert({
+          shipment_id: ship.id,
+          location_name: lastArrived.location_name,
+          action: "closed",
+          codes: lastArrived.codes || [],
+          user_id: user.id,
+        });
+        await load();
+      }
+      clearDestDraft();
+    } catch { clearDestDraft(); }
+  };
+
   // Adjust doc dialog state (เคลียร์เอกสารส่วนต่างจากจุด arrived ใดๆ ไปยังจุดอื่น)
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [adjustSource, setAdjustSource] = useState<{
@@ -1843,9 +1885,21 @@ export default function SRRSendDocsPage() {
                 const count = d.destCodes?.length ?? 0;
                 const shipName = items.find(s => s.id === d.shipmentId)?.doc_name || "";
                 return (
-                  <Button variant="outline" className="border-blue-400 text-blue-600 hover:bg-blue-50" onClick={restoreDestDraft}>
-                    <Truck className="w-4 h-4 mr-2" />สะแกนตรวจรับต่อ — {shipName} ({count} รายการ)
-                  </Button>
+                  <div className="flex items-center border border-blue-400 rounded-md overflow-hidden">
+                    <button className="flex items-center gap-2 px-3 py-1.5 text-sm text-blue-600 hover:bg-blue-50 transition-colors" onClick={restoreDestDraft}>
+                      <Truck className="w-4 h-4" />สะแกนตรวจรับต่อ — {shipName} ({count} รายการ)
+                    </button>
+                    <button
+                      className="px-2 py-1.5 text-blue-400 hover:text-red-500 hover:bg-red-50 border-l border-blue-400 transition-colors"
+                      title="ปิด Draft (จบล็อต)"
+                      onClick={async () => {
+                        if (!window.confirm(`ปิด Draft และจบล็อต ${shipName}?\nระบบจะบันทึกสถานะ matched/mismatch จากการสะแกนล่าสุด`)) return;
+                        await dismissDestDraft();
+                      }}
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 );
               } catch { return null; }
             })()}
