@@ -441,38 +441,22 @@ export default function MinmaxCalPage() {
       const skuCodes = [...new Set(list.map((r: any) => r.sku_code as string))];
       const storeNames = [...new Set(list.map((r: any) => r.store_name as string))];
 
-      // Run all 3 lookups in parallel
-      const [dmAll, rsAll, stAll] = await Promise.all([
-        // data_master chunks
+      // Run lookups in parallel:
+      // - range_store_view: per sku_code, has pack_qty/box_qty/product info/division
+      // - store_type: store_name → type_store
+      const [rsvAll, stAll] = await Promise.all([
         (async () => {
           const res: any[] = [];
           for (let i = 0; i < skuCodes.length; i += 500) {
             const slice = skuCodes.slice(i, i + 500);
-            const { data } = await supabase
-              .from("data_master")
-              .select("sku_code, main_barcode, product_name_la, product_name_en, division, department, sub_department")
-              .in("sku_code", slice)
-              .eq("packing_size_qty", 1);
+            const { data } = await (supabase as any)
+              .from("range_store_view")
+              .select("sku_code, main_barcode, product_name_la, product_name_en, pack_qty, box_qty, division, department, sub_department")
+              .in("sku_code", slice);
             res.push(...(data || []));
           }
           return res;
         })(),
-        // range_store — paginated per sku chunk to bypass 1000-row cap
-        (async () => {
-          const res: any[] = [];
-          for (let i = 0; i < skuCodes.length; i += 200) {
-            const slice = skuCodes.slice(i, i + 200);
-            const chunk = await fetchAllPaged((from, to) =>
-              (supabase as any).from("range_store")
-                .select("sku_code, store_name, pack_qty, box_qty")
-                .in("sku_code", slice)
-                .range(from, to)
-            );
-            res.push(...chunk);
-          }
-          return res;
-        })(),
-        // store_type
         (async () => {
           const res: any[] = [];
           for (let i = 0; i < storeNames.length; i += 500) {
@@ -485,16 +469,19 @@ export default function MinmaxCalPage() {
       ]);
 
       // Build lookup maps
-      const dmMap = new Map<string, { main_barcode: string | null; product_name_la: string | null; product_name_en: string | null; division: string | null; department: string | null; sub_department: string | null }>();
-      for (const d of dmAll) {
-        if (!dmMap.has(d.sku_code)) dmMap.set(d.sku_code, {
-          main_barcode: d.main_barcode, product_name_la: d.product_name_la,
+      const rsvMap = new Map<string, { main_barcode: string | null; product_name_la: string | null; product_name_en: string | null; pack_qty: number | null; box_qty: number | null; division: string | null; department: string | null; sub_department: string | null }>();
+      for (const d of rsvAll) {
+        if (!rsvMap.has(d.sku_code)) rsvMap.set(d.sku_code, {
+          main_barcode: d.main_barcode ?? null,
+          product_name_la: d.product_name_la ?? null,
           product_name_en: d.product_name_en ?? null,
-          division: d.division ?? null, department: d.department ?? null, sub_department: d.sub_department ?? null,
+          pack_qty: d.pack_qty != null ? Number(d.pack_qty) : null,
+          box_qty: d.box_qty != null ? Number(d.box_qty) : null,
+          division: d.division ?? null,
+          department: d.department ?? null,
+          sub_department: d.sub_department ?? null,
         });
       }
-      const rsMap = new Map<string, { pack_qty: number | null; box_qty: number | null }>();
-      for (const r of rsAll) rsMap.set(`${r.sku_code}|${r.store_name}`, { pack_qty: r.pack_qty, box_qty: r.box_qty });
       const storeTypeMap = new Map<string, string>();
       for (const s of stAll) storeTypeMap.set(s.store_name, (s as any).type_store ?? "");
 
@@ -502,14 +489,14 @@ export default function MinmaxCalPage() {
         sku_code: r.sku_code,
         store_name: r.store_name,
         unit_pick: r.unit_pick,
-        main_barcode: dmMap.get(r.sku_code)?.main_barcode ?? null,
-        product_name_la: dmMap.get(r.sku_code)?.product_name_la ?? null,
-        product_name_en: dmMap.get(r.sku_code)?.product_name_en ?? null,
-        pack_qty: rsMap.get(`${r.sku_code}|${r.store_name}`)?.pack_qty ?? null,
-        box_qty: rsMap.get(`${r.sku_code}|${r.store_name}`)?.box_qty ?? null,
-        division: dmMap.get(r.sku_code)?.division ?? null,
-        department: dmMap.get(r.sku_code)?.department ?? null,
-        sub_department: dmMap.get(r.sku_code)?.sub_department ?? null,
+        main_barcode: rsvMap.get(r.sku_code)?.main_barcode ?? null,
+        product_name_la: rsvMap.get(r.sku_code)?.product_name_la ?? null,
+        product_name_en: rsvMap.get(r.sku_code)?.product_name_en ?? null,
+        pack_qty: rsvMap.get(r.sku_code)?.pack_qty ?? null,
+        box_qty: rsvMap.get(r.sku_code)?.box_qty ?? null,
+        division: rsvMap.get(r.sku_code)?.division ?? null,
+        department: rsvMap.get(r.sku_code)?.department ?? null,
+        sub_department: rsvMap.get(r.sku_code)?.sub_department ?? null,
         type_store: storeTypeMap.get(r.store_name) ?? null,
       }));
       setUpRows(rows);
