@@ -1177,6 +1177,20 @@ export default function MinmaxCalPage() {
         toast({ title: "Export Error", description: err.message, variant: "destructive" });
         return;
       }
+    } else if (hasViewPaging && mode === "all") {
+      // view paging mode: fetch all from DB with large limit
+      try {
+        const params = buildViewParams(0);
+        params.p_limit = 999999;
+        const { data: viewAll, error: viewErr } = await (supabase as any)
+          .rpc("get_minmax_view_page", params);
+        if (viewErr) throw viewErr;
+        const result = viewAll as { total: number; rows: any[] };
+        source = (result.rows || []).map(mapViewRow);
+      } catch (err: any) {
+        toast({ title: "Export Error", description: err.message, variant: "destructive" });
+        return;
+      }
     } else source = filtered;
 
     if (source.length === 0) {
@@ -1352,7 +1366,7 @@ export default function MinmaxCalPage() {
                 size="sm"
                 variant="outline"
                 onClick={handleView}
-                disabled={viewLoading || loading || !hasAnyFilter}
+                disabled={viewLoading || viewPagingLoading || loading || !hasAnyFilter}
                 className="text-xs"
                 title={!hasAnyFilter ? "ใส่ Filter ก่อน (Store, SKU, Barcode ฯลฯ)" : "ดึงข้อมูล Min/Max ที่บันทึกไว้ตาม Filter"}
               >
