@@ -73,8 +73,9 @@ const PAGE_SIZE = 100;
 const RPC_BATCH = 1000;
 // Self-hosted gateways often keep a 1 MB body limit + short proxy timeouts.
 // Keep Save Doc RPC requests small so each merge_minmax_doc call finishes fast.
-const SAVE_DOC_MAX_CHUNK_BYTES = 200 * 1024;
-const SAVE_DOC_MAX_CHUNK_ROWS = 200;
+const SAVE_DOC_MAX_CHUNK_BYTES = 1024 * 1024; // 1MB per chunk
+const SAVE_DOC_MAX_CHUNK_ROWS = 1000;
+const SAVE_DOC_CONCURRENCY = 4;
 // Retry transient network failures (TypeError: Failed to fetch) from gateway/proxy.
 const SAVE_DOC_MAX_RETRIES = 3;
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -934,47 +935,65 @@ export default function MinmaxCalPage() {
         console.log(`[saveDoc] deleted ${delCnt} stale rows`);
       }
 
-      // STEP 2/3 — UPSERT เข้าตาราง minmax แบบ chunk
+      // STEP 2/3 — UPSERT เข้าตาราง minmax แบบ parallel chunk
       step(2, `กำลังบันทึก ${payload.length.toLocaleString()} แถว → ตาราง Min/Max`, 15);
       const chunks = chunkByJsonSize(payload);
       const totalChunks = Math.max(1, chunks.length);
       const t0 = performance.now();
       let sentRows = 0;
       let upsertTotal = 0;
-      for (let chunkIdx = 1; chunkIdx <= chunks.length; chunkIdx++) {
-        const slice = chunks[chunkIdx - 1];
-        const sizeKb = Math.round(jsonByteSize(slice) / 1024);
+      for (let i = 0; i < chunks.length; i += SAVE_DOC_CONCURRENCY) {
+        const batch = chunks.slice(i, i + SAVE_DOC_CONCURRENCY);
         const sec = ((performance.now() - t0) / 1000).toFixed(1);
-        step(2, `บันทึก batch ${chunkIdx}/${totalChunks} · ${slice.length.toLocaleString()} แถว · ${sizeKb.toLocaleString()} KB · ${sec}s`, 15 + Math.round((sentRows / Math.max(1, payload.length)) * 75));
-        const { data: cnt } = await rpcWithRetry(
-          () => (supabase as any).rpc("upsert_minmax_view", { p_rows: slice }),
-          `upsert_minmax_view chunk ${chunkIdx}/${totalChunks}`,
-        );
-        upsertTotal += Number(cnt) || 0;
-        sentRows += slice.length;
+        step(2, `บันทึก batch ${i + 1}-${Math.min(i + SAVE_DOC_CONCURRENCY, totalChunks)}/${totalChunks} · ${sec}s`,
+          15 + Math.round((sentRows / Math.max(1, payload.length)) * 60));
+        const results = await Promise.all(batch.map((slice, j) =>
+          rpcWithRetry(
+            () => (supabase as any).rpc("upsert_minmax_view", { p_rows: slice }),
+            `upsert_minmax_view chunk ${i + j + 1}/${totalChunks}`,
+          )
+        ));
+        results.forEach(({ data: cnt }) => { upsertTotal += Number(cnt) || 0; });
+        sentRows += batch.reduce((s, sl) => s + sl.length, 0);
       }
       const totalSec = ((performance.now() - t0) / 1000).toFixed(1);
 
-      // STEP 3/4 — sync minmax_cal_documents ด้วย upsert_minmax_doc_chunk
-      // chunk แรก: สร้าง doc ใหม่ (p_create_new=true), chunk ถัดไป: append เข้า doc เดิม (O(1))
+      // STEP 3/4 — sync minmax_cal_documents
+      // chunk 0: สร้าง doc ใหม่ (sequential เพื่อรับ doc_id)
+      // chunk 1-N: parallel SAVE_DOC_CONCURRENCY
       let syncDocId: string | null = null;
-      for (let ci = 0; ci < chunks.length; ci++) {
-        const slice = chunks[ci];
-        const pct = 90 + Math.round(((ci + 1) / chunks.length) * 5);
-        step(3, `อัปเดต Min/Max Document... batch ${ci + 1}/${chunks.length}`, pct);
-        const { data: chunkResult } = await rpcWithRetry(
+      if (chunks.length > 0) {
+        step(3, `อัปเดต Min/Max Document... batch 1/${totalChunks}`, 90);
+        const { data: firstResult } = await rpcWithRetry(
           () => (supabase as any).rpc("upsert_minmax_doc_chunk", {
-            p_payload: slice,
-            p_doc_id: syncDocId,
-            p_doc_name: ci === 0 ? (saveName || null) : null,
+            p_payload: chunks[0],
+            p_doc_id: null,
+            p_doc_name: saveName || null,
             p_user_id: user.id,
             p_n_factor: nFactor,
-            p_create_new: ci === 0,
+            p_create_new: true,
           }),
-          `upsert_minmax_doc_chunk batch ${ci + 1}/${chunks.length}`,
+          `upsert_minmax_doc_chunk batch 1/${totalChunks}`,
         );
-        if (ci === 0 && chunkResult?.[0]?.doc_id) {
-          syncDocId = chunkResult[0].doc_id;
+        syncDocId = firstResult?.[0]?.doc_id ?? null;
+
+        for (let i = 1; i < chunks.length; i += SAVE_DOC_CONCURRENCY) {
+          const batch = chunks.slice(i, i + SAVE_DOC_CONCURRENCY);
+          const pct = 90 + Math.round(((i + batch.length) / chunks.length) * 8);
+          step(3, `อัปเดต Min/Max Document... batch ${i + 1}-${Math.min(i + SAVE_DOC_CONCURRENCY, totalChunks)}/${totalChunks}`, pct);
+          await Promise.all(batch.map((slice, j) =>
+            rpcWithRetry(
+              () => (supabase as any).rpc("upsert_minmax_doc_chunk", {
+                p_payload: slice,
+                p_doc_id: syncDocId,
+                p_doc_name: null,
+                p_user_id: user.id,
+                p_n_factor: nFactor,
+                p_create_new: false,
+              }),
+              `upsert_minmax_doc_chunk batch ${i + j + 1}/${totalChunks}`,
+            )
+          ));
         }
       }
 
