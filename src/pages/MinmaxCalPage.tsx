@@ -282,6 +282,11 @@ export default function MinmaxCalPage() {
   const [stagingLoading, setStagingLoading] = useState(false);
   const [editsMap, setEditsMap] = useState<Map<string, { min_edit?: number | null; max_edit?: number | null; unit_pick_edit?: number | null; max_cal?: number }>>(new Map());
 
+  // View paging state (View → server-side pagination from minmax table)
+  const [hasViewPaging, setHasViewPaging] = useState(false);
+  const [viewPagingTotal, setViewPagingTotal] = useState(0);
+  const [viewPagingLoading, setViewPagingLoading] = useState(false);
+
   // View button loading (load filtered store rows from minmax)
   const [viewLoading, setViewLoading] = useState(false);
 
@@ -451,6 +456,7 @@ export default function MinmaxCalPage() {
 
       // Set staging state
       setHasStaging(true);
+      setHasViewPaging(false);
       setStagingTotal(stageResult.total);
       setStagingFilteredCount(stageResult.total);
       setEditsMap(new Map());
@@ -561,6 +567,73 @@ export default function MinmaxCalPage() {
 
 
   // ====== View button: load filtered store rows from `minmax` ======
+  const buildViewParams = (pageNum: number) => {
+    const p: any = { p_limit: PAGE_SIZE, p_offset: pageNum * PAGE_SIZE };
+    if (storeFilter.length) p.p_stores = storeFilter;
+    if (typeStoreFilter.length) p.p_type_stores = typeStoreFilter;
+    if (itemTypeFilter.length) p.p_item_types = itemTypeFilter;
+    if (buyingFilter.length) p.p_buying_statuses = buyingFilter;
+    if (divisionFilter.length) p.p_divisions = divisionFilter;
+    if (departmentFilter.length) p.p_departments = departmentFilter;
+    if (subDeptFilter.length) p.p_sub_departments = subDeptFilter;
+    if (classFilter.length) p.p_classes = classFilter;
+    if (skuFilter.length) p.p_skus = skuFilter;
+    if (barcodeFilter.length) p.p_barcodes = barcodeFilter;
+    return p;
+  };
+
+  const mapViewRow = (r: any): CalcRow => ({
+    sku_code: r.sku_code,
+    product_name_la: r.product_name_la,
+    product_name_en: r.product_name_en,
+    main_barcode: r.main_barcode,
+    unit_of_measure: r.unit_of_measure,
+    store_name: r.store_name,
+    type_store: r.type_store || "",
+    size_store: "",
+    unit_pick: r.unit_pick == null || r.unit_pick === "" ? 1 : Number(r.unit_pick),
+    unit_pick_edit: null,
+    avg_sale: 0,
+    rank_sale: "D",
+    rank_factor: 7,
+    min_cal: Number(r.min_val) || 0,
+    max_cal: Number(r.max_val) || 0,
+    is_default_min: false,
+    item_type: r.item_type || "",
+    buying_status: r.buying_status || "",
+    division: r.division || "",
+    department: r.department || "",
+    sub_department: r.sub_department || "",
+    class: r.class || "",
+    pack_qty: r.pack_qty ?? null,
+    box_qty: r.box_qty ?? null,
+    min_edit: null,
+    max_edit: null,
+    from_doc: true,
+    doc_min_final: r.min_val ?? null,
+    doc_max_final: r.max_val ?? null,
+  });
+
+  const loadViewPage = useCallback(async (pageNum: number) => {
+    if (!hasViewPaging) return;
+    setViewPagingLoading(true);
+    try {
+      const params = buildViewParams(pageNum);
+      const { data, error } = await (supabase as any).rpc("get_minmax_view_page", params);
+      if (error) throw error;
+      const result = data as { total: number; rows: any[] };
+      setViewPagingTotal(result.total);
+      setRows((result.rows || []).map(mapViewRow));
+      setPage(pageNum);
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setViewPagingLoading(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasViewPaging, storeFilter, typeStoreFilter, itemTypeFilter, buyingFilter,
+      divisionFilter, departmentFilter, subDeptFilter, classFilter, skuFilter, barcodeFilter]);
+
   const handleView = useCallback(async () => {
     const hasAny = storeFilter.length || typeStoreFilter.length || itemTypeFilter.length || buyingFilter.length
       || divisionFilter.length || departmentFilter.length || subDeptFilter.length || classFilter.length
@@ -576,85 +649,21 @@ export default function MinmaxCalPage() {
     startElapsedTimer();
     try {
       const t0 = performance.now();
-      const params: Record<string, any> = {};
-      if (storeFilter.length) params.p_stores = storeFilter;
-      if (typeStoreFilter.length) params.p_type_stores = typeStoreFilter;
-      if (itemTypeFilter.length) params.p_item_types = itemTypeFilter;
-      if (buyingFilter.length) params.p_buying_statuses = buyingFilter;
-      if (divisionFilter.length) params.p_divisions = divisionFilter;
-      if (departmentFilter.length) params.p_departments = departmentFilter;
-      if (subDeptFilter.length) params.p_sub_departments = subDeptFilter;
-      if (classFilter.length) params.p_classes = classFilter;
-      if (skuFilter.length) params.p_skus = skuFilter;
-      if (barcodeFilter.length) params.p_barcodes = barcodeFilter;
-      setPhasePct(30);
-      const CONCURRENCY_VIEW = 4;
-      const fetchViewRange = async (from: number): Promise<any[]> => {
-        const { data: viewData, error: viewErr } = await (supabase as any)
-          .rpc("get_minmax_view_by_stores", params)
-          .range(from, from + RPC_BATCH - 1);
-        if (viewErr) throw viewErr;
-        return viewData || [];
-      };
-      const all: any[] = [];
-      const first = await fetchViewRange(0);
-      all.push(...first);
-      setPhaseLabel(`กำลังดึงข้อมูล Min/Max จาก View... (${all.length.toLocaleString()} แถว)`);
-      if (first.length >= RPC_BATCH) {
-        let nextFrom = RPC_BATCH;
-        let done = false;
-        while (!done) {
-          const offsets = Array.from({ length: CONCURRENCY_VIEW }, (_, i) => nextFrom + i * RPC_BATCH);
-          const results = await Promise.all(offsets.map(off => fetchViewRange(off)));
-          for (const chunk of results) {
-            all.push(...chunk);
-            setPhaseLabel(`กำลังดึงข้อมูล Min/Max จาก View... (${all.length.toLocaleString()} แถว)`);
-            if (chunk.length < RPC_BATCH) { done = true; break; }
-          }
-          nextFrom += CONCURRENCY_VIEW * RPC_BATCH;
-        }
-      }
-      setPhasePct(80);
+      const params = buildViewParams(0);
+      const { data, error } = await (supabase as any).rpc("get_minmax_view_page", params);
+      if (error) throw error;
+      const result = data as { total: number; rows: any[] };
       const ms = Math.round(performance.now() - t0);
-      // Map to CalcRow shape (read-only from minmax — flag as from_doc to keep edit-disabled UI)
-      const mapped: CalcRow[] = all.map((r: any) => ({
-        sku_code: r.sku_code,
-        product_name_la: r.product_name_la,
-        product_name_en: r.product_name_en,
-        main_barcode: r.main_barcode,
-        unit_of_measure: r.unit_of_measure,
-        store_name: r.store_name,
-        type_store: r.type_store || "",
-        size_store: "",
-        unit_pick: r.unit_pick == null || r.unit_pick === "" ? 1 : Number(r.unit_pick),
-        unit_pick_edit: null,
-        avg_sale: 0,
-        rank_sale: "D",
-        rank_factor: 7,
-        min_cal: Number(r.min_val) || 0,
-        max_cal: Number(r.max_val) || 0,
-        is_default_min: false,
-        item_type: r.item_type || "",
-        buying_status: r.buying_status || "",
-        division: r.division || "",
-        department: r.department || "",
-        sub_department: r.sub_department || "",
-        class: r.class || "",
-        pack_qty: r.pack_qty ?? null,
-        box_qty: r.box_qty ?? null,
-        min_edit: null,
-        max_edit: null,
-        from_doc: true,
-        doc_min_final: r.min_val ?? null,
-        doc_max_final: r.max_val ?? null,
-      }));
+      const mapped = (result.rows || []).map(mapViewRow);
       setRows(mapped);
       setHasData(true);
       setPage(0);
-      setHasStaging(false); // exit staging mode — view rows are client-side paginated
-      setPhaseTimes({ fetch: ms, rowCount: mapped.length });
+      setHasStaging(false);
+      setHasViewPaging(true);
+      setViewPagingTotal(result.total);
+      setPhaseTimes({ fetch: ms, rowCount: result.total });
       setPhasePct(100); setPhaseLabel("");
-      toast({ title: "ดึงข้อมูลสำเร็จ", description: `${mapped.length.toLocaleString()} แถว (${ms}ms)` });
+      toast({ title: "ดึงข้อมูลสำเร็จ", description: `${result.total.toLocaleString()} แถว (${ms}ms)` });
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
     } finally {
@@ -706,12 +715,14 @@ export default function MinmaxCalPage() {
     });
   }, [rows, searchChips, searchValue]);
 
+  const isServerPaging = hasStaging || hasViewPaging;
   const pageRows = useMemo(() => {
-    if (hasStaging) return rows; // staging mode: rows = current page from DB (already filtered server-side)
+    if (isServerPaging) return rows; // server-side: rows = current page from DB
     return filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
-  }, [rows, filtered, page, hasStaging]);
-  const totalPages = hasStaging
-    ? Math.max(1, Math.ceil(stagingFilteredCount / PAGE_SIZE))
+  }, [rows, filtered, page, isServerPaging]);
+  const serverPagingTotal = hasStaging ? stagingFilteredCount : viewPagingTotal;
+  const totalPages = isServerPaging
+    ? Math.max(1, Math.ceil(serverPagingTotal / PAGE_SIZE))
     : Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
 
   const addSearchChip = (col: keyof CalcRow) => {
@@ -1410,13 +1421,13 @@ export default function MinmaxCalPage() {
                 <span className="text-foreground">② Merge Doc:</span> {phaseTimes.merge}ms{(phaseTimes.docCount ?? 0) > 0 && <> · +<span className="text-amber-600 dark:text-amber-400 font-bold">{(phaseTimes.docCount ?? 0).toLocaleString()}</span> จาก Doc</>}
               </span>
             )}
-            {(hasStaging ? stagingTotal > 0 : rows.length > 0) && (
+            {(isServerPaging ? serverPagingTotal > 0 : rows.length > 0) && (
               <span className="font-medium ml-auto">
                 <span className="text-foreground">③ แสดง:</span>{" "}
                 <span className="text-primary font-bold">
-                  {hasStaging ? stagingFilteredCount.toLocaleString() : filtered.length.toLocaleString()}
+                  {isServerPaging ? serverPagingTotal.toLocaleString() : filtered.length.toLocaleString()}
                 </span>
-                {" "}/ รวม {hasStaging ? stagingTotal.toLocaleString() : rows.length.toLocaleString()} แถว · หน้า {page + 1}/{totalPages} ({pageRows.length} แถวบนหน้านี้)
+                {" "}/ รวม {isServerPaging ? (hasStaging ? stagingTotal : viewPagingTotal).toLocaleString() : rows.length.toLocaleString()} แถว · หน้า {page + 1}/{totalPages} ({pageRows.length} แถวบนหน้านี้)
               </span>
             )}
           </div>
@@ -1524,11 +1535,11 @@ export default function MinmaxCalPage() {
                 <X className="w-3 h-3 mr-1" /> Clear Filters
               </Button>
             )}
-            {hasStaging && (
+            {(hasStaging || hasViewPaging) && (
               <Button size="sm" variant="default" className="h-7 text-xs ml-auto"
-                disabled={stagingLoading}
-                onClick={() => loadStagingPage(0)}>
-                {stagingLoading ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Eye className="w-3 h-3 mr-1" />}
+                disabled={stagingLoading || viewPagingLoading}
+                onClick={() => hasStaging ? loadStagingPage(0) : loadViewPage(0)}>
+                {(stagingLoading || viewPagingLoading) ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Eye className="w-3 h-3 mr-1" />}
                 Show
               </Button>
             )}
@@ -1761,17 +1772,25 @@ export default function MinmaxCalPage() {
             )}
           </div>
 
-          {(hasStaging ? stagingFilteredCount > PAGE_SIZE : filtered.length > PAGE_SIZE) && (
+          {(isServerPaging ? serverPagingTotal > PAGE_SIZE : filtered.length > PAGE_SIZE) && (
             <div className="px-6 py-2 border-t border-border flex items-center justify-between bg-card">
               <span className="text-xs text-muted-foreground">หน้า {page + 1} / {totalPages}</span>
               <div className="flex gap-1">
                 <Button size="sm" variant="outline"
-                  disabled={page === 0 || stagingLoading}
-                  onClick={() => hasStaging ? loadStagingPage(page - 1) : setPage(p => p - 1)}
+                  disabled={page === 0 || stagingLoading || viewPagingLoading}
+                  onClick={() => {
+                    if (hasStaging) loadStagingPage(page - 1);
+                    else if (hasViewPaging) loadViewPage(page - 1);
+                    else setPage(p => p - 1);
+                  }}
                   className="h-7 text-xs">ก่อนหน้า</Button>
                 <Button size="sm" variant="outline"
-                  disabled={page >= totalPages - 1 || stagingLoading}
-                  onClick={() => hasStaging ? loadStagingPage(page + 1) : setPage(p => p + 1)}
+                  disabled={page >= totalPages - 1 || stagingLoading || viewPagingLoading}
+                  onClick={() => {
+                    if (hasStaging) loadStagingPage(page + 1);
+                    else if (hasViewPaging) loadViewPage(page + 1);
+                    else setPage(p => p + 1);
+                  }}
                   className="h-7 text-xs">ถัดไป</Button>
               </div>
             </div>
