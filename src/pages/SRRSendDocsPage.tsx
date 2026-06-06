@@ -1180,6 +1180,7 @@ export default function SRRSendDocsPage() {
   const [popupDepositor, setPopupDepositor] = useState("");
   const [popupReceiver, setPopupReceiver] = useState("");
   const [popupDestination, setPopupDestination] = useState("");
+  const [isSavingHop, setIsSavingHop] = useState(false);
   // Per-column widths (px) for destination dialog — keyed by column index
   const [colWidths, setColWidths] = useState<Record<number, number>>({});
   // Per-column search filter
@@ -1494,6 +1495,7 @@ export default function SRRSendDocsPage() {
 
   const saveHop = async (action: string) => {
     if (!activeShipment || !user) return;
+    if (isSavingHop) return;
     if (destCodes.length === 0) {
       toast({ title: "กรุณาสะแกนเอกสารก่อน", variant: "destructive" });
       return;
@@ -1522,37 +1524,43 @@ export default function SRRSendDocsPage() {
     const incomingSet = new Set(incomingCodes);
     const missVsIncoming = incomingCodes.filter(c => !destSet.has(c)).length;
     const extraVsIncoming = destCodes.filter(c => !incomingSet.has(c)).length;
-    await supabase.from("document_shipments").update({
-      destination_codes: destCodes,
-      destination_location: destLocation.trim(),
-      status: isClosed ? (missVsIncoming === 0 && extraVsIncoming === 0 ? "matched" : "mismatch") : "in_transit",
-      compared_at: new Date().toISOString(),
-      destination_scanned_at: new Date().toISOString(),
-    }).eq("id", activeShipment.id);
 
-    await supabase.from("document_movements" as any).insert({
-      shipment_id: activeShipment.id,
-      location_name: destLocation.trim(),
-      action,
-      codes: destCodes,
-      notes: destNotes.trim() || null,
-      depositor_name: destDepositor.trim(),
-      receiver_name: destReceiver.trim(),
-      user_id: user.id,
-    });
+    setIsSavingHop(true);
+    try {
+      await supabase.from("document_shipments").update({
+        destination_codes: destCodes,
+        destination_location: destLocation.trim(),
+        status: isClosed ? (missVsIncoming === 0 && extraVsIncoming === 0 ? "matched" : "mismatch") : "in_transit",
+        compared_at: new Date().toISOString(),
+        destination_scanned_at: new Date().toISOString(),
+      }).eq("id", activeShipment.id);
 
-    toast({ title: `บันทึก ${ACTION_LABELS[action] || action} แล้ว`, description: `จุด: ${destLocation}` });
-    await load();
+      await supabase.from("document_movements" as any).insert({
+        shipment_id: activeShipment.id,
+        location_name: destLocation.trim(),
+        action,
+        codes: destCodes,
+        notes: destNotes.trim() || null,
+        depositor_name: destDepositor.trim(),
+        receiver_name: destReceiver.trim(),
+        user_id: user.id,
+      });
 
-    if (isClosed) {
-      clearDestDraft(); setDestOpen(false); setMainTab("deposit");
-    } else {
-      // After "arrived" save — show popup asking ฝากต่อ / จบ
-      setPopupStep("choose");
-      setPopupDepositor("");
-      setPopupReceiver("");
-      setPopupDestination("");
-      setArrivedPopupOpen(true);
+      toast({ title: `บันทึก ${ACTION_LABELS[action] || action} แล้ว`, description: `จุด: ${destLocation}` });
+      await load();
+
+      if (isClosed) {
+        clearDestDraft(); setDestOpen(false); setMainTab("deposit");
+      } else {
+        // After "arrived" save — show popup asking ฝากต่อ / จบ
+        setPopupStep("choose");
+        setPopupDepositor("");
+        setPopupReceiver("");
+        setPopupDestination("");
+        setArrivedPopupOpen(true);
+      }
+    } finally {
+      setIsSavingHop(false);
     }
   };
 
@@ -1560,6 +1568,7 @@ export default function SRRSendDocsPage() {
   // Inserts forward movement carrying popup values; next column pre-fills them read-only.
   const forwardAfterArrived = async () => {
     if (!activeShipment || !user) return;
+    if (isSavingHop) return;
     if (!popupDepositor.trim() || !popupReceiver.trim() || !popupDestination.trim()) {
       toast({ title: "กรุณากรอกข้อมูลให้ครบ", description: "ชื่อผู้ฝาก, ชื่อผู้รับ, จุดปลายทาง", variant: "destructive" });
       return;
@@ -1574,23 +1583,28 @@ export default function SRRSendDocsPage() {
     // Forward set = เฉพาะ PO ที่สะแกนได้จริงที่จุดนี้ (ตรง + เกิน)
     // PO ที่ขาดไม่ต้องส่งต่อ — จุดถัดไปรับเฉพาะของที่มีอยู่จริงเท่านั้น
     const forwardCodes = [...(lastArrived.codes || [])];
-    await supabase.from("document_movements" as any).insert({
-      shipment_id: activeShipment.id,
-      location_name: popupDestination.trim(),
-      action: "forward",
-      codes: forwardCodes,
-      depositor_name: popupDepositor.trim(),
-      receiver_name: popupReceiver.trim(),
-      user_id: user.id,
-    });
-    // Pre-fill the next active column with popup values (will render read-only)
-    setDestCodes([]);
-    setDestLocation(popupDestination.trim());
-    setDestNotes("");
-    setDestDepositor(popupDepositor.trim());
-    setDestReceiver(popupReceiver.trim());
-    setArrivedPopupOpen(false);
-    await load();
+    setIsSavingHop(true);
+    try {
+      await supabase.from("document_movements" as any).insert({
+        shipment_id: activeShipment.id,
+        location_name: popupDestination.trim(),
+        action: "forward",
+        codes: forwardCodes,
+        depositor_name: popupDepositor.trim(),
+        receiver_name: popupReceiver.trim(),
+        user_id: user.id,
+      });
+      // Pre-fill the next active column with popup values (will render read-only)
+      setDestCodes([]);
+      setDestLocation(popupDestination.trim());
+      setDestNotes("");
+      setDestDepositor(popupDepositor.trim());
+      setDestReceiver(popupReceiver.trim());
+      setArrivedPopupOpen(false);
+      await load();
+    } finally {
+      setIsSavingHop(false);
+    }
   };
 
   const closeAfterArrived = async () => {
@@ -2289,8 +2303,8 @@ export default function SRRSendDocsPage() {
               </div>
               <DialogFooter className="gap-1 pt-1">
                 <Button variant="outline" size="sm" onClick={() => setPopupStep("choose")}>ย้อนกลับ</Button>
-                <Button size="sm" onClick={forwardAfterArrived}>
-                  <Save className="w-4 h-4 mr-1" />Save
+                <Button size="sm" onClick={forwardAfterArrived} disabled={isSavingHop}>
+                  <Save className="w-4 h-4 mr-1" />{isSavingHop ? "กำลังบันทึก..." : "Save"}
                 </Button>
               </DialogFooter>
             </div>
@@ -2728,10 +2742,10 @@ export default function SRRSendDocsPage() {
                           <FileSpreadsheet className="w-3 h-3 mr-1" />Export Excel
                         </Button>
                         <div className="flex items-center gap-2">
-                          <Button size="sm" variant="secondary" onClick={() => saveHop("arrived")}>
-                            <CheckCircle2 className="w-4 h-4 mr-1" />บันทึกตรวจ (รับตรวจ)
+                          <Button size="sm" variant="secondary" onClick={() => saveHop("arrived")} disabled={isSavingHop}>
+                            <CheckCircle2 className="w-4 h-4 mr-1" />{isSavingHop ? "กำลังบันทึก..." : "บันทึกตรวจ (รับตรวจ)"}
                           </Button>
-                          <Button size="sm" variant="destructive" onClick={() => { if (window.confirm("ยืนยันการจบล็อตเอกสารนี้?")) saveHop("closed"); }}>
+                          <Button size="sm" variant="destructive" onClick={() => { if (window.confirm("ยืนยันการจบล็อตเอกสารนี้?")) saveHop("closed"); }} disabled={isSavingHop}>
                             <Save className="w-4 h-4 mr-1" />จบล็อตนี้
                           </Button>
                         </div>
