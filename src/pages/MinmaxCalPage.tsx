@@ -12,7 +12,7 @@ import {
 import {
   Loader2, Calculator, Upload, Save, Download, FileText, Trash2,
   RotateCcw, Search, Settings2, X, Store, Tag, Activity, Layers,
-  ChevronRight, ChevronDown as ChevronDownIcon, Eye, BarChart3, StopCircle,
+  ChevronRight, ChevronDown as ChevronDownIcon, Eye, BarChart3, StopCircle, Database,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { cn } from "@/lib/utils";
