@@ -299,6 +299,12 @@ export default function MinmaxCalPage() {
 
   // Unit Pick Override (loaded from DB, applied to rows)
   const unitPickOverrideRef = useRef<Map<string, number>>(new Map());
+  // Cache enrichment data (range_store_view + store_type) — rarely changes, no need to re-fetch on every Refresh
+  type UPEnrich = {
+    rsvMap: Map<string, { main_barcode: string | null; product_name_la: string | null; product_name_en: string | null; pack_qty: number | null; box_qty: number | null; division: string | null; department: string | null; sub_department: string | null }>;
+    storeTypeMap: Map<string, string>;
+  };
+  const upEnrichRef = useRef<UPEnrich | null>(null);
   const [upRows, setUpRows] = useState<UPRow[]>([]);
   const [upLoading, setUpLoading] = useState(false);
   const [upSearch, setUpSearch] = useState("");
@@ -428,61 +434,70 @@ export default function MinmaxCalPage() {
     unitPickOverrideRef.current = map;
   };
 
-  const loadUPRows = async () => {
+  const loadUPRows = async (refreshEnrich = false) => {
     setUpLoading(true);
     try {
-      // Load overrides (paginated)
+      // Step 1: Load override list only (fast, always fresh)
       const list = await fetchAllPaged((from, to) =>
-        supabase.from("unit_pick_override" as any).select("sku_code, store_name, unit_pick").order("sku_code").range(from, to) as any
+        supabase.from("unit_pick_override" as any).select("sku_code, store_name, unit_pick").order("sku_code").range(from, to) as any,
+        5000
       );
       if (list.length === 0) { setUpRows([]); return; }
 
       const skuCodes = [...new Set(list.map((r: any) => r.sku_code as string))];
       const storeNames = [...new Set(list.map((r: any) => r.store_name as string))];
 
-      // Run lookups in parallel:
-      // - range_store_view: per sku_code, has pack_qty/box_qty/product info/division
-      // - store_type: store_name → type_store
-      const [rsvAll, stAll] = await Promise.all([
-        (async () => {
-          const res: any[] = [];
-          for (let i = 0; i < skuCodes.length; i += 500) {
-            const slice = skuCodes.slice(i, i + 500);
-            const { data } = await (supabase as any)
+      // Step 2: Enrichment (range_store_view + store_type)
+      // Use cache unless: first time, forced refresh, or new SKUs not in cache
+      const cachedEnrich = upEnrichRef.current;
+      const hasNewSkus = !cachedEnrich || skuCodes.some(s => !cachedEnrich.rsvMap.has(s));
+      const needEnrich = refreshEnrich || hasNewSkus;
+
+      let enrich: UPEnrich;
+      if (needEnrich) {
+        // Fetch in parallel, range_store_view chunks also parallel
+        const rsvChunks: string[][] = [];
+        for (let i = 0; i < skuCodes.length; i += 500) rsvChunks.push(skuCodes.slice(i, i + 500));
+
+        const [rsvResults, stAll] = await Promise.all([
+          Promise.all(rsvChunks.map(slice =>
+            (supabase as any)
               .from("range_store_view")
               .select("sku_code, main_barcode, product_name_la, product_name_en, pack_qty, box_qty, division, department, sub_department")
-              .in("sku_code", slice);
-            res.push(...(data || []));
-          }
-          return res;
-        })(),
-        (async () => {
-          const res: any[] = [];
-          for (let i = 0; i < storeNames.length; i += 500) {
-            const slice = storeNames.slice(i, i + 500);
-            const { data } = await supabase.from("store_type").select("store_name, type_store").in("store_name", slice);
-            res.push(...(data || []));
-          }
-          return res;
-        })(),
-      ]);
+              .in("sku_code", slice)
+              .then(({ data }: any) => data || [])
+          )),
+          (async () => {
+            const res: any[] = [];
+            for (let i = 0; i < storeNames.length; i += 500) {
+              const slice = storeNames.slice(i, i + 500);
+              const { data } = await supabase.from("store_type").select("store_name, type_store").in("store_name", slice);
+              res.push(...(data || []));
+            }
+            return res;
+          })(),
+        ]);
 
-      // Build lookup maps
-      const rsvMap = new Map<string, { main_barcode: string | null; product_name_la: string | null; product_name_en: string | null; pack_qty: number | null; box_qty: number | null; division: string | null; department: string | null; sub_department: string | null }>();
-      for (const d of rsvAll) {
-        if (!rsvMap.has(d.sku_code)) rsvMap.set(d.sku_code, {
-          main_barcode: d.main_barcode ?? null,
-          product_name_la: d.product_name_la ?? null,
-          product_name_en: d.product_name_en ?? null,
-          pack_qty: d.pack_qty != null ? Number(d.pack_qty) : null,
-          box_qty: d.box_qty != null ? Number(d.box_qty) : null,
-          division: d.division ?? null,
-          department: d.department ?? null,
-          sub_department: d.sub_department ?? null,
-        });
+        const rsvAll = rsvResults.flat();
+        const rsvMap = new Map<string, { main_barcode: string | null; product_name_la: string | null; product_name_en: string | null; pack_qty: number | null; box_qty: number | null; division: string | null; department: string | null; sub_department: string | null }>();
+        for (const d of rsvAll) {
+          if (!rsvMap.has(d.sku_code)) rsvMap.set(d.sku_code, {
+            main_barcode: d.main_barcode ?? null, product_name_la: d.product_name_la ?? null,
+            product_name_en: d.product_name_en ?? null,
+            pack_qty: d.pack_qty != null ? Number(d.pack_qty) : null,
+            box_qty: d.box_qty != null ? Number(d.box_qty) : null,
+            division: d.division ?? null, department: d.department ?? null, sub_department: d.sub_department ?? null,
+          });
+        }
+        const storeTypeMap = new Map<string, string>();
+        for (const s of stAll) storeTypeMap.set(s.store_name, (s as any).type_store ?? "");
+        enrich = { rsvMap, storeTypeMap };
+        upEnrichRef.current = enrich;
+      } else {
+        enrich = cachedEnrich!;
       }
-      const storeTypeMap = new Map<string, string>();
-      for (const s of stAll) storeTypeMap.set(s.store_name, (s as any).type_store ?? "");
+
+      const { rsvMap, storeTypeMap } = enrich;
 
       const rows: UPRow[] = list.map((r: any) => ({
         sku_code: r.sku_code,
@@ -596,8 +611,7 @@ export default function MinmaxCalPage() {
         ));
       }
       toast({ title: `Import สำเร็จ ${payload.length.toLocaleString()} แถว` });
-      // Refresh override ref + display (parallel)
-      await loadUPRows();
+      await loadUPRows(true); // force refresh enrichment for newly added SKUs
     } catch (err: any) {
       toast({ title: "Import Error", description: err.message, variant: "destructive" });
     } finally {
