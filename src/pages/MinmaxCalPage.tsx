@@ -122,7 +122,7 @@ function chunkByJsonSize<T>(items: T[], maxBytes = SAVE_DOC_MAX_CHUNK_BYTES, max
 
 interface UPRow {
   sku_code: string;
-  store_name: string;
+  size_store: string;
   unit_pick: number;
   main_barcode: string | null;
   product_name_la: string | null;
@@ -132,7 +132,6 @@ interface UPRow {
   division: string | null;
   department: string | null;
   sub_department: string | null;
-  type_store: string | null;
 }
 
 // Searchable columns for Odoo-style search
@@ -299,10 +298,9 @@ export default function MinmaxCalPage() {
 
   // Unit Pick Override (loaded from DB, applied to rows)
   const unitPickOverrideRef = useRef<Map<string, number>>(new Map());
-  // Cache enrichment data (range_store_view + store_type) — rarely changes, no need to re-fetch on every Refresh
+  // Cache enrichment data (data_master) — rarely changes, no need to re-fetch on every Refresh
   type UPEnrich = {
     rsvMap: Map<string, { main_barcode: string | null; product_name_la: string | null; product_name_en: string | null; pack_qty: number | null; box_qty: number | null; division: string | null; department: string | null; sub_department: string | null }>;
-    storeTypeMap: Map<string, string>;
   };
   const upEnrichRef = useRef<UPEnrich | null>(null);
   const [upRows, setUpRows] = useState<UPRow[]>([]);
@@ -312,21 +310,13 @@ export default function MinmaxCalPage() {
   const [upSelected, setUpSelected] = useState<Set<string>>(new Set());
   const [upImporting, setUpImporting] = useState(false);
   const upFileRef = useRef<HTMLInputElement>(null);
-  const [upFilterStore, setUpFilterStore] = useState<string[]>([]);
-  const [upFilterType, setUpFilterType] = useState<string[]>([]);
+  const [upFilterSize, setUpFilterSize] = useState<string[]>([]);
   const [upFilterDiv, setUpFilterDiv] = useState<string[]>([]);
   const [upFilterDept, setUpFilterDept] = useState<string[]>([]);
   const [upFilterSubDept, setUpFilterSubDept] = useState<string[]>([]);
   const [upPage, setUpPage] = useState(0);
   const UP_PAGE_SIZE = 100;
-  const [upStoreOpts, setUpStoreOpts] = useState<{ store_name: string; type_store: string }[]>([]);
-  useEffect(() => { setUpPage(0); }, [upSearch, upFilterStore, upFilterType, upFilterDiv, upFilterDept, upFilterSubDept]);
-  // Load store options from store_type once on mount (for filter before Show)
-  useEffect(() => {
-    supabase.from("store_type").select("store_name, type_store").then(({ data }) => {
-      if (data) setUpStoreOpts(data as any[]);
-    });
-  }, []);
+  useEffect(() => { setUpPage(0); }, [upSearch, upFilterSize, upFilterDiv, upFilterDept, upFilterSubDept]);
 
   // View paging state (View → server-side pagination from minmax table)
   const [hasViewPaging, setHasViewPaging] = useState(false);
@@ -411,7 +401,7 @@ export default function MinmaxCalPage() {
 
   // Apply unit_pick override from DB to a single CalcRow, recompute max_cal
   const applyUPOverride = (r: CalcRow, n = nFactor): CalcRow => {
-    const override = unitPickOverrideRef.current.get(`${r.sku_code}|${r.store_name}`);
+    const override = unitPickOverrideRef.current.get(`${r.sku_code}|${r.size_store}`);
     if (override == null) return r;
     const up = override;
     const avg = r.avg_sale;
@@ -438,10 +428,10 @@ export default function MinmaxCalPage() {
 
   const loadUnitPickOverrideRef = async () => {
     const all = await fetchAllPaged((from, to) =>
-      supabase.from("unit_pick_override" as any).select("sku_code, store_name, unit_pick").range(from, to) as any
+      supabase.from("unit_pick_override_size" as any).select("sku_code, size_store, unit_pick").range(from, to) as any
     );
     const map = new Map<string, number>();
-    for (const r of all) map.set(`${r.sku_code}|${r.store_name}`, Number(r.unit_pick));
+    for (const r of all) map.set(`${r.sku_code}|${r.size_store}`, Number(r.unit_pick));
     unitPickOverrideRef.current = map;
   };
 
@@ -449,18 +439,15 @@ export default function MinmaxCalPage() {
     setUpLoading(true);
     try {
       // Step 1: Load override list only (fast, always fresh)
-      // pageSize=1000 matches PostgREST default row cap — loop continues until partial page
       const list = await fetchAllPaged((from, to) =>
-        supabase.from("unit_pick_override" as any).select("sku_code, store_name, unit_pick").order("sku_code").range(from, to) as any,
+        supabase.from("unit_pick_override_size" as any).select("sku_code, size_store, unit_pick").order("sku_code").range(from, to) as any,
         1000
       );
       if (list.length === 0) { setUpRows([]); return; }
 
       const skuCodes = [...new Set(list.map((r: any) => r.sku_code as string))];
-      const storeNames = [...new Set(list.map((r: any) => r.store_name as string))];
 
-      // Step 2: Enrichment (range_store_view + store_type)
-      // Use cache unless: first time, forced refresh, or new SKUs not in cache
+      // Step 2: Enrichment (data_master only — no store needed)
       const cachedEnrich = upEnrichRef.current;
       const hasNewSkus = !cachedEnrich || skuCodes.some(s => !cachedEnrich.rsvMap.has(s));
       const needEnrich = refreshEnrich || hasNewSkus;
@@ -470,31 +457,14 @@ export default function MinmaxCalPage() {
         const dmChunks: string[][] = [];
         for (let i = 0; i < skuCodes.length; i += 500) dmChunks.push(skuCodes.slice(i, i + 500));
 
-        // Fetch all data_master rows for these SKUs + store_type in parallel
-        const [dmResults, stAll] = await Promise.all([
-          Promise.all(dmChunks.map(slice =>
-            supabase
-              .from("data_master")
-              .select("sku_code, main_barcode, product_name_la, product_name_en, division, department, sub_department, unit_of_measure, packing_size_qty")
-              .in("sku_code", slice)
-              .then(({ data }) => data || [])
-          )),
-          (async () => {
-            const res: any[] = [];
-            for (let i = 0; i < storeNames.length; i += 500) {
-              const slice = storeNames.slice(i, i + 500);
-              const { data } = await supabase.from("store_type").select("store_name, type_store").in("store_name", slice);
-              res.push(...(data || []));
-            }
-            return res;
-          })(),
-        ]);
+        const dmResults = await Promise.all(dmChunks.map(slice =>
+          supabase
+            .from("data_master")
+            .select("sku_code, main_barcode, product_name_la, product_name_en, division, department, sub_department, unit_of_measure, packing_size_qty")
+            .in("sku_code", slice)
+            .then(({ data }) => data || [])
+        ));
 
-        // Build rsvMap from data_master rows
-        // - main_barcode: from row where packing_size_qty = 1
-        // - pack_qty: min packing_size_qty where unit_of_measure = 'Pack'
-        // - box_qty: min packing_size_qty where unit_of_measure = 'Box'
-        // - other fields: from any row (take first encountered)
         type RsvEntry = { main_barcode: string | null; product_name_la: string | null; product_name_en: string | null; pack_qty: number | null; box_qty: number | null; division: string | null; department: string | null; sub_department: string | null };
         const rsvMap = new Map<string, RsvEntry>();
         for (const d of dmResults.flat()) {
@@ -512,34 +482,22 @@ export default function MinmaxCalPage() {
             });
           }
           const entry = rsvMap.get(sku)!;
-
-          // Barcode: packing_size_qty = 1
-          if (pqty === 1 && !entry.main_barcode) {
-            entry.main_barcode = (d as any).main_barcode ?? null;
-          }
-          // Pack: min packing_size_qty where uom = 'pack'
-          if (uom === "pack" && pqty != null) {
-            entry.pack_qty = entry.pack_qty == null ? pqty : Math.min(entry.pack_qty, pqty);
-          }
-          // Box: min packing_size_qty where uom = 'box'
-          if (uom === "box" && pqty != null) {
-            entry.box_qty = entry.box_qty == null ? pqty : Math.min(entry.box_qty, pqty);
-          }
+          if (pqty === 1 && !entry.main_barcode) entry.main_barcode = (d as any).main_barcode ?? null;
+          if (uom === "pack" && pqty != null) entry.pack_qty = entry.pack_qty == null ? pqty : Math.min(entry.pack_qty, pqty);
+          if (uom === "box" && pqty != null) entry.box_qty = entry.box_qty == null ? pqty : Math.min(entry.box_qty, pqty);
         }
 
-        const storeTypeMap = new Map<string, string>();
-        for (const s of stAll) storeTypeMap.set(s.store_name, (s as any).type_store ?? "");
-        enrich = { rsvMap, storeTypeMap };
+        enrich = { rsvMap };
         upEnrichRef.current = enrich;
       } else {
         enrich = cachedEnrich!;
       }
 
-      const { rsvMap, storeTypeMap } = enrich;
+      const { rsvMap } = enrich;
 
       const rows: UPRow[] = list.map((r: any) => ({
         sku_code: r.sku_code,
-        store_name: r.store_name,
+        size_store: r.size_store,
         unit_pick: r.unit_pick,
         main_barcode: rsvMap.get(r.sku_code)?.main_barcode ?? null,
         product_name_la: rsvMap.get(r.sku_code)?.product_name_la ?? null,
@@ -549,13 +507,12 @@ export default function MinmaxCalPage() {
         division: rsvMap.get(r.sku_code)?.division ?? null,
         department: rsvMap.get(r.sku_code)?.department ?? null,
         sub_department: rsvMap.get(r.sku_code)?.sub_department ?? null,
-        type_store: storeTypeMap.get(r.store_name) ?? null,
       }));
       setUpRows(rows);
       setUpHasLoaded(true);
       // Also refresh override ref
       const map = new Map<string, number>();
-      for (const r of list) map.set(`${r.sku_code}|${r.store_name}`, Number(r.unit_pick));
+      for (const r of list) map.set(`${r.sku_code}|${r.size_store}`, Number(r.unit_pick));
       unitPickOverrideRef.current = map;
     } catch (err: any) {
       toast({ title: "Error loading Unit Pick", description: err.message, variant: "destructive" });
@@ -581,29 +538,29 @@ export default function MinmaxCalPage() {
         const n = norm(k);
         if (n === "skucode" || n === "sku") keyMap[k] = "sku_code";
         else if (n === "barcode" || n === "mainbarcode") keyMap[k] = "barcode";
-        else if (n === "storename" || n === "store") keyMap[k] = "store_name";
+        else if (n === "sizestore" || n === "size") keyMap[k] = "size_store";
         else if (n === "unitpick" || n === "unitpicking") keyMap[k] = "unit_pick";
       }
       const skuColKey = Object.keys(keyMap).find(k => keyMap[k] === "sku_code");
       const bcColKey = Object.keys(keyMap).find(k => keyMap[k] === "barcode");
-      const storeColKey = Object.keys(keyMap).find(k => keyMap[k] === "store_name");
+      const sizeColKey = Object.keys(keyMap).find(k => keyMap[k] === "size_store");
       const upColKey = Object.keys(keyMap).find(k => keyMap[k] === "unit_pick");
       if (!upColKey) throw new Error("ไม่พบคอลัมน์ unit_pick");
-      if (!storeColKey) throw new Error("ไม่พบคอลัมน์ store_name");
+      if (!sizeColKey) throw new Error("ไม่พบคอลัมน์ size_store (Super หรือ Mini)");
       if (!skuColKey && !bcColKey) throw new Error("ไม่พบคอลัมน์ sku_code หรือ barcode");
 
       // Collect raw rows
-      const rawRows: { lookup: string; isBc: boolean; store_name: string; unit_pick: number }[] = [];
+      const rawRows: { lookup: string; isBc: boolean; size_store: string; unit_pick: number }[] = [];
       for (const row of json) {
         const sku = skuColKey ? String(row[skuColKey] ?? "").trim() : "";
         const bc = bcColKey ? String(row[bcColKey] ?? "").trim() : "";
         const lookup = sku || bc;
         if (!lookup) continue;
-        const store = storeColKey ? String(row[storeColKey] ?? "").trim() : "";
-        if (!store) continue;
+        const size = sizeColKey ? String(row[sizeColKey] ?? "").trim() : "";
+        if (!size) continue;
         const up = Number(row[upColKey]);
         if (!Number.isFinite(up) || up < 1) continue;
-        rawRows.push({ lookup, isBc: !sku && !!bc, store_name: store, unit_pick: up });
+        rawRows.push({ lookup, isBc: !sku && !!bc, size_store: size, unit_pick: up });
       }
 
       // Resolve barcodes → sku_code (parallel chunks)
@@ -627,12 +584,12 @@ export default function MinmaxCalPage() {
         }
       }
 
-      // Build upsert payload (distinct by sku_code × store_name, last row wins)
-      const upsertMap = new Map<string, { sku_code: string; store_name: string; unit_pick: number }>();
+      // Build upsert payload (distinct by sku_code × size_store, last row wins)
+      const upsertMap = new Map<string, { sku_code: string; size_store: string; unit_pick: number }>();
       for (const r of rawRows) {
         const sku = r.isBc ? (barcodeToSku.get(r.lookup) || "") : r.lookup;
         if (!sku) continue;
-        upsertMap.set(`${sku}|${r.store_name}`, { sku_code: sku, store_name: r.store_name, unit_pick: r.unit_pick });
+        upsertMap.set(`${sku}|${r.size_store}`, { sku_code: sku, size_store: r.size_store, unit_pick: r.unit_pick });
       }
       const payload = Array.from(upsertMap.values());
       if (payload.length === 0) throw new Error("ไม่มีข้อมูลที่ valid สำหรับ import");
@@ -645,7 +602,7 @@ export default function MinmaxCalPage() {
       for (let i = 0; i < upsertChunks.length; i += UPSERT_CONCURRENCY) {
         const batch = upsertChunks.slice(i, i + UPSERT_CONCURRENCY);
         await Promise.all(batch.map(chunk =>
-          (supabase as any).from("unit_pick_override").upsert(chunk, { onConflict: "sku_code,store_name" })
+          (supabase as any).from("unit_pick_override_size").upsert(chunk, { onConflict: "sku_code,size_store" })
             .then(({ error }: any) => { if (error) throw error; })
         ));
       }
@@ -662,15 +619,15 @@ export default function MinmaxCalPage() {
     if (upSelected.size === 0) return;
     const pairs = Array.from(upSelected).map(k => {
       const [sku_code, ...rest] = k.split("|");
-      return { sku_code, store_name: rest.join("|") };
+      return { sku_code, size_store: rest.join("|") };
     });
     try {
       for (const p of pairs) {
         const { error } = await (supabase as any)
-          .from("unit_pick_override")
+          .from("unit_pick_override_size")
           .delete()
           .eq("sku_code", p.sku_code)
-          .eq("store_name", p.store_name);
+          .eq("size_store", p.size_store);
         if (error) throw error;
       }
       toast({ title: `ลบ ${pairs.length} แถวเรียบร้อย` });
@@ -2269,7 +2226,7 @@ export default function MinmaxCalPage() {
         <TabsContent value="unitpick" className="flex-1 min-h-0 flex flex-col overflow-hidden px-6 !mt-2 data-[state=inactive]:hidden data-[state=active]:flex">
           {/* Toolbar row 1: action buttons */}
           {(() => {
-            const upHasFilter = upSearch.trim() !== "" || upFilterStore.length > 0 || upFilterType.length > 0 || upFilterDiv.length > 0 || upFilterDept.length > 0 || upFilterSubDept.length > 0;
+            const upHasFilter = upSearch.trim() !== "" || upFilterSize.length > 0 || upFilterDiv.length > 0 || upFilterDept.length > 0 || upFilterSubDept.length > 0;
             return (
           <div className="pb-1 flex items-center gap-2 flex-wrap">
             <Button size="sm" className="text-xs h-7 bg-blue-600 hover:bg-blue-700 text-white"
@@ -2288,7 +2245,7 @@ export default function MinmaxCalPage() {
             <input ref={upFileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={importUnitPickExcel} />
             <Button size="sm" variant="outline" className="text-xs h-7"
               onClick={() => {
-                const ws = XLSX.utils.json_to_sheet([{ sku_code: "", barcode: "", store_name: "", unit_pick: "" }]);
+                const ws = XLSX.utils.json_to_sheet([{ sku_code: "", barcode: "", size_store: "Super", unit_pick: "" }, { sku_code: "", barcode: "", size_store: "Mini", unit_pick: "" }]);
                 const wb = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(wb, ws, "UnitPick_Import");
                 XLSX.writeFile(wb, "unit_pick_import_template.xlsx");
@@ -2303,18 +2260,16 @@ export default function MinmaxCalPage() {
             {upHasLoaded && upRows.length > 0 && (() => {
               const q = upSearch.trim().toLowerCase();
               const filtered = upRows.filter(r => {
-                if (upFilterType.length && !upFilterType.includes(r.type_store ?? "")) return false;
-                if (upFilterStore.length && !upFilterStore.includes(r.store_name)) return false;
+                if (upFilterSize.length && !upFilterSize.includes(r.size_store)) return false;
                 if (upFilterDiv.length && !upFilterDiv.includes(r.division ?? "")) return false;
                 if (upFilterDept.length && !upFilterDept.includes(r.department ?? "")) return false;
                 if (upFilterSubDept.length && !upFilterSubDept.includes(r.sub_department ?? "")) return false;
-                if (q) return r.sku_code.toLowerCase().includes(q) || r.store_name.toLowerCase().includes(q) || (r.main_barcode || "").toLowerCase().includes(q) || (r.product_name_la || "").toLowerCase().includes(q) || (r.product_name_en || "").toLowerCase().includes(q);
+                if (q) return r.sku_code.toLowerCase().includes(q) || r.size_store.toLowerCase().includes(q) || (r.main_barcode || "").toLowerCase().includes(q) || (r.product_name_la || "").toLowerCase().includes(q) || (r.product_name_en || "").toLowerCase().includes(q);
                 return true;
               });
               const exportToXlsx = (exportRows: UPRow[], filename: string) => {
                 const data = exportRows.map(r => ({
-                  "Type Store": r.type_store ?? "",
-                  "Store Name": r.store_name,
+                  "Size Store": r.size_store,
                   "SKU Code": r.sku_code,
                   "Barcode": r.main_barcode ?? "",
                   "Product Name (LA)": r.product_name_la ?? "",
@@ -2331,7 +2286,7 @@ export default function MinmaxCalPage() {
                 XLSX.utils.book_append_sheet(wb, ws, "UnitPick");
                 XLSX.writeFile(wb, filename);
               };
-              const selectedRows = upRows.filter(r => upSelected.has(`${r.sku_code}|${r.store_name}`));
+              const selectedRows = upRows.filter(r => upSelected.has(`${r.sku_code}|${r.size_store}`));
               return (
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -2359,27 +2314,22 @@ export default function MinmaxCalPage() {
 
           {/* Toolbar row 2: filters + search */}
           {(() => {
-            // Type Store + Store: from store_type (available before Show)
-            const allTypes = [...new Set(upStoreOpts.map(r => r.type_store).filter(Boolean))].sort();
-            const allStores = [...new Set(upStoreOpts.map(r => r.store_name))].sort();
-            // Division/Dept/SubDept: from loaded data (available after Show)
+            const allSizes = [...new Set(upRows.map(r => r.size_store).filter(Boolean))].sort();
             const allDivs = [...new Set(upRows.map(r => r.division).filter(Boolean) as string[])].sort();
             const allDepts = [...new Set(upRows.map(r => r.department).filter(Boolean) as string[])].sort();
             const allSubDepts = [...new Set(upRows.map(r => r.sub_department).filter(Boolean) as string[])].sort();
             return (
               <div className="pb-2 flex items-center gap-2 flex-wrap">
                 <span className="text-xs font-medium text-muted-foreground">Filter:</span>
-                <MultiSelectFilter label="Type Store" icon={<Layers className="w-3 h-3 mr-1" />}
-                  options={allTypes} selected={upFilterType} onChange={setUpFilterType} width="w-44" />
-                <MultiSelectFilter label="Store" icon={<Store className="w-3 h-3 mr-1" />}
-                  options={allStores} selected={upFilterStore} onChange={setUpFilterStore} width="w-72" />
+                <MultiSelectFilter label="Size" icon={<Layers className="w-3 h-3 mr-1" />}
+                  options={allSizes} selected={upFilterSize} onChange={setUpFilterSize} width="w-44" />
                 <MultiSelectFilter label="Division" icon={<Tag className="w-3 h-3 mr-1" />}
                   options={allDivs} selected={upFilterDiv} onChange={setUpFilterDiv} width="w-52" />
                 <MultiSelectFilter label="Department" options={allDepts} selected={upFilterDept} onChange={setUpFilterDept} width="w-52" />
                 <MultiSelectFilter label="Sub Dept" options={allSubDepts} selected={upFilterSubDept} onChange={setUpFilterSubDept} width="w-52" />
-                {(upFilterType.length || upFilterStore.length || upFilterDiv.length || upFilterDept.length || upFilterSubDept.length) ? (
+                {(upFilterSize.length || upFilterDiv.length || upFilterDept.length || upFilterSubDept.length) ? (
                   <button className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
-                    onClick={() => { setUpFilterType([]); setUpFilterStore([]); setUpFilterDiv([]); setUpFilterDept([]); setUpFilterSubDept([]); }}>
+                    onClick={() => { setUpFilterSize([]); setUpFilterDiv([]); setUpFilterDept([]); setUpFilterSubDept([]); }}>
                     <X className="w-3 h-3" /> Clear
                   </button>
                 ) : null}
@@ -2417,14 +2367,13 @@ export default function MinmaxCalPage() {
             ) : (() => {
               const q = upSearch.trim().toLowerCase();
               const filtered = upRows.filter(r => {
-                if (upFilterType.length && !upFilterType.includes(r.type_store ?? "")) return false;
-                if (upFilterStore.length && !upFilterStore.includes(r.store_name)) return false;
+                if (upFilterSize.length && !upFilterSize.includes(r.size_store)) return false;
                 if (upFilterDiv.length && !upFilterDiv.includes(r.division ?? "")) return false;
                 if (upFilterDept.length && !upFilterDept.includes(r.department ?? "")) return false;
                 if (upFilterSubDept.length && !upFilterSubDept.includes(r.sub_department ?? "")) return false;
                 if (q) {
                   return r.sku_code.toLowerCase().includes(q) ||
-                    r.store_name.toLowerCase().includes(q) ||
+                    r.size_store.toLowerCase().includes(q) ||
                     (r.main_barcode || "").toLowerCase().includes(q) ||
                     (r.product_name_la || "").toLowerCase().includes(q) ||
                     (r.product_name_en || "").toLowerCase().includes(q);
@@ -2461,27 +2410,27 @@ export default function MinmaxCalPage() {
                       <tr>
                         <th className="px-2 py-1.5 w-8 border-b border-border bg-muted">
                           <Checkbox
-                            checked={pageRows.length > 0 && pageRows.every(r => upSelected.has(`${r.sku_code}|${r.store_name}`))}
+                            checked={pageRows.length > 0 && pageRows.every(r => upSelected.has(`${r.sku_code}|${r.size_store}`))}
                             onCheckedChange={v => {
                               setUpSelected(prev => {
                                 const next = new Set(prev);
-                                if (v) pageRows.forEach(r => next.add(`${r.sku_code}|${r.store_name}`));
-                                else pageRows.forEach(r => next.delete(`${r.sku_code}|${r.store_name}`));
+                                if (v) pageRows.forEach(r => next.add(`${r.sku_code}|${r.size_store}`));
+                                else pageRows.forEach(r => next.delete(`${r.sku_code}|${r.size_store}`));
                                 return next;
                               });
                             }}
                           />
                         </th>
-                        {["Type Store", "Store Name", "SKU Code", "Barcode", "Product Name (LA)", "Product Name (EN)", "Division", "Department", "Sub Dept", "Pack", "Box", "Unit Pick"].map(h => (
+                        {["Size Store", "SKU Code", "Barcode", "Product Name (LA)", "Product Name (EN)", "Division", "Department", "Sub Dept", "Pack", "Box", "Unit Pick"].map(h => (
                           <th key={h} className="px-2 py-1.5 text-left font-medium border-b border-border whitespace-nowrap bg-muted">{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
                       {pageRows.length === 0 ? (
-                        <tr><td colSpan={13} className="px-4 py-8 text-center text-muted-foreground">ไม่มีข้อมูล</td></tr>
+                        <tr><td colSpan={12} className="px-4 py-8 text-center text-muted-foreground">ไม่มีข้อมูล</td></tr>
                       ) : pageRows.map(r => {
-                        const key = `${r.sku_code}|${r.store_name}`;
+                        const key = `${r.sku_code}|${r.size_store}`;
                         return (
                           <tr key={key} className={cn("border-b border-border/40 hover:bg-muted/30", upSelected.has(key) && "bg-primary/5", !r.main_barcode && "bg-amber-50/60 dark:bg-amber-950/20")}>
                             <td className="px-2 py-1 w-8">
@@ -2496,8 +2445,7 @@ export default function MinmaxCalPage() {
                                 }}
                               />
                             </td>
-                            <td className="px-2 py-1 text-[11px]">{r.type_store ?? "-"}</td>
-                            <td className="px-2 py-1">{r.store_name}</td>
+                            <td className="px-2 py-1 text-[11px] font-medium">{r.size_store}</td>
                             <td className="px-2 py-1 font-mono">{r.sku_code}</td>
                             <td className="px-2 py-1 font-mono text-muted-foreground">{r.main_barcode ?? "-"}</td>
                             <td className="px-2 py-1 max-w-[180px] truncate" title={r.product_name_la ?? ""}>{r.product_name_la ?? "-"}</td>
@@ -2520,7 +2468,7 @@ export default function MinmaxCalPage() {
 
           {/* Import hint */}
           <p className="text-[11px] text-muted-foreground mt-1">
-            ไฟล์ Excel ต้องมีคอลัมน์: <code>store_name</code>, <code>unit_pick</code> และ <code>sku_code</code> หรือ <code>barcode</code>
+            ไฟล์ Excel ต้องมีคอลัมน์: <code>size_store</code> (Super / Mini), <code>unit_pick</code> และ <code>sku_code</code> หรือ <code>barcode</code>
           </p>
         </TabsContent>
       </Tabs>
