@@ -1,4 +1,4 @@
-﻿import { Fragment, useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -40,7 +40,7 @@ interface CalcRow {
   min_cal: number;
   max_cal: number;
   is_default_min: boolean;
-  min_floored?: boolean; // true à¹€à¸¡à¸·à¹ˆà¸­ avg*rank > 0 à¹à¸•à¹ˆ < 3 â†’ à¸›à¸±à¸”à¸‚à¸¶à¹‰à¸™à¹€à¸›à¹‡à¸™ 3 (highlight à¸ªà¸µà¸Ÿà¹‰à¸²)
+  min_floored?: boolean; // true เมื่อ avg*rank > 0 แต่ < 3 → ปัดขึ้นเป็น 3 (highlight สีฟ้า)
   item_type: string;
   buying_status: string;
   division: string;
@@ -169,14 +169,14 @@ async function fetchAllCalc(params: any, onProgress?: (loaded: number, batches: 
     return data || [];
   };
 
-  // probe à¹à¸£à¸
+  // probe แรก
   const first = await fetchRange(0);
   all.push(...first);
   batches++;
   onProgress?.(all.length, batches);
   if (first.length < RPC_BATCH) return all;
 
-  // à¸”à¸¶à¸‡à¸—à¸µà¹ˆà¹€à¸«à¸¥à¸·à¸­à¹à¸šà¸š parallel CONCURRENCY batch à¸žà¸£à¹‰à¸­à¸¡à¸à¸±à¸™
+  // ดึงที่เหลือแบบ parallel CONCURRENCY batch พร้อมกัน
   let nextFrom = RPC_BATCH;
   let done = false;
   while (!done) {
@@ -211,7 +211,7 @@ export default function MinmaxCalPage() {
   const [phasePct, setPhasePct] = useState<number>(0);
   const [phaseTimes, setPhaseTimes] = useState<{ fetch?: number; merge?: number; rowCount?: number; docCount?: number; readBatches?: number }>({});
 
-  // Elapsed timer (à¸­à¸±à¸›à¹€à¸”à¸•à¸—à¸¸à¸ 100ms à¸‚à¸“à¸° loading à¸«à¸£à¸·à¸­ viewLoading)
+  // Elapsed timer (อัปเดตทุก 100ms ขณะ loading หรือ viewLoading)
   const [elapsedMs, setElapsedMs] = useState(0);
   const elapsedStartRef = useRef<number | null>(null);
   const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -270,7 +270,7 @@ export default function MinmaxCalPage() {
   const [exportProgress, setExportProgress] = useState<{ loaded: number; total: number; label: string }>({ loaded: 0, total: 0, label: "" });
   const cancelExportRef = useRef(false);
 
-  // Tree expand/collapse state (Division â†’ Department â†’ Store)
+  // Tree expand/collapse state (Division → Department → Store)
   const [expandedDiv, setExpandedDiv] = useState<Set<string>>(new Set());
   const [expandedDept, setExpandedDept] = useState<Set<string>>(new Set());
 
@@ -289,7 +289,7 @@ export default function MinmaxCalPage() {
   // Cancel flag for Calculate
   const cancelCalcRef = useRef(false);
 
-  // Staging mode state (Calculate â†’ DB staging â†’ server-side pagination)
+  // Staging mode state (Calculate → DB staging → server-side pagination)
   const [hasStaging, setHasStaging] = useState(false);
   const [stagingTotal, setStagingTotal] = useState(0);
   const [stagingFilteredCount, setStagingFilteredCount] = useState(0);
@@ -298,7 +298,7 @@ export default function MinmaxCalPage() {
 
   // Unit Pick Override (loaded from DB, applied to rows)
   const unitPickOverrideRef = useRef<Map<string, number>>(new Map());
-  // Cache enrichment data (data_master) â€” rarely changes, no need to re-fetch on every Refresh
+  // Cache enrichment data (data_master) — rarely changes, no need to re-fetch on every Refresh
   type UPEnrich = {
     rsvMap: Map<string, { main_barcode: string | null; product_name_la: string | null; product_name_en: string | null; pack_qty: number | null; box_qty: number | null; division: string | null; department: string | null; sub_department: string | null }>;
   };
@@ -318,7 +318,7 @@ export default function MinmaxCalPage() {
   const UP_PAGE_SIZE = 100;
   useEffect(() => { setUpPage(0); }, [upSearch, upFilterSize, upFilterDiv, upFilterDept, upFilterSubDept]);
 
-  // View paging state (View â†’ server-side pagination from minmax table)
+  // View paging state (View → server-side pagination from minmax table)
   const [hasViewPaging, setHasViewPaging] = useState(false);
   const [viewPagingTotal, setViewPagingTotal] = useState(0);
   const [viewPagingLoading, setViewPagingLoading] = useState(false);
@@ -361,7 +361,7 @@ export default function MinmaxCalPage() {
   useEffect(() => { loadFilterOpts(); }, [loadFilterOpts]);
 
   // ====== Load latest MinMax View rows (from minmax table, joined with data_master) ======
-  // à¹ƒà¸Šà¹‰à¸•à¸­à¸™ Calc à¹€à¸žà¸·à¹ˆà¸­ merge à¸„à¹ˆà¸²à¹€à¸”à¸´à¸¡à¸‚à¸­à¸‡ SKU/Store à¸—à¸µà¹ˆà¹„à¸¡à¹ˆà¸­à¸¢à¸¹à¹ˆà¹ƒà¸™ filter à¸›à¸±à¸ˆà¸ˆà¸¸à¸šà¸±à¸™
+  // ใช้ตอน Calc เพื่อ merge ค่าเดิมของ SKU/Store ที่ไม่อยู่ใน filter ปัจจุบัน
 
   const hasFilters = storeFilter.length > 0 || typeStoreFilter.length > 0
     || itemTypeFilter.length > 0 || buyingFilter.length > 0
@@ -447,7 +447,7 @@ export default function MinmaxCalPage() {
 
       const skuCodes = [...new Set(list.map((r: any) => r.sku_code as string))];
 
-      // Step 2: Enrichment (data_master only â€” no store needed)
+      // Step 2: Enrichment (data_master only — no store needed)
       const cachedEnrich = upEnrichRef.current;
       const hasNewSkus = !cachedEnrich || skuCodes.some(s => !cachedEnrich.rsvMap.has(s));
       const needEnrich = refreshEnrich || hasNewSkus;
@@ -545,9 +545,9 @@ export default function MinmaxCalPage() {
       const bcColKey = Object.keys(keyMap).find(k => keyMap[k] === "barcode");
       const sizeColKey = Object.keys(keyMap).find(k => keyMap[k] === "size_store");
       const upColKey = Object.keys(keyMap).find(k => keyMap[k] === "unit_pick");
-      if (!upColKey) throw new Error("à¹„à¸¡à¹ˆà¸žà¸šà¸„à¸­à¸¥à¸±à¸¡à¸™à¹Œ unit_pick");
-      if (!sizeColKey) throw new Error("à¹„à¸¡à¹ˆà¸žà¸šà¸„à¸­à¸¥à¸±à¸¡à¸™à¹Œ size_store (Super à¸«à¸£à¸·à¸­ Mini)");
-      if (!skuColKey && !bcColKey) throw new Error("à¹„à¸¡à¹ˆà¸žà¸šà¸„à¸­à¸¥à¸±à¸¡à¸™à¹Œ sku_code à¸«à¸£à¸·à¸­ barcode");
+      if (!upColKey) throw new Error("ไม่พบคอลัมน์ unit_pick");
+      if (!sizeColKey) throw new Error("ไม่พบคอลัมน์ size_store (Super หรือ Mini)");
+      if (!skuColKey && !bcColKey) throw new Error("ไม่พบคอลัมน์ sku_code หรือ barcode");
 
       // Collect raw rows
       const rawRows: { lookup: string; isBc: boolean; size_store: string; unit_pick: number }[] = [];
@@ -563,7 +563,7 @@ export default function MinmaxCalPage() {
         rawRows.push({ lookup, isBc: !sku && !!bc, size_store: size, unit_pick: up });
       }
 
-      // Resolve barcodes â†’ sku_code (parallel chunks)
+      // Resolve barcodes → sku_code (parallel chunks)
       const bcSet = new Set(rawRows.filter(r => r.isBc).map(r => r.lookup));
       const barcodeToSku = new Map<string, string>();
       if (bcSet.size > 0) {
@@ -584,7 +584,7 @@ export default function MinmaxCalPage() {
         }
       }
 
-      // Build upsert payload (distinct by sku_code Ã— size_store, last row wins)
+      // Build upsert payload (distinct by sku_code × size_store, last row wins)
       const upsertMap = new Map<string, { sku_code: string; size_store: string; unit_pick: number }>();
       for (const r of rawRows) {
         const sku = r.isBc ? (barcodeToSku.get(r.lookup) || "") : r.lookup;
@@ -592,7 +592,7 @@ export default function MinmaxCalPage() {
         upsertMap.set(`${sku}|${r.size_store}`, { sku_code: sku, size_store: r.size_store, unit_pick: r.unit_pick });
       }
       const payload = Array.from(upsertMap.values());
-      if (payload.length === 0) throw new Error("à¹„à¸¡à¹ˆà¸¡à¸µà¸‚à¹‰à¸­à¸¡à¸¹à¸¥à¸—à¸µà¹ˆ valid à¸ªà¸³à¸«à¸£à¸±à¸š import");
+      if (payload.length === 0) throw new Error("ไม่มีข้อมูลที่ valid สำหรับ import");
 
       // Upsert in chunks of 500 rows (parallel, max 4 concurrent)
       const UPSERT_CHUNK = 500;
@@ -606,7 +606,7 @@ export default function MinmaxCalPage() {
             .then(({ error }: any) => { if (error) throw error; })
         ));
       }
-      toast({ title: `Import à¸ªà¸³à¹€à¸£à¹‡à¸ˆ ${payload.length.toLocaleString()} à¹à¸–à¸§` });
+      toast({ title: `Import สำเร็จ ${payload.length.toLocaleString()} แถว` });
       await loadUPRows(true); // force refresh enrichment for newly added SKUs
     } catch (err: any) {
       toast({ title: "Import Error", description: err.message, variant: "destructive" });
@@ -630,7 +630,7 @@ export default function MinmaxCalPage() {
           .eq("size_store", p.size_store);
         if (error) throw error;
       }
-      toast({ title: `à¸¥à¸š ${pairs.length} à¹à¸–à¸§à¹€à¸£à¸µà¸¢à¸šà¸£à¹‰à¸­à¸¢` });
+      toast({ title: `ลบ ${pairs.length} แถวเรียบร้อย` });
       setUpSelected(new Set());
       await loadUPRows();
     } catch (err: any) {
@@ -650,7 +650,7 @@ export default function MinmaxCalPage() {
     if (classFilter.length) p.p_classes = classFilter;
     if (skuFilter.length) p.p_sku_codes = skuFilter;
     if (barcodeFilter.length) p.p_barcodes = barcodeFilter;
-    // à¸£à¸§à¸¡ searchChips + searchValue à¹€à¸›à¹‡à¸™ p_search_any (à¸„à¹‰à¸™à¸‚à¹‰à¸²à¸¡à¸—à¸¸à¸ field)
+    // รวม searchChips + searchValue เป็น p_search_any (ค้นข้ามทุก field)
     const searchTerm = searchChips.map(c => c.value).join(" ").trim() || searchValue.trim();
     if (searchTerm) p.p_search_any = searchTerm;
     return p;
@@ -690,17 +690,17 @@ export default function MinmaxCalPage() {
     const checkCancel = () => { if (cancelCalcRef.current) throw new Error("__CANCELLED__"); };
     setLoading(true);
     setPhaseTimes({});
-    setPhaseLabel("à¸à¸³à¸¥à¸±à¸‡à¸„à¸³à¸™à¸§à¸“ Min/Max à¹ƒà¸™ DB...");
+    setPhaseLabel("กำลังคำนวณ Min/Max ใน DB...");
     setPhasePct(5);
     startElapsedTimer();
     try {
       const t0 = performance.now();
 
-      // Calculate in DB â†’ save to staging â†’ return first 100 rows
+      // Calculate in DB → save to staging → return first 100 rows
       setPhasePct(15);
-      setPhaseLabel("à¸à¸³à¸¥à¸±à¸‡à¸„à¸³à¸™à¸§à¸“à¹ƒà¸™ DB...");
+      setPhaseLabel("กำลังคำนวณใน DB...");
       checkCancel();
-      if (!user) throw new Error("à¸•à¹‰à¸­à¸‡à¹€à¸‚à¹‰à¸²à¸ªà¸¹à¹ˆà¸£à¸°à¸šà¸š");
+      if (!user) throw new Error("ต้องเข้าสู่ระบบ");
       const stageParams: any = {
         p_user_id: user.id,
         p_n_factor: n,
@@ -721,7 +721,7 @@ export default function MinmaxCalPage() {
       const lastBatchCount = 1;
       const fetchMs = Math.round(performance.now() - t0);
       setPhasePct(60);
-      setPhaseLabel(`à¸„à¸³à¸™à¸§à¸“à¹€à¸ªà¸£à¹‡à¸ˆ ${stageResult.total.toLocaleString()} à¹à¸–à¸§ Â· ${fetchMs}ms`);
+      setPhaseLabel(`คำนวณเสร็จ ${stageResult.total.toLocaleString()} แถว · ${fetchMs}ms`);
       checkCancel();
 
       // Set staging state
@@ -735,7 +735,7 @@ export default function MinmaxCalPage() {
       // unit_pick override is now applied inside get_minmax_calc_all (DB-side)
       const calcRows: CalcRow[] = (stageResult.rows || []).map(mapStagingRow);
 
-      // Phase 2 (Doc merge) â€” removed: Cal returns ONLY computed rows.
+      // Phase 2 (Doc merge) — removed: Cal returns ONLY computed rows.
       const finalRows: CalcRow[] = calcRows;
       const mergeMs = 0;
       const mergedFromDoc = 0;
@@ -748,12 +748,12 @@ export default function MinmaxCalPage() {
       setPage(0);
       setPhasePct(100); setPhaseLabel("");
       toast({
-        title: "à¸„à¸³à¸™à¸§à¸“à¹€à¸ªà¸£à¹‡à¸ˆà¸ªà¸´à¹‰à¸™",
-        description: `Calc ${stageResult.total.toLocaleString()} à¹à¸–à¸§`,
+        title: "คำนวณเสร็จสิ้น",
+        description: `Calc ${stageResult.total.toLocaleString()} แถว`,
       });
     } catch (err: any) {
       if (err?.message === "__CANCELLED__") {
-        toast({ title: "à¸¢à¸à¹€à¸¥à¸´à¸à¸à¸²à¸£à¸„à¸³à¸™à¸§à¸“à¹à¸¥à¹‰à¸§", variant: "destructive" });
+        toast({ title: "ยกเลิกการคำนวณแล้ว", variant: "destructive" });
       } else {
         console.error(err);
         toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -826,11 +826,11 @@ export default function MinmaxCalPage() {
       const { data, error } = await (supabase as any).rpc("delete_minmax_by_filter", params);
       if (error) throw error;
       const n = Number(data) || 0;
-      toast({ title: "Deleted", description: `à¸¥à¸š Min/Max ${n.toLocaleString()} à¹à¸–à¸§à¹€à¸£à¸µà¸¢à¸šà¸£à¹‰à¸­à¸¢` });
+      toast({ title: "Deleted", description: `ลบ Min/Max ${n.toLocaleString()} แถวเรียบร้อย` });
       setDeleteOpen(false);
       await loadReport();
     } catch (err: any) {
-      toast({ title: "à¸¥à¸šà¹„à¸¡à¹ˆà¸ªà¸³à¹€à¸£à¹‡à¸ˆ", description: err.message, variant: "destructive" });
+      toast({ title: "ลบไม่สำเร็จ", description: err.message, variant: "destructive" });
     } finally {
       setDeleting(false);
     }
@@ -912,12 +912,12 @@ export default function MinmaxCalPage() {
       || divisionFilter.length || departmentFilter.length || subDeptFilter.length || classFilter.length
       || skuFilter.length || barcodeFilter.length;
     if (!hasAny) {
-      toast({ title: "à¹ƒà¸ªà¹ˆ Filter à¸à¹ˆà¸­à¸™", description: "à¹€à¸¥à¸·à¸­à¸ Store à¸«à¸£à¸·à¸­à¸à¸£à¸­à¸ SKU/Barcode à¸«à¸£à¸·à¸­à¹€à¸¥à¸·à¸­à¸ filter à¸­à¸·à¹ˆà¸™à¸à¹ˆà¸­à¸™à¸à¸” View", variant: "destructive" });
+      toast({ title: "ใส่ Filter ก่อน", description: "เลือก Store หรือกรอก SKU/Barcode หรือเลือก filter อื่นก่อนกด View", variant: "destructive" });
       return;
     }
     setViewLoading(true);
     setPhaseTimes({});
-    setPhaseLabel("à¸à¸³à¸¥à¸±à¸‡à¸”à¸¶à¸‡à¸‚à¹‰à¸­à¸¡à¸¹à¸¥ Min/Max à¸ˆà¸²à¸ View...");
+    setPhaseLabel("กำลังดึงข้อมูล Min/Max จาก View...");
     setPhasePct(20);
     startElapsedTimer();
     try {
@@ -937,7 +937,7 @@ export default function MinmaxCalPage() {
       setViewPagingTotal(result.total);
       setPhaseTimes({ fetch: ms, rowCount: result.total });
       setPhasePct(100); setPhaseLabel("");
-      toast({ title: "à¸”à¸¶à¸‡à¸‚à¹‰à¸­à¸¡à¸¹à¸¥à¸ªà¸³à¹€à¸£à¹‡à¸ˆ", description: `${result.total.toLocaleString()} à¹à¸–à¸§ (${ms}ms)` });
+      toast({ title: "ดึงข้อมูลสำเร็จ", description: `${result.total.toLocaleString()} แถว (${ms}ms)` });
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
     } finally {
@@ -1052,7 +1052,7 @@ export default function MinmaxCalPage() {
         editMap.set(lookupKey + "|" + (storeFilter || ""), { min, max, storeFilter });
       }
 
-      // Resolve barcodes â†’ sku_code via data_master (main_barcode, barcode)
+      // Resolve barcodes → sku_code via data_master (main_barcode, barcode)
       const barcodeToSku = new Map<string, string>();
       if (barcodeKeys.size > 0) {
         const all = Array.from(barcodeKeys);
@@ -1106,7 +1106,7 @@ export default function MinmaxCalPage() {
       });
       setRows(next);
       setForceCal({});
-      toast({ title: "Import à¸ªà¸³à¹€à¸£à¹‡à¸ˆ", description: `à¸­à¸±à¸›à¹€à¸”à¸• ${updated} à¹à¸–à¸§` });
+      toast({ title: "Import สำเร็จ", description: `อัปเดต ${updated} แถว` });
       setImportOpen(false);
     } catch (err: any) {
       toast({ title: "Import Error", description: err.message, variant: "destructive" });
@@ -1115,8 +1115,8 @@ export default function MinmaxCalPage() {
 
   // ====== Save to MinMax View (UPSERT into minmax table) ======
   const saveDoc = async () => {
-    if (!user) { toast({ title: "à¸•à¹‰à¸­à¸‡à¹€à¸‚à¹‰à¸²à¸ªà¸¹à¹ˆà¸£à¸°à¸šà¸š", variant: "destructive" }); return; }
-    if (rows.length === 0) { toast({ title: "à¸¢à¸±à¸‡à¹„à¸¡à¹ˆà¸¡à¸µà¸‚à¹‰à¸­à¸¡à¸¹à¸¥à¹ƒà¸«à¹‰à¸šà¸±à¸™à¸—à¸¶à¸", variant: "destructive" }); return; }
+    if (!user) { toast({ title: "ต้องเข้าสู่ระบบ", variant: "destructive" }); return; }
+    if (rows.length === 0) { toast({ title: "ยังไม่มีข้อมูลให้บันทึก", variant: "destructive" }); return; }
     setSaving(true);
     const TOTAL_STEPS = 4;
     const step = (i: number, label: string, basePct: number) => {
@@ -1125,10 +1125,10 @@ export default function MinmaxCalPage() {
       setSavePct(basePct);
     };
     try {
-      // STEP 1/3 â€” à¹€à¸•à¸£à¸µà¸¢à¸¡ Payload
+      // STEP 1/3 — เตรียม Payload
       let sourceRows: CalcRow[];
       if (hasStaging) {
-        step(1, `à¸”à¸¶à¸‡à¸‚à¹‰à¸­à¸¡à¸¹à¸¥à¸—à¸±à¹‰à¸‡à¸«à¸¡à¸”à¸ˆà¸²à¸ Staging...`, 5);
+        step(1, `ดึงข้อมูลทั้งหมดจาก Staging...`, 5);
         const { data: allStaged, error: allErr } = await (supabase as any)
           .rpc("get_staged_minmax_all", { p_user_id: user.id });
         if (allErr) throw allErr;
@@ -1141,7 +1141,7 @@ export default function MinmaxCalPage() {
       } else {
         sourceRows = rows;
       }
-      step(1, `à¹€à¸•à¸£à¸µà¸¢à¸¡ Payload à¸ˆà¸²à¸ ${sourceRows.length.toLocaleString()} à¹à¸–à¸§`, 5);
+      step(1, `เตรียม Payload จาก ${sourceRows.length.toLocaleString()} แถว`, 5);
       await new Promise(r => setTimeout(r, 0));
       const payload = sourceRows.map(r => {
         const f = getFinal(r);
@@ -1156,22 +1156,22 @@ export default function MinmaxCalPage() {
       });
       setSavePct(10);
 
-      // STEP 1.5 â€” à¸¥à¸šà¸„à¹ˆà¸²à¹€à¸à¹ˆà¸²à¸•à¸²à¸¡ scope à¸—à¸µà¹ˆà¹ƒà¸Šà¹‰ Cal à¸ˆà¸£à¸´à¸‡ à¸›à¹‰à¸­à¸‡à¸à¸±à¸™ SKU à¸„à¹‰à¸²à¸‡à¸ˆà¸²à¸à¸£à¸­à¸šà¸à¹ˆà¸­à¸™
-      // - à¹„à¸¡à¹ˆà¸¡à¸µ filter â†’ à¸¥à¸šà¸—à¸±à¹‰à¸‡à¸«à¸¡à¸” (full recalc)
-      // - à¸¡à¸µ typeStoreFilter â†’ à¸¥à¸šà¸—à¸¸à¸à¸ªà¸²à¸‚à¸²à¹ƒà¸™ type à¸™à¸±à¹‰à¸™ (à¸„à¸£à¸­à¸šà¸„à¸¥à¸¸à¸¡ SKU à¸—à¸µà¹ˆà¸«à¸¥à¸¸à¸”à¸­à¸­à¸à¸ˆà¸²à¸ range)
-      // - à¸¡à¸µ storeFilter â†’ à¸¥à¸šà¹€à¸‰à¸žà¸²à¸°à¸ªà¸²à¸‚à¸²à¸—à¸µà¹ˆà¹€à¸¥à¸·à¸­à¸
+      // STEP 1.5 — ลบค่าเก่าตาม scope ที่ใช้ Cal จริง ป้องกัน SKU ค้างจากรอบก่อน
+      // - ไม่มี filter → ลบทั้งหมด (full recalc)
+      // - มี typeStoreFilter → ลบทุกสาขาใน type นั้น (ครอบคลุม SKU ที่หลุดออกจาก range)
+      // - มี storeFilter → ลบเฉพาะสาขาที่เลือก
       {
         const hasStoreScope = storeFilter.length > 0 || typeStoreFilter.length > 0;
-        step(2, `à¸¥à¸šà¸„à¹ˆà¸²à¹€à¸à¹ˆà¸²à¸•à¸²à¸¡ scope à¸à¹ˆà¸­à¸™à¸šà¸±à¸™à¸—à¸¶à¸`, 12);
+        step(2, `ลบค่าเก่าตาม scope ก่อนบันทึก`, 12);
         let delCnt = 0;
         if (!hasStoreScope) {
-          // à¹„à¸¡à¹ˆà¸¡à¸µ filter = full recalc â†’ à¸¥à¸šà¸—à¸±à¹‰à¸‡à¸«à¸¡à¸” (à¸ªà¹ˆà¸‡ null à¹€à¸žà¸·à¹ˆà¸­à¹ƒà¸«à¹‰ PostgREST à¸ˆà¸±à¸šà¸„à¸¹à¹ˆ function signature à¹„à¸”à¹‰à¸–à¸¹à¸)
+          // ไม่มี filter = full recalc → ลบทั้งหมด (ส่ง null เพื่อให้ PostgREST จับคู่ function signature ได้ถูก)
           const { data, error: delErr } = await (supabase as any)
             .rpc("delete_minmax_by_filter", { p_stores: null });
           if (delErr) throw delErr;
           delCnt = Number(data) || 0;
         } else if (typeStoreFilter.length > 0) {
-          // à¸¡à¸µ type filter â†’ à¸¥à¸šà¸—à¸¸à¸à¸ªà¸²à¸‚à¸²à¹ƒà¸™ type (à¹„à¸¡à¹ˆà¸ˆà¸³à¸à¸±à¸”à¹à¸„à¹ˆà¸—à¸µà¹ˆà¸­à¸¢à¸¹à¹ˆà¹ƒà¸™ payload)
+          // มี type filter → ลบทุกสาขาใน type (ไม่จำกัดแค่ที่อยู่ใน payload)
           const scopeStores = filterOpts.stores
             .filter(s => typeStoreFilter.includes(s.type_store))
             .map(s => s.store_name);
@@ -1182,7 +1182,7 @@ export default function MinmaxCalPage() {
             delCnt = Number(data) || 0;
           }
         } else {
-          // à¸¡à¸µà¹à¸„à¹ˆ storeFilter â†’ à¸¥à¸šà¹€à¸‰à¸žà¸²à¸°à¸ªà¸²à¸‚à¸²à¸—à¸µà¹ˆà¹€à¸¥à¸·à¸­à¸
+          // มีแค่ storeFilter → ลบเฉพาะสาขาที่เลือก
           const { data, error: delErr } = await (supabase as any)
             .rpc("delete_minmax_by_stores", { p_store_names: storeFilter });
           if (delErr) throw delErr;
@@ -1191,8 +1191,8 @@ export default function MinmaxCalPage() {
         console.log(`[saveDoc] deleted ${delCnt} stale rows`);
       }
 
-      // STEP 2/3 â€” UPSERT à¹€à¸‚à¹‰à¸²à¸•à¸²à¸£à¸²à¸‡ minmax à¹à¸šà¸š parallel chunk
-      step(2, `à¸à¸³à¸¥à¸±à¸‡à¸šà¸±à¸™à¸—à¸¶à¸ ${payload.length.toLocaleString()} à¹à¸–à¸§ â†’ à¸•à¸²à¸£à¸²à¸‡ Min/Max`, 15);
+      // STEP 2/3 — UPSERT เข้าตาราง minmax แบบ parallel chunk
+      step(2, `กำลังบันทึก ${payload.length.toLocaleString()} แถว → ตาราง Min/Max`, 15);
       const chunks = chunkByJsonSize(payload);
       const totalChunks = Math.max(1, chunks.length);
       const t0 = performance.now();
@@ -1201,7 +1201,7 @@ export default function MinmaxCalPage() {
       for (let i = 0; i < chunks.length; i += SAVE_DOC_CONCURRENCY) {
         const batch = chunks.slice(i, i + SAVE_DOC_CONCURRENCY);
         const sec = ((performance.now() - t0) / 1000).toFixed(1);
-        step(2, `à¸šà¸±à¸™à¸—à¸¶à¸ batch ${i + 1}-${Math.min(i + SAVE_DOC_CONCURRENCY, totalChunks)}/${totalChunks} Â· ${sec}s`,
+        step(2, `บันทึก batch ${i + 1}-${Math.min(i + SAVE_DOC_CONCURRENCY, totalChunks)}/${totalChunks} · ${sec}s`,
           15 + Math.round((sentRows / Math.max(1, payload.length)) * 60));
         const results = await Promise.all(batch.map((slice, j) =>
           rpcWithRetry(
@@ -1214,12 +1214,12 @@ export default function MinmaxCalPage() {
       }
       const totalSec = ((performance.now() - t0) / 1000).toFixed(1);
 
-      // STEP 3/4 â€” sync minmax_cal_documents
-      // chunk 0: à¸ªà¸£à¹‰à¸²à¸‡ doc à¹ƒà¸«à¸¡à¹ˆ (sequential à¹€à¸žà¸·à¹ˆà¸­à¸£à¸±à¸š doc_id)
+      // STEP 3/4 — sync minmax_cal_documents
+      // chunk 0: สร้าง doc ใหม่ (sequential เพื่อรับ doc_id)
       // chunk 1-N: parallel SAVE_DOC_CONCURRENCY
       let syncDocId: string | null = null;
       if (chunks.length > 0) {
-        step(3, `à¸­à¸±à¸›à¹€à¸”à¸• Min/Max Document... batch 1/${totalChunks}`, 90);
+        step(3, `อัปเดต Min/Max Document... batch 1/${totalChunks}`, 90);
         const { data: firstResult } = await rpcWithRetry(
           () => (supabase as any).rpc("upsert_minmax_doc_chunk", {
             p_payload: chunks[0],
@@ -1236,7 +1236,7 @@ export default function MinmaxCalPage() {
         for (let i = 1; i < chunks.length; i += SAVE_DOC_CONCURRENCY) {
           const batch = chunks.slice(i, i + SAVE_DOC_CONCURRENCY);
           const pct = 90 + Math.round(((i + batch.length) / chunks.length) * 8);
-          step(3, `à¸­à¸±à¸›à¹€à¸”à¸• Min/Max Document... batch ${i + 1}-${Math.min(i + SAVE_DOC_CONCURRENCY, totalChunks)}/${totalChunks}`, pct);
+          step(3, `อัปเดต Min/Max Document... batch ${i + 1}-${Math.min(i + SAVE_DOC_CONCURRENCY, totalChunks)}/${totalChunks}`, pct);
           await Promise.all(batch.map((slice, j) =>
             rpcWithRetry(
               () => (supabase as any).rpc("upsert_minmax_doc_chunk", {
@@ -1253,15 +1253,15 @@ export default function MinmaxCalPage() {
         }
       }
 
-      // STEP 4/4 â€” à¹€à¸ªà¸£à¹‡à¸ˆ
-      step(4, `à¸šà¸±à¸™à¸—à¸¶à¸à¸ªà¸³à¹€à¸£à¹‡à¸ˆ Â· ${payload.length.toLocaleString()} à¹à¸–à¸§ (${totalSec}s)`, 95);
+      // STEP 4/4 — เสร็จ
+      step(4, `บันทึกสำเร็จ · ${payload.length.toLocaleString()} แถว (${totalSec}s)`, 95);
       toast({
-        title: "à¸šà¸±à¸™à¸—à¸¶à¸ Min/Max View à¸ªà¸³à¹€à¸£à¹‡à¸ˆ",
-        description: `${payload.length.toLocaleString()} à¹à¸–à¸§ â†’ à¸•à¸²à¸£à¸²à¸‡ minmax (${totalSec}s)`,
+        title: "บันทึก Min/Max View สำเร็จ",
+        description: `${payload.length.toLocaleString()} แถว → ตาราง minmax (${totalSec}s)`,
       });
 
       setSavePct(100);
-      setSaveStatus(`à¹€à¸ªà¸£à¹‡à¸ˆà¸ªà¸´à¹‰à¸™ Â· ${payload.length.toLocaleString()} à¹à¸–à¸§à¸­à¸±à¸›à¹€à¸”à¸•à¹ƒà¸™à¸•à¸²à¸£à¸²à¸‡ Min/Max`);
+      setSaveStatus(`เสร็จสิ้น · ${payload.length.toLocaleString()} แถวอัปเดตในตาราง Min/Max`);
       await new Promise(r => setTimeout(r, 400));
       setSaveOpen(false);
       setSaveName("");
@@ -1282,7 +1282,7 @@ export default function MinmaxCalPage() {
   const exportReportExcel = async () => {
     cancelExportRef.current = false;
     setExportingReport(true);
-    setExportProgress({ loaded: 0, total: 0, label: "à¹€à¸•à¸£à¸µà¸¢à¸¡à¸‚à¹‰à¸­à¸¡à¸¹à¸¥..." });
+    setExportProgress({ loaded: 0, total: 0, label: "เตรียมข้อมูล..." });
     try {
       const t0 = performance.now();
       const all: any[] = [];
@@ -1298,7 +1298,7 @@ export default function MinmaxCalPage() {
       };
       const firstExp = await fetchExpRange(0);
       all.push(...firstExp);
-      setExportProgress({ loaded: all.length, total: all.length, label: `à¸”à¸¶à¸‡à¸‚à¹‰à¸­à¸¡à¸¹à¸¥... ${all.length.toLocaleString()} à¹à¸–à¸§` });
+      setExportProgress({ loaded: all.length, total: all.length, label: `ดึงข้อมูล... ${all.length.toLocaleString()} แถว` });
       if (firstExp.length >= RPC_BATCH) {
         let nextFrom = RPC_BATCH;
         let done = false;
@@ -1308,7 +1308,7 @@ export default function MinmaxCalPage() {
           const results = await Promise.all(offsets.map(off => fetchExpRange(off)));
           for (const chunk of results) {
             all.push(...chunk);
-            setExportProgress({ loaded: all.length, total: all.length, label: `à¸”à¸¶à¸‡à¸‚à¹‰à¸­à¸¡à¸¹à¸¥... ${all.length.toLocaleString()} à¹à¸–à¸§` });
+            setExportProgress({ loaded: all.length, total: all.length, label: `ดึงข้อมูล... ${all.length.toLocaleString()} แถว` });
             if (chunk.length < RPC_BATCH) { done = true; break; }
           }
           nextFrom += CONCURRENCY_EXP * RPC_BATCH;
@@ -1318,11 +1318,11 @@ export default function MinmaxCalPage() {
       if (cancelExportRef.current) throw new Error("__CANCELLED__");
       const data = all;
       if (data.length === 0) {
-        toast({ title: "à¹„à¸¡à¹ˆà¸¡à¸µà¸‚à¹‰à¸­à¸¡à¸¹à¸¥à¸•à¸²à¸¡ Filter", variant: "destructive" });
+        toast({ title: "ไม่มีข้อมูลตาม Filter", variant: "destructive" });
         return;
       }
 
-      setExportProgress({ loaded: 0, total: data.length, label: "à¸ªà¸£à¹‰à¸²à¸‡à¹„à¸Ÿà¸¥à¹Œ Excel..." });
+      setExportProgress({ loaded: 0, total: data.length, label: "สร้างไฟล์ Excel..." });
       const sheet: any[] = [];
       const CHUNK = 2000;
       for (let i = 0; i < data.length; i += CHUNK) {
@@ -1353,12 +1353,12 @@ export default function MinmaxCalPage() {
         setExportProgress({
           loaded: Math.min(data.length, i + slice.length),
           total: data.length,
-          label: `à¹€à¸•à¸£à¸µà¸¢à¸¡à¹à¸–à¸§ ${Math.min(data.length, i + slice.length).toLocaleString()}/${data.length.toLocaleString()}`,
+          label: `เตรียมแถว ${Math.min(data.length, i + slice.length).toLocaleString()}/${data.length.toLocaleString()}`,
         });
         await new Promise(r => setTimeout(r, 0));
       }
 
-      setExportProgress({ loaded: data.length, total: data.length, label: "à¹€à¸‚à¸µà¸¢à¸™à¹„à¸Ÿà¸¥à¹Œ..." });
+      setExportProgress({ loaded: data.length, total: data.length, label: "เขียนไฟล์..." });
       await new Promise(r => setTimeout(r, 0));
 
       const ws = XLSX.utils.json_to_sheet(sheet);
@@ -1408,10 +1408,10 @@ export default function MinmaxCalPage() {
       const hasFilter = Object.keys(params).length > 0;
       const filterSuffix = hasFilter ? `_filtered_${data.length}` : `_${data.length}`;
       XLSX.writeFile(wb, `minmax_view_${ts}${filterSuffix}.xlsx`);
-      toast({ title: "Export à¸ªà¸³à¹€à¸£à¹‡à¸ˆ", description: `${data.length.toLocaleString()} à¹à¸–à¸§ (${ms}s)` });
+      toast({ title: "Export สำเร็จ", description: `${data.length.toLocaleString()} แถว (${ms}s)` });
     } catch (err: any) {
       if (err?.message === "__CANCELLED__") {
-        toast({ title: "à¸¢à¸à¹€à¸¥à¸´à¸ Export à¹à¸¥à¹‰à¸§", variant: "destructive" });
+        toast({ title: "ยกเลิก Export แล้ว", variant: "destructive" });
       } else {
         toast({ title: "Error", description: err.message, variant: "destructive" });
       }
@@ -1430,7 +1430,7 @@ export default function MinmaxCalPage() {
     XLSX.writeFile(wb, "minmax_import_template.xlsx");
   };
 
-  // Export current rows (Calc + Doc merged) â€” supports 3 modes
+  // Export current rows (Calc + Doc merged) — supports 3 modes
   const exportRows = async (mode: "page" | "selected" | "all") => {
     let source: CalcRow[] = [];
     if (mode === "page") source = pageRows;
@@ -1468,7 +1468,7 @@ export default function MinmaxCalPage() {
     } else source = filtered;
 
     if (source.length === 0) {
-      toast({ title: "à¹„à¸¡à¹ˆà¸¡à¸µà¸‚à¹‰à¸­à¸¡à¸¹à¸¥à¹ƒà¸«à¹‰ Export", variant: "destructive" });
+      toast({ title: "ไม่มีข้อมูลให้ Export", variant: "destructive" });
       return;
     }
     const sheet = source.map(r => {
@@ -1505,7 +1505,7 @@ export default function MinmaxCalPage() {
     const ts = fmtDocName().replace("-minmaxcal", "");
     const suffix = mode === "page" ? "page" : mode === "selected" ? "selected" : "all";
     XLSX.writeFile(wb, `minmax_${suffix}_${ts}.xlsx`);
-    toast({ title: "Export à¸ªà¸³à¹€à¸£à¹‡à¸ˆ", description: `${sheet.length.toLocaleString()} à¹à¸–à¸§ (${suffix})` });
+    toast({ title: "Export สำเร็จ", description: `${sheet.length.toLocaleString()} แถว (${suffix})` });
   };
 
   // ====== inline edit ======
@@ -1571,9 +1571,9 @@ export default function MinmaxCalPage() {
         <div>
           <h1 className="text-lg font-bold text-foreground">Min/Max Calculator</h1>
           <p className="text-xs text-muted-foreground">
-            Data Control Â· à¸„à¸³à¸™à¸§à¸“ Min/Max à¸•à¹ˆà¸­ SKU Ã— Store Â· N = {nFactor}
+            Data Control · คำนวณ Min/Max ต่อ SKU × Store · N = {nFactor}
             {rows.length > 0 && (
-              <> Â· {rows.length.toLocaleString()} à¹à¸–à¸§
+              <> · {rows.length.toLocaleString()} แถว
                 {hasFilters && docCount > 0 && (
                   <> (Calc {calcCount.toLocaleString()} + Doc {docCount.toLocaleString()})</>
                 )}
@@ -1616,7 +1616,7 @@ export default function MinmaxCalPage() {
                 onClick={handleView}
                 disabled={viewLoading || viewPagingLoading || loading || !hasAnyFilter}
                 className="text-xs"
-                title={!hasAnyFilter ? "à¹ƒà¸ªà¹ˆ Filter à¸à¹ˆà¸­à¸™ (Store, SKU, Barcode à¸¯à¸¥à¸¯)" : "à¸”à¸¶à¸‡à¸‚à¹‰à¸­à¸¡à¸¹à¸¥ Min/Max à¸—à¸µà¹ˆà¸šà¸±à¸™à¸—à¸¶à¸à¹„à¸§à¹‰à¸•à¸²à¸¡ Filter"}
+                title={!hasAnyFilter ? "ใส่ Filter ก่อน (Store, SKU, Barcode ฯลฯ)" : "ดึงข้อมูล Min/Max ที่บันทึกไว้ตาม Filter"}
               >
                 {viewLoading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Eye className="w-3.5 h-3.5 mr-1" />}
                 View ({viewCount})
@@ -1661,7 +1661,7 @@ export default function MinmaxCalPage() {
           {(loading || viewLoading) && (
             <>
               <div className="flex items-center justify-between text-xs">
-                <span className="font-medium">{phaseLabel || (viewLoading ? "à¸à¸³à¸¥à¸±à¸‡à¹‚à¸«à¸¥à¸” View..." : "à¸žà¸£à¹‰à¸­à¸¡")}</span>
+                <span className="font-medium">{phaseLabel || (viewLoading ? "กำลังโหลด View..." : "พร้อม")}</span>
                 <div className="flex items-center gap-3 text-muted-foreground tabular-nums">
                   <span className="font-mono font-semibold text-primary text-sm">
                     {(elapsedMs / 1000).toFixed(1)} s
@@ -1675,21 +1675,21 @@ export default function MinmaxCalPage() {
           <div className="flex gap-3 text-[10px] text-muted-foreground flex-wrap items-center">
             {phaseTimes.fetch != null && (
               <span className="font-medium">
-                <span className="text-foreground">â‘  Read Cal:</span> {phaseTimes.fetch}ms Â· {phaseTimes.readBatches ?? 0} batches â†’ <span className="text-primary font-bold">{(phaseTimes.rowCount ?? 0).toLocaleString()}</span> à¹à¸–à¸§
+                <span className="text-foreground">① Read Cal:</span> {phaseTimes.fetch}ms · {phaseTimes.readBatches ?? 0} batches → <span className="text-primary font-bold">{(phaseTimes.rowCount ?? 0).toLocaleString()}</span> แถว
               </span>
             )}
             {phaseTimes.merge != null && (
               <span className="font-medium">
-                <span className="text-foreground">â‘¡ Merge Doc:</span> {phaseTimes.merge}ms{(phaseTimes.docCount ?? 0) > 0 && <> Â· +<span className="text-amber-600 dark:text-amber-400 font-bold">{(phaseTimes.docCount ?? 0).toLocaleString()}</span> à¸ˆà¸²à¸ Doc</>}
+                <span className="text-foreground">② Merge Doc:</span> {phaseTimes.merge}ms{(phaseTimes.docCount ?? 0) > 0 && <> · +<span className="text-amber-600 dark:text-amber-400 font-bold">{(phaseTimes.docCount ?? 0).toLocaleString()}</span> จาก Doc</>}
               </span>
             )}
             {(isServerPaging ? serverPagingTotal > 0 : rows.length > 0) && (
               <span className="font-medium ml-auto">
-                <span className="text-foreground">â‘¢ à¹à¸ªà¸”à¸‡:</span>{" "}
+                <span className="text-foreground">③ แสดง:</span>{" "}
                 <span className="text-primary font-bold">
                   {isServerPaging ? serverPagingTotal.toLocaleString() : filtered.length.toLocaleString()}
                 </span>
-                {" "}/ à¸£à¸§à¸¡ {isServerPaging ? (hasStaging ? stagingTotal : viewPagingTotal).toLocaleString() : rows.length.toLocaleString()} à¹à¸–à¸§ Â· à¸«à¸™à¹‰à¸² {page + 1}/{totalPages} ({pageRows.length} à¹à¸–à¸§à¸šà¸™à¸«à¸™à¹‰à¸²à¸™à¸µà¹‰)
+                {" "}/ รวม {isServerPaging ? (hasStaging ? stagingTotal : viewPagingTotal).toLocaleString() : rows.length.toLocaleString()} แถว · หน้า {page + 1}/{totalPages} ({pageRows.length} แถวบนหน้านี้)
               </span>
             )}
           </div>
@@ -1773,7 +1773,7 @@ export default function MinmaxCalPage() {
               width="w-56"
             />
             <Input
-              placeholder="SKU Code (à¸„à¸±à¹ˆà¸™à¸”à¹‰à¸§à¸¢ ,)"
+              placeholder="SKU Code (คั่นด้วย ,)"
               className="h-7 text-xs w-48"
               defaultValue={skuFilter.join(",")}
               onBlur={(e) => {
@@ -1782,7 +1782,7 @@ export default function MinmaxCalPage() {
               }}
             />
             <Input
-              placeholder="Barcode (à¸„à¸±à¹ˆà¸™à¸”à¹‰à¸§à¸¢ ,)"
+              placeholder="Barcode (คั่นด้วย ,)"
               className="h-7 text-xs w-48"
               defaultValue={barcodeFilter.join(",")}
               onBlur={(e) => {
@@ -1810,7 +1810,7 @@ export default function MinmaxCalPage() {
             )}
             {!hasStaging && hasFilters && (
               <Badge variant="outline" className="text-[10px] ml-auto">
-                ðŸ’¡ Calc à¹€à¸‰à¸žà¸²à¸°à¸—à¸µà¹ˆ Filter Â· à¸—à¸µà¹ˆà¹€à¸«à¸¥à¸·à¸­à¸”à¸¶à¸‡à¸ˆà¸²à¸ Doc à¸¥à¹ˆà¸²à¸ªà¸¸à¸” (à¹€à¸¡à¸·à¹ˆà¸­ Calculate)
+                💡 Calc เฉพาะที่ Filter · ที่เหลือดึงจาก Doc ล่าสุด (เมื่อ Calculate)
               </Badge>
             )}
           </div>
@@ -1832,7 +1832,7 @@ export default function MinmaxCalPage() {
               <Input
                 ref={searchInputRef}
                 className="h-7 text-xs border-0 shadow-none focus-visible:ring-0 bg-transparent"
-                placeholder="à¸žà¸´à¸¡à¸žà¹Œà¹€à¸žà¸·à¹ˆà¸­à¸„à¹‰à¸™à¸«à¸²..."
+                placeholder="พิมพ์เพื่อค้นหา..."
                 value={searchValue}
                 onChange={e => { setSearchValue(e.target.value); setShowSearchDropdown(true); setPage(0); }}
                 onFocus={() => setShowSearchDropdown(true)}
@@ -1861,7 +1861,7 @@ export default function MinmaxCalPage() {
             )}
             {filtered.length > 0 && (
               <span className="text-xs text-muted-foreground">
-                à¹à¸ªà¸”à¸‡ {Math.min(filtered.length, (page + 1) * PAGE_SIZE).toLocaleString()} / {filtered.length.toLocaleString()}
+                แสดง {Math.min(filtered.length, (page + 1) * PAGE_SIZE).toLocaleString()} / {filtered.length.toLocaleString()}
               </span>
             )}
           </div>
@@ -1870,12 +1870,12 @@ export default function MinmaxCalPage() {
           <div className="flex-1 overflow-hidden px-6 pb-3">
             {loading ? (
               <div className="flex items-center justify-center h-full text-muted-foreground">
-                <Loader2 className="w-6 h-6 animate-spin mr-2" /> à¸à¸³à¸¥à¸±à¸‡à¸„à¸³à¸™à¸§à¸“...
+                <Loader2 className="w-6 h-6 animate-spin mr-2" /> กำลังคำนวณ...
               </div>
             ) : rows.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
                 <Calculator className="w-12 h-12 mb-3 opacity-30" />
-                <p className="text-sm">à¸à¸”à¸›à¸¸à¹ˆà¸¡ "Calculate" à¹€à¸žà¸·à¹ˆà¸­à¸„à¸³à¸™à¸§à¸“ Min/Max</p>
+                <p className="text-sm">กดปุ่ม "Calculate" เพื่อคำนวณ Min/Max</p>
               </div>
             ) : (
               <div className="border border-border rounded-md overflow-auto h-full">
@@ -1944,13 +1944,13 @@ export default function MinmaxCalPage() {
                           <td className="px-2 py-1 text-right">{r.avg_sale.toFixed(2)}</td>
                           <td className="px-2 py-1">
                             <Badge variant="outline" className="text-[10px] px-1 py-0 h-4">
-                              {r.rank_sale}Â·{r.rank_factor}
+                              {r.rank_sale}·{r.rank_factor}
                             </Badge>
                           </td>
                           <td className={cn("px-2 py-1 text-right tabular-nums",
                             r.is_default_min && "text-warning",
                             r.min_floored && "text-sky-600 dark:text-sky-400 font-semibold")}
-                            title={r.min_floored ? "à¸›à¸±à¸”à¸‚à¸¶à¹‰à¸™à¹€à¸›à¹‡à¸™ 3 (avgÃ—rank < 3)" : undefined}>
+                            title={r.min_floored ? "ปัดขึ้นเป็น 3 (avg×rank < 3)" : undefined}>
                             {r.min_cal}
                           </td>
                           <td className="px-2 py-1 text-right tabular-nums">{r.max_cal}</td>
@@ -2029,7 +2029,7 @@ export default function MinmaxCalPage() {
 
           {(isServerPaging ? serverPagingTotal > PAGE_SIZE : filtered.length > PAGE_SIZE) && (
             <div className="px-6 py-2 border-t border-border flex items-center justify-between bg-card">
-              <span className="text-xs text-muted-foreground">à¸«à¸™à¹‰à¸² {page + 1} / {totalPages}</span>
+              <span className="text-xs text-muted-foreground">หน้า {page + 1} / {totalPages}</span>
               <div className="flex gap-1">
                 <Button size="sm" variant="outline"
                   disabled={page === 0 || stagingLoading || viewPagingLoading}
@@ -2038,7 +2038,7 @@ export default function MinmaxCalPage() {
                     else if (hasViewPaging) loadViewPage(page - 1);
                     else setPage(p => p - 1);
                   }}
-                  className="h-7 text-xs">à¸à¹ˆà¸­à¸™à¸«à¸™à¹‰à¸²</Button>
+                  className="h-7 text-xs">ก่อนหน้า</Button>
                 <Button size="sm" variant="outline"
                   disabled={page >= totalPages - 1 || stagingLoading || viewPagingLoading}
                   onClick={() => {
@@ -2046,7 +2046,7 @@ export default function MinmaxCalPage() {
                     else if (hasViewPaging) loadViewPage(page + 1);
                     else setPage(p => p + 1);
                   }}
-                  className="h-7 text-xs">à¸–à¸±à¸”à¹„à¸›</Button>
+                  className="h-7 text-xs">ถัดไป</Button>
               </div>
             </div>
           )}
@@ -2082,7 +2082,7 @@ export default function MinmaxCalPage() {
                   variant="destructive"
                   onClick={() => setDeleteOpen(true)}
                   disabled={!hasReportFilter || deleting || reportLoading}
-                  title={!hasReportFilter ? "à¹€à¸¥à¸·à¸­à¸ Filter à¸à¹ˆà¸­à¸™à¸à¸” Delete" : "à¸¥à¸š Min/Max à¸•à¸²à¸¡ Filter à¸›à¸±à¸ˆà¸ˆà¸¸à¸šà¸±à¸™"}
+                  title={!hasReportFilter ? "เลือก Filter ก่อนกด Delete" : "ลบ Min/Max ตาม Filter ปัจจุบัน"}
                   className="text-xs h-7"
                 >
                   <Trash2 className="w-3.5 h-3.5 mr-1" /> Delete
@@ -2095,7 +2095,7 @@ export default function MinmaxCalPage() {
                 onClick={() => { if (exportingReport) { cancelExportRef.current = true; } else { exportReportExcel(); } }}
                 disabled={!exportingReport && reportRows.length === 0} className="text-xs h-7">
                 {exportingReport ? (
-                  <><StopCircle className="w-3.5 h-3.5 mr-1" /> Stop Â· {exportProgress.label || "..."}</>
+                  <><StopCircle className="w-3.5 h-3.5 mr-1" /> Stop · {exportProgress.label || "..."}</>
                 ) : (
                   <><Download className="w-3.5 h-3.5 mr-1" /> Export Excel</>
                 )}
@@ -2104,7 +2104,7 @@ export default function MinmaxCalPage() {
           </div>
 
           {(() => {
-            // Group reportRows: Store â†’ Division â†’ Department
+            // Group reportRows: Store → Division → Department
             type Row = typeof reportRows[number];
             const storeMap = new Map<string, { type_store: string; divs: Map<string, Row[]> }>();
             for (const r of reportRows) {
@@ -2121,13 +2121,13 @@ export default function MinmaxCalPage() {
             if (reportLoading) return (
               <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
                 <Loader2 className="w-8 h-8 mb-3 animate-spin opacity-50" />
-                <p className="text-sm">à¸à¸³à¸¥à¸±à¸‡à¹‚à¸«à¸¥à¸”à¸ªà¸£à¸¸à¸›...</p>
+                <p className="text-sm">กำลังโหลดสรุป...</p>
               </div>
             );
             if (reportRows.length === 0) return (
               <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
                 <BarChart3 className="w-12 h-12 mb-3 opacity-30" />
-                <p className="text-sm">à¸¢à¸±à¸‡à¹„à¸¡à¹ˆà¸¡à¸µà¸‚à¹‰à¸­à¸¡à¸¹à¸¥ Min/Max à¹ƒà¸™ View</p>
+                <p className="text-sm">ยังไม่มีข้อมูล Min/Max ใน View</p>
               </div>
             );
 
@@ -2160,8 +2160,8 @@ export default function MinmaxCalPage() {
                             <td className="px-3 py-1.5 font-bold">
                               <span className="inline-flex items-center gap-1">
                                 {storeOpen ? <ChevronDownIcon className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                                ðŸ¬ {storeName}
-                                <span className="text-[10px] text-muted-foreground font-normal ml-1">({sortedDivs.length} Div Â· {allRows.length} Dept)</span>
+                                🏬 {storeName}
+                                <span className="text-[10px] text-muted-foreground font-normal ml-1">({sortedDivs.length} Div · {allRows.length} Dept)</span>
                               </span>
                             </td>
                             <td className="px-3 py-1.5 text-[11px]">{type_store}</td>
@@ -2183,7 +2183,7 @@ export default function MinmaxCalPage() {
                                   <td className="px-3 py-1.5 font-semibold pl-8">
                                     <span className="inline-flex items-center gap-1">
                                       {divOpen ? <ChevronDownIcon className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                                      ðŸ“ {divName}
+                                      📁 {divName}
                                       <span className="text-[10px] text-muted-foreground font-normal ml-1">({sortedDepts.length} Dept)</span>
                                     </span>
                                   </td>
@@ -2194,7 +2194,7 @@ export default function MinmaxCalPage() {
                                 </tr>
                                 {divOpen && sortedDepts.map(d => (
                                   <tr key={`${divKey}|${d.department}`} className="hover:bg-muted/20">
-                                    <td className="px-3 py-1 text-[11px] pl-14">ðŸ“‚ {d.department}</td>
+                                    <td className="px-3 py-1 text-[11px] pl-14">📂 {d.department}</td>
                                     <td></td>
                                     <td className="px-3 py-1 text-right tabular-nums">{d.sku_count.toLocaleString()}</td>
                                     <td className="px-3 py-1 text-right tabular-nums">{d.sum_min.toLocaleString()}</td>
@@ -2232,7 +2232,7 @@ export default function MinmaxCalPage() {
             <Button size="sm" className="text-xs h-7 bg-blue-600 hover:bg-blue-700 text-white"
               onClick={() => { setUpPage(0); loadUPRows(false); }}
               disabled={upLoading || !upHasFilter}
-              title={!upHasFilter ? "à¹ƒà¸ªà¹ˆ Filter à¸«à¸£à¸·à¸­à¸žà¸´à¸¡à¸žà¹Œà¸„à¹‰à¸™à¸«à¸²à¸à¹ˆà¸­à¸™à¸à¸” Show" : "à¸”à¸¶à¸‡à¸‚à¹‰à¸­à¸¡à¸¹à¸¥à¸ˆà¸²à¸ DB"}>
+              title={!upHasFilter ? "ใส่ Filter หรือพิมพ์ค้นหาก่อนกด Show" : "ดึงข้อมูลจาก DB"}>
               {upLoading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Eye className="w-3.5 h-3.5 mr-1" />}
               Show
             </Button>
@@ -2296,13 +2296,13 @@ export default function MinmaxCalPage() {
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="start">
                     <DropdownMenuItem className="text-xs" onClick={() => exportToXlsx(filtered, "unit_pick_page.xlsx")}>
-                      Export this page ({filtered.length.toLocaleString()} à¹à¸–à¸§)
+                      Export this page ({filtered.length.toLocaleString()} แถว)
                     </DropdownMenuItem>
                     <DropdownMenuItem className="text-xs" disabled={selectedRows.length === 0} onClick={() => exportToXlsx(selectedRows, "unit_pick_selected.xlsx")}>
-                      Export selected ({selectedRows.length.toLocaleString()} à¹à¸–à¸§)
+                      Export selected ({selectedRows.length.toLocaleString()} แถว)
                     </DropdownMenuItem>
                     <DropdownMenuItem className="text-xs" onClick={() => exportToXlsx(upRows, "unit_pick_all.xlsx")}>
-                      Export all ({upRows.length.toLocaleString()} à¹à¸–à¸§)
+                      Export all ({upRows.length.toLocaleString()} แถว)
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -2339,7 +2339,7 @@ export default function MinmaxCalPage() {
                   <Input
                     value={upSearch}
                     onChange={e => setUpSearch(e.target.value)}
-                    placeholder="SKU / Barcode / à¸Šà¸·à¹ˆà¸­à¸ªà¸´à¸™à¸„à¹‰à¸² / Store..."
+                    placeholder="SKU / Barcode / ชื่อสินค้า / Store..."
                     className="pl-7 h-7 text-xs w-72"
                   />
                   {upSearch && (
@@ -2356,13 +2356,13 @@ export default function MinmaxCalPage() {
           <div className="flex-1 overflow-auto border border-border rounded-md">
             {upLoading ? (
               <div className="flex items-center justify-center py-16 gap-2 text-muted-foreground text-sm">
-                <Loader2 className="w-5 h-5 animate-spin" /> à¸à¸³à¸¥à¸±à¸‡à¹‚à¸«à¸¥à¸”...
+                <Loader2 className="w-5 h-5 animate-spin" /> กำลังโหลด...
               </div>
             ) : !upHasLoaded ? (
               <div className="flex flex-col items-center justify-center py-16 gap-3 text-muted-foreground">
                 <Database className="w-8 h-8 opacity-30" />
-                <p className="text-sm">à¸à¸” <span className="font-semibold text-blue-600">Show</span> à¹€à¸žà¸·à¹ˆà¸­à¸”à¸¶à¸‡à¸‚à¹‰à¸­à¸¡à¸¹à¸¥à¸ˆà¸²à¸ DB</p>
-                <p className="text-xs opacity-60">à¸ªà¸²à¸¡à¸²à¸£à¸– Filter à¸à¹ˆà¸­à¸™à¸à¸” Show à¹€à¸žà¸·à¹ˆà¸­à¹à¸ªà¸”à¸‡à¹€à¸‰à¸žà¸²à¸°à¸‚à¹‰à¸­à¸¡à¸¹à¸¥à¸—à¸µà¹ˆà¸•à¹‰à¸­à¸‡à¸à¸²à¸£</p>
+                <p className="text-sm">กด <span className="font-semibold text-blue-600">Show</span> เพื่อดึงข้อมูลจาก DB</p>
+                <p className="text-xs opacity-60">สามารถ Filter ก่อนกด Show เพื่อแสดงเฉพาะข้อมูลที่ต้องการ</p>
               </div>
             ) : (() => {
               const q = upSearch.trim().toLowerCase();
@@ -2387,22 +2387,22 @@ export default function MinmaxCalPage() {
               return (
                 <>
                   <div className="px-3 py-1 text-[11px] text-muted-foreground border-b border-border bg-muted/50 flex items-center gap-3">
-                    <span>à¸à¸£à¸­à¸‡ {filtered.length.toLocaleString()} / {upRows.length.toLocaleString()} à¹à¸–à¸§</span>
-                    {upSelected.size > 0 && <span className="text-primary font-medium">Â· à¹€à¸¥à¸·à¸­à¸ {upSelected.size} à¹à¸–à¸§</span>}
-                    {missingCount > 0 && <span className="text-amber-600 font-medium">âš  {missingCount} à¹à¸–à¸§à¹„à¸¡à¹ˆà¸žà¸šà¹ƒà¸™ range_store_view</span>}
+                    <span>กรอง {filtered.length.toLocaleString()} / {upRows.length.toLocaleString()} แถว</span>
+                    {upSelected.size > 0 && <span className="text-primary font-medium">· เลือก {upSelected.size} แถว</span>}
+                    {missingCount > 0 && <span className="text-amber-600 font-medium">⚠ {missingCount} แถวไม่พบใน range_store_view</span>}
                     <div className="flex-1" />
-                    <span>à¸«à¸™à¹‰à¸² {safePage + 1} / {totalPages}</span>
+                    <span>หน้า {safePage + 1} / {totalPages}</span>
                     <button
                       className="px-1.5 py-0.5 rounded border border-border text-[11px] hover:bg-muted disabled:opacity-40"
                       disabled={safePage === 0}
                       onClick={() => setUpPage(p => Math.max(0, p - 1))}>
-                      â—€ Prev
+                      ◀ Prev
                     </button>
                     <button
                       className="px-1.5 py-0.5 rounded border border-border text-[11px] hover:bg-muted disabled:opacity-40"
                       disabled={safePage >= totalPages - 1}
                       onClick={() => setUpPage(p => Math.min(totalPages - 1, p + 1))}>
-                      Next â–¶
+                      Next ▶
                     </button>
                   </div>
                   <table className="w-full text-xs">
@@ -2428,7 +2428,7 @@ export default function MinmaxCalPage() {
                     </thead>
                     <tbody>
                       {pageRows.length === 0 ? (
-                        <tr><td colSpan={12} className="px-4 py-8 text-center text-muted-foreground">à¹„à¸¡à¹ˆà¸¡à¸µà¸‚à¹‰à¸­à¸¡à¸¹à¸¥</td></tr>
+                        <tr><td colSpan={12} className="px-4 py-8 text-center text-muted-foreground">ไม่มีข้อมูล</td></tr>
                       ) : pageRows.map(r => {
                         const key = `${r.sku_code}|${r.size_store}`;
                         return (
@@ -2468,7 +2468,7 @@ export default function MinmaxCalPage() {
 
           {/* Import hint */}
           <p className="text-[11px] text-muted-foreground mt-1">
-            à¹„à¸Ÿà¸¥à¹Œ Excel à¸•à¹‰à¸­à¸‡à¸¡à¸µà¸„à¸­à¸¥à¸±à¸¡à¸™à¹Œ: <code>size_store</code> (Super / Mini), <code>unit_pick</code> à¹à¸¥à¸° <code>sku_code</code> à¸«à¸£à¸·à¸­ <code>barcode</code>
+            ไฟล์ Excel ต้องมีคอลัมน์: <code>size_store</code> (Super / Mini), <code>unit_pick</code> และ <code>sku_code</code> หรือ <code>barcode</code>
           </p>
         </TabsContent>
       </Tabs>
@@ -2477,16 +2477,16 @@ export default function MinmaxCalPage() {
       <Dialog open={setNOpen} onOpenChange={setSetNOpen}>
         <DialogContent className="sm:max-w-[400px]">
           <DialogHeader>
-            <DialogTitle>Set N (à¸•à¸±à¸§à¸„à¸¹à¸“ Avg Sale à¸ªà¸³à¸«à¸£à¸±à¸š Max Cal)</DialogTitle>
-            <DialogDescription>à¸ªà¸¹à¸•à¸£ Max = RoundUp((Min + Avg Ã— N) / UnitPick) Ã— UnitPick</DialogDescription>
+            <DialogTitle>Set N (ตัวคูณ Avg Sale สำหรับ Max Cal)</DialogTitle>
+            <DialogDescription>สูตร Max = RoundUp((Min + Avg × N) / UnitPick) × UnitPick</DialogDescription>
           </DialogHeader>
           <Input type="number" value={nInput} onChange={e => setNInput(e.target.value)} className="text-sm" />
           <DialogFooter>
-            <Button variant="outline" onClick={() => setSetNOpen(false)}>à¸¢à¸à¹€à¸¥à¸´à¸</Button>
+            <Button variant="outline" onClick={() => setSetNOpen(false)}>ยกเลิก</Button>
             <Button onClick={() => {
               const v = Number(nInput);
               if (!Number.isFinite(v) || v <= 0) {
-                toast({ title: "à¸„à¹ˆà¸² N à¹„à¸¡à¹ˆà¸–à¸¹à¸à¸•à¹‰à¸­à¸‡", variant: "destructive" }); return;
+                toast({ title: "ค่า N ไม่ถูกต้อง", variant: "destructive" }); return;
               }
               setNFactor(v); setSetNOpen(false);
               if (rows.length > 0) calculate(v);
@@ -2501,8 +2501,8 @@ export default function MinmaxCalPage() {
           <DialogHeader>
             <DialogTitle>Import Min/Max</DialogTitle>
             <DialogDescription>
-              à¹„à¸Ÿà¸¥à¹Œ Excel à¸•à¹‰à¸­à¸‡à¸¡à¸µà¸„à¸­à¸¥à¸±à¸¡à¸™à¹Œ: <code>sku_code</code>, <code>min_qty</code>, <code>max_qty</code>
-              (à¹ƒà¸ªà¹ˆ <code>store_name</code> à¹€à¸žà¸´à¹ˆà¸¡à¹€à¸žà¸·à¹ˆà¸­à¸£à¸°à¸šà¸¸à¸£à¹‰à¸²à¸™ à¸–à¹‰à¸²à¹„à¸¡à¹ˆà¹ƒà¸ªà¹ˆà¸ˆà¸° apply à¸—à¸¸à¸à¸£à¹‰à¸²à¸™à¸‚à¸­à¸‡ SKU à¸™à¸±à¹‰à¸™)
+              ไฟล์ Excel ต้องมีคอลัมน์: <code>sku_code</code>, <code>min_qty</code>, <code>max_qty</code>
+              (ใส่ <code>store_name</code> เพิ่มเพื่อระบุร้าน ถ้าไม่ใส่จะ apply ทุกร้านของ SKU นั้น)
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-2">
@@ -2511,11 +2511,11 @@ export default function MinmaxCalPage() {
             </Button>
             <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleImport} className="text-xs" />
             <p className="text-[11px] text-muted-foreground">
-              * à¸•à¹‰à¸­à¸‡à¸à¸” Calculate à¸à¹ˆà¸­à¸™à¹€à¸žà¸·à¹ˆà¸­à¹ƒà¸«à¹‰à¸¡à¸µà¸£à¸²à¸¢à¸à¸²à¸£à¹ƒà¸™à¸•à¸²à¸£à¸²à¸‡ à¹à¸¥à¹‰à¸§à¸„à¹ˆà¸­à¸¢ Import à¸ˆà¸°à¸™à¸³à¹„à¸›à¸­à¸±à¸›à¹€à¸”à¸•à¸Šà¹ˆà¸­à¸‡ Min Edit / Max Edit
+              * ต้องกด Calculate ก่อนเพื่อให้มีรายการในตาราง แล้วค่อย Import จะนำไปอัปเดตช่อง Min Edit / Max Edit
             </p>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setImportOpen(false)}>à¸›à¸´à¸”</Button>
+            <Button variant="outline" onClick={() => setImportOpen(false)}>ปิด</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -2526,9 +2526,9 @@ export default function MinmaxCalPage() {
           <DialogHeader>
             <DialogTitle>Save Document</DialogTitle>
             <DialogDescription>
-              SRR à¸ˆà¸°à¸”à¸¶à¸‡à¸„à¹ˆà¸² Min/Max à¸ˆà¸²à¸ Doc à¸¥à¹ˆà¸²à¸ªà¸¸à¸” Â· à¸šà¸±à¸™à¸—à¸¶à¸ {rows.length.toLocaleString()} à¹à¸–à¸§
+              SRR จะดึงค่า Min/Max จาก Doc ล่าสุด · บันทึก {rows.length.toLocaleString()} แถว
               {hasFilters && docCount > 0 && (
-                <> ({calcCount.toLocaleString()} à¸ˆà¸²à¸ Calc + {docCount.toLocaleString()} à¸ˆà¸²à¸ Doc à¹€à¸”à¸´à¸¡)</>
+                <> ({calcCount.toLocaleString()} จาก Calc + {docCount.toLocaleString()} จาก Doc เดิม)</>
               )}
             </DialogDescription>
           </DialogHeader>
@@ -2538,7 +2538,7 @@ export default function MinmaxCalPage() {
               <div className="flex items-center justify-between text-xs">
                 <span className="flex items-center gap-2 font-medium">
                   <span className="inline-block w-2 h-2 rounded-full bg-primary animate-pulse" />
-                  Step {saveStep.idx}/{saveStep.total}{saveStep.label ? ` Â· ${saveStep.label}` : ""}
+                  Step {saveStep.idx}/{saveStep.total}{saveStep.label ? ` · ${saveStep.label}` : ""}
                 </span>
                 <span className="font-mono tabular-nums text-primary font-semibold">{savePct}%</span>
               </div>
@@ -2554,8 +2554,8 @@ export default function MinmaxCalPage() {
             </div>
           )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setSaveOpen(false)} disabled={saving}>à¸¢à¸à¹€à¸¥à¸´à¸</Button>
-            <Button onClick={saveDoc} disabled={saving}>{saving ? "à¸à¸³à¸¥à¸±à¸‡à¸šà¸±à¸™à¸—à¸¶à¸..." : "Save"}</Button>
+            <Button variant="outline" onClick={() => setSaveOpen(false)} disabled={saving}>ยกเลิก</Button>
+            <Button onClick={saveDoc} disabled={saving}>{saving ? "กำลังบันทึก..." : "Save"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -2565,10 +2565,10 @@ export default function MinmaxCalPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-destructive">
-              <Trash2 className="w-4 h-4" /> à¸¥à¸š Min/Max à¸•à¸²à¸¡ Filter
+              <Trash2 className="w-4 h-4" /> ลบ Min/Max ตาม Filter
             </DialogTitle>
             <DialogDescription>
-              à¸£à¸°à¸šà¸šà¸ˆà¸°à¸¥à¸šà¹à¸–à¸§à¹ƒà¸™ Min/Max à¸—à¸µà¹ˆà¸•à¸£à¸‡à¸à¸±à¸š Filter à¸›à¸±à¸ˆà¸ˆà¸¸à¸šà¸±à¸™à¸­à¸­à¸à¸ˆà¸²à¸à¸à¸²à¸™à¸‚à¹‰à¸­à¸¡à¸¹à¸¥ (à¹„à¸¡à¹ˆà¸ªà¸²à¸¡à¸²à¸£à¸–à¸à¸¹à¹‰à¸„à¸·à¸™à¹„à¸”à¹‰)
+              ระบบจะลบแถวใน Min/Max ที่ตรงกับ Filter ปัจจุบันออกจากฐานข้อมูล (ไม่สามารถกู้คืนได้)
             </DialogDescription>
           </DialogHeader>
           <div className="text-xs space-y-1 bg-muted/40 rounded p-3">
@@ -2582,9 +2582,9 @@ export default function MinmaxCalPage() {
             {docClassFilter.length > 0 && <div><span className="font-semibold">Class:</span> {docClassFilter.join(", ")}</div>}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteOpen(false)} disabled={deleting}>à¸¢à¸à¹€à¸¥à¸´à¸</Button>
+            <Button variant="outline" onClick={() => setDeleteOpen(false)} disabled={deleting}>ยกเลิก</Button>
             <Button variant="destructive" onClick={handleDeleteFiltered} disabled={deleting || !hasReportFilter}>
-              {deleting ? <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> à¸à¸³à¸¥à¸±à¸‡à¸¥à¸š...</> : <><Trash2 className="w-4 h-4 mr-1" /> à¸¢à¸·à¸™à¸¢à¸±à¸™à¸¥à¸š</>}
+              {deleting ? <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> กำลังลบ...</> : <><Trash2 className="w-4 h-4 mr-1" /> ยืนยันลบ</>}
             </Button>
           </DialogFooter>
         </DialogContent>
