@@ -2003,7 +2003,12 @@ export default function MinmaxCalPage() {
                             title={r.min_floored ? "ปัดขึ้นเป็น 3 (avg×rank < 3)" : undefined}>
                             {r.min_cal}
                           </td>
-                          <td className="px-2 py-1 text-right tabular-nums">{r.max_cal}</td>
+                          <td className={cn("px-2 py-1 text-right tabular-nums",
+                            r.is_default_min && "text-warning",
+                            r.min_floored && "text-sky-600 dark:text-sky-400 font-semibold")}
+                            title={r.min_floored ? "ปัดขึ้น (avg×rank < 3)" : undefined}>
+                            {r.max_cal}
+                          </td>
                           <td className="px-2 py-1 w-20">
                             <Input
                               type="number" value={r.min_edit ?? ""}
