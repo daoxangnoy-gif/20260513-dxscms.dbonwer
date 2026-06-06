@@ -317,6 +317,9 @@ export default function MinmaxCalPage() {
   const [upFilterDiv, setUpFilterDiv] = useState<string[]>([]);
   const [upFilterDept, setUpFilterDept] = useState<string[]>([]);
   const [upFilterSubDept, setUpFilterSubDept] = useState<string[]>([]);
+  const [upPage, setUpPage] = useState(0);
+  const UP_PAGE_SIZE = 100;
+  useEffect(() => { setUpPage(0); }, [upSearch, upFilterStore, upFilterType, upFilterDiv, upFilterDept, upFilterSubDept]);
 
   // View paging state (View → server-side pagination from minmax table)
   const [hasViewPaging, setHasViewPaging] = useState(false);
@@ -2232,9 +2235,14 @@ export default function MinmaxCalPage() {
         {/* ============== UNIT PICK TAB ============== */}
         <TabsContent value="unitpick" className="flex-1 min-h-0 flex flex-col overflow-hidden px-6 !mt-2 data-[state=inactive]:hidden data-[state=active]:flex">
           {/* Toolbar row 1: action buttons */}
+          {(() => {
+            const upHasFilter = upSearch.trim() !== "" || upFilterStore.length > 0 || upFilterType.length > 0 || upFilterDiv.length > 0 || upFilterDept.length > 0 || upFilterSubDept.length > 0;
+            return (
           <div className="pb-1 flex items-center gap-2 flex-wrap">
             <Button size="sm" className="text-xs h-7 bg-blue-600 hover:bg-blue-700 text-white"
-              onClick={() => loadUPRows(false)} disabled={upLoading}>
+              onClick={() => { setUpPage(0); loadUPRows(false); }}
+              disabled={upLoading || !upHasFilter}
+              title={!upHasFilter ? "ใส่ Filter หรือพิมพ์ค้นหาก่อนกด Show" : "ดึงข้อมูลจาก DB"}>
               {upLoading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Eye className="w-3.5 h-3.5 mr-1" />}
               Show
             </Button>
@@ -2258,11 +2266,6 @@ export default function MinmaxCalPage() {
               onClick={deleteUPSelected}
               disabled={upSelected.size === 0}>
               <Trash2 className="w-3.5 h-3.5 mr-1" /> Delete ({upSelected.size})
-            </Button>
-            <Button size="sm" variant="outline" className="text-xs h-7"
-              onClick={() => loadUPRows(true)} disabled={upLoading}>
-              {upLoading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5 mr-1" />}
-              Refresh
             </Button>
             {upHasLoaded && upRows.length > 0 && (() => {
               const q = upSearch.trim().toLowerCase();
@@ -2318,6 +2321,8 @@ export default function MinmaxCalPage() {
               );
             })()}
           </div>
+            );
+          })()}
 
           {/* Toolbar row 2: filters + search */}
           {(() => {
@@ -2391,24 +2396,42 @@ export default function MinmaxCalPage() {
                 }
                 return true;
               });
+              const totalPages = Math.max(1, Math.ceil(filtered.length / UP_PAGE_SIZE));
+              const safePage = Math.min(upPage, totalPages - 1);
+              const pageRows = filtered.slice(safePage * UP_PAGE_SIZE, (safePage + 1) * UP_PAGE_SIZE);
+              const missingCount = filtered.filter(r => !r.main_barcode).length;
               return (
                 <>
                   <div className="px-3 py-1 text-[11px] text-muted-foreground border-b border-border bg-muted/50 flex items-center gap-3">
-                    <span>แสดง {filtered.length.toLocaleString()} / {upRows.length.toLocaleString()} แถว</span>
+                    <span>กรอง {filtered.length.toLocaleString()} / {upRows.length.toLocaleString()} แถว</span>
                     {upSelected.size > 0 && <span className="text-primary font-medium">· เลือก {upSelected.size} แถว</span>}
-                    {(() => { const missing = filtered.filter(r => !r.main_barcode).length; return missing > 0 ? <span className="text-amber-600 font-medium">⚠ {missing} แถวไม่พบใน range_store_view (ไม่มี Barcode/ชื่อ)</span> : null; })()}
+                    {missingCount > 0 && <span className="text-amber-600 font-medium">⚠ {missingCount} แถวไม่พบใน range_store_view</span>}
+                    <div className="flex-1" />
+                    <span>หน้า {safePage + 1} / {totalPages}</span>
+                    <button
+                      className="px-1.5 py-0.5 rounded border border-border text-[11px] hover:bg-muted disabled:opacity-40"
+                      disabled={safePage === 0}
+                      onClick={() => setUpPage(p => Math.max(0, p - 1))}>
+                      ◀ Prev
+                    </button>
+                    <button
+                      className="px-1.5 py-0.5 rounded border border-border text-[11px] hover:bg-muted disabled:opacity-40"
+                      disabled={safePage >= totalPages - 1}
+                      onClick={() => setUpPage(p => Math.min(totalPages - 1, p + 1))}>
+                      Next ▶
+                    </button>
                   </div>
                   <table className="w-full text-xs">
                     <thead className="sticky top-0 z-10">
                       <tr>
                         <th className="px-2 py-1.5 w-8 border-b border-border bg-muted">
                           <Checkbox
-                            checked={filtered.length > 0 && filtered.every(r => upSelected.has(`${r.sku_code}|${r.store_name}`))}
+                            checked={pageRows.length > 0 && pageRows.every(r => upSelected.has(`${r.sku_code}|${r.store_name}`))}
                             onCheckedChange={v => {
                               setUpSelected(prev => {
                                 const next = new Set(prev);
-                                if (v) filtered.forEach(r => next.add(`${r.sku_code}|${r.store_name}`));
-                                else filtered.forEach(r => next.delete(`${r.sku_code}|${r.store_name}`));
+                                if (v) pageRows.forEach(r => next.add(`${r.sku_code}|${r.store_name}`));
+                                else pageRows.forEach(r => next.delete(`${r.sku_code}|${r.store_name}`));
                                 return next;
                               });
                             }}
@@ -2420,9 +2443,9 @@ export default function MinmaxCalPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {filtered.length === 0 ? (
+                      {pageRows.length === 0 ? (
                         <tr><td colSpan={13} className="px-4 py-8 text-center text-muted-foreground">ไม่มีข้อมูล</td></tr>
-                      ) : filtered.map(r => {
+                      ) : pageRows.map(r => {
                         const key = `${r.sku_code}|${r.store_name}`;
                         return (
                           <tr key={key} className={cn("border-b border-border/40 hover:bg-muted/30", upSelected.has(key) && "bg-primary/5", !r.main_barcode && "bg-amber-50/60 dark:bg-amber-950/20")}>
