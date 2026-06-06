@@ -467,17 +467,17 @@ export default function MinmaxCalPage() {
 
       let enrich: UPEnrich;
       if (needEnrich) {
-        // Fetch in parallel, range_store_view chunks also parallel
-        const rsvChunks: string[][] = [];
-        for (let i = 0; i < skuCodes.length; i += 500) rsvChunks.push(skuCodes.slice(i, i + 500));
+        const dmChunks: string[][] = [];
+        for (let i = 0; i < skuCodes.length; i += 500) dmChunks.push(skuCodes.slice(i, i + 500));
 
-        const [rsvResults, stAll] = await Promise.all([
-          Promise.all(rsvChunks.map(slice =>
-            (supabase as any)
-              .from("range_store_view")
-              .select("sku_code, main_barcode, product_name_la, product_name_en, pack_qty, box_qty, division, department, sub_department")
+        // Fetch all data_master rows for these SKUs + store_type in parallel
+        const [dmResults, stAll] = await Promise.all([
+          Promise.all(dmChunks.map(slice =>
+            supabase
+              .from("data_master")
+              .select("sku_code, main_barcode, product_name_la, product_name_en, division, department, sub_department, unit_of_measure, packing_size_qty")
               .in("sku_code", slice)
-              .then(({ data }: any) => data || [])
+              .then(({ data }) => data || [])
           )),
           (async () => {
             const res: any[] = [];
@@ -490,17 +490,43 @@ export default function MinmaxCalPage() {
           })(),
         ]);
 
-        const rsvAll = rsvResults.flat();
-        const rsvMap = new Map<string, { main_barcode: string | null; product_name_la: string | null; product_name_en: string | null; pack_qty: number | null; box_qty: number | null; division: string | null; department: string | null; sub_department: string | null }>();
-        for (const d of rsvAll) {
-          if (!rsvMap.has(d.sku_code)) rsvMap.set(d.sku_code, {
-            main_barcode: d.main_barcode ?? null, product_name_la: d.product_name_la ?? null,
-            product_name_en: d.product_name_en ?? null,
-            pack_qty: d.pack_qty != null ? Number(d.pack_qty) : null,
-            box_qty: d.box_qty != null ? Number(d.box_qty) : null,
-            division: d.division ?? null, department: d.department ?? null, sub_department: d.sub_department ?? null,
-          });
+        // Build rsvMap from data_master rows
+        // - main_barcode: from row where packing_size_qty = 1
+        // - pack_qty: min packing_size_qty where unit_of_measure = 'Pack'
+        // - box_qty: min packing_size_qty where unit_of_measure = 'Box'
+        // - other fields: from any row (take first encountered)
+        type RsvEntry = { main_barcode: string | null; product_name_la: string | null; product_name_en: string | null; pack_qty: number | null; box_qty: number | null; division: string | null; department: string | null; sub_department: string | null };
+        const rsvMap = new Map<string, RsvEntry>();
+        for (const d of dmResults.flat()) {
+          const sku = (d as any).sku_code as string;
+          const uom = ((d as any).unit_of_measure || "").toString().trim().toLowerCase();
+          const pqty = (d as any).packing_size_qty != null ? Number((d as any).packing_size_qty) : null;
+
+          if (!rsvMap.has(sku)) {
+            rsvMap.set(sku, {
+              main_barcode: null, product_name_la: (d as any).product_name_la ?? null,
+              product_name_en: (d as any).product_name_en ?? null,
+              pack_qty: null, box_qty: null,
+              division: (d as any).division ?? null, department: (d as any).department ?? null,
+              sub_department: (d as any).sub_department ?? null,
+            });
+          }
+          const entry = rsvMap.get(sku)!;
+
+          // Barcode: packing_size_qty = 1
+          if (pqty === 1 && !entry.main_barcode) {
+            entry.main_barcode = (d as any).main_barcode ?? null;
+          }
+          // Pack: min packing_size_qty where uom = 'pack'
+          if (uom === "pack" && pqty != null) {
+            entry.pack_qty = entry.pack_qty == null ? pqty : Math.min(entry.pack_qty, pqty);
+          }
+          // Box: min packing_size_qty where uom = 'box'
+          if (uom === "box" && pqty != null) {
+            entry.box_qty = entry.box_qty == null ? pqty : Math.min(entry.box_qty, pqty);
+          }
         }
+
         const storeTypeMap = new Map<string, string>();
         for (const s of stAll) storeTypeMap.set(s.store_name, (s as any).type_store ?? "");
         enrich = { rsvMap, storeTypeMap };
