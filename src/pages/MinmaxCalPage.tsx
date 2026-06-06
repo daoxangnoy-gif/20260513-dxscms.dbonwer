@@ -34,7 +34,6 @@ interface CalcRow {
   type_store: string;
   size_store: string;
   unit_pick: number;
-  unit_pick_edit?: number | null;
   avg_sale: number;
   rank_sale: string;
   rank_factor: number;
@@ -119,6 +118,16 @@ function chunkByJsonSize<T>(items: T[], maxBytes = SAVE_DOC_MAX_CHUNK_BYTES, max
 
   if (current.length) chunks.push(current);
   return chunks;
+}
+
+interface UPRow {
+  sku_code: string;
+  store_name: string;
+  unit_pick: number;
+  main_barcode: string | null;
+  product_name_la: string | null;
+  pack_qty: number | null;
+  box_qty: number | null;
 }
 
 // Searchable columns for Odoo-style search
@@ -271,7 +280,7 @@ export default function MinmaxCalPage() {
   const [saveStep, setSaveStep] = useState<{ idx: number; total: number; label: string }>({ idx: 0, total: 5, label: "" });
   const [saving, setSaving] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
-  const [tab, setTab] = useState<"calc" | "report">("calc");
+  const [tab, setTab] = useState<"calc" | "report" | "unitpick">("calc");
 
   // Cancel flag for Calculate
   const cancelCalcRef = useRef(false);
@@ -281,7 +290,16 @@ export default function MinmaxCalPage() {
   const [stagingTotal, setStagingTotal] = useState(0);
   const [stagingFilteredCount, setStagingFilteredCount] = useState(0);
   const [stagingLoading, setStagingLoading] = useState(false);
-  const [editsMap, setEditsMap] = useState<Map<string, { min_edit?: number | null; max_edit?: number | null; unit_pick_edit?: number | null; max_cal?: number }>>(new Map());
+  const [editsMap, setEditsMap] = useState<Map<string, { min_edit?: number | null; max_edit?: number | null; max_cal?: number }>>(new Map());
+
+  // Unit Pick Override (loaded from DB, applied to rows)
+  const unitPickOverrideRef = useRef<Map<string, number>>(new Map());
+  const [upRows, setUpRows] = useState<UPRow[]>([]);
+  const [upLoading, setUpLoading] = useState(false);
+  const [upSearch, setUpSearch] = useState("");
+  const [upSelected, setUpSelected] = useState<Set<string>>(new Set());
+  const [upImporting, setUpImporting] = useState(false);
+  const upFileRef = useRef<HTMLInputElement>(null);
 
   // View paging state (View → server-side pagination from minmax table)
   const [hasViewPaging, setHasViewPaging] = useState(false);
@@ -324,6 +342,7 @@ export default function MinmaxCalPage() {
   }, []);
 
   useEffect(() => { loadFilterOpts(); }, [loadFilterOpts]);
+  useEffect(() => { loadUnitPickOverrideRef(); }, []);
 
   // ====== Load latest MinMax View rows (from minmax table, joined with data_master) ======
   // ใช้ตอน Calc เพื่อ merge ค่าเดิมของ SKU/Store ที่ไม่อยู่ใน filter ปัจจุบัน
@@ -345,7 +364,6 @@ export default function MinmaxCalPage() {
     type_store: r.type_store || "",
     size_store: r.size_store || "",
     unit_pick: Number(r.unit_pick) || 1,
-    unit_pick_edit: null,
     avg_sale: Number(r.avg_sale) || 0,
     rank_sale: r.rank_sale || "D",
     rank_factor: Number(r.rank_factor) || 7,
@@ -364,6 +382,193 @@ export default function MinmaxCalPage() {
     min_edit: null,
     max_edit: null,
   });
+
+  // Apply unit_pick override from DB to a single CalcRow, recompute max_cal
+  const applyUPOverride = (r: CalcRow, n = nFactor): CalcRow => {
+    const override = unitPickOverrideRef.current.get(`${r.sku_code}|${r.store_name}`);
+    if (override == null) return r;
+    const up = override;
+    const avg = r.avg_sale;
+    const minCal = r.min_cal;
+    let newMax = Math.ceil(minCal + avg * n + up);
+    if (avg === 0 && newMax < 4) newMax = 4;
+    else if (r.min_floored && newMax < 6) newMax = 6;
+    return { ...r, unit_pick: up, max_cal: newMax };
+  };
+
+  const loadUnitPickOverrideRef = async () => {
+    const { data } = await supabase.from("unit_pick_override" as any).select("sku_code, store_name, unit_pick");
+    const map = new Map<string, number>();
+    for (const r of (data as any[] || [])) map.set(`${r.sku_code}|${r.store_name}`, Number(r.unit_pick));
+    unitPickOverrideRef.current = map;
+  };
+
+  const loadUPRows = async () => {
+    setUpLoading(true);
+    try {
+      const { data: overrides, error } = await supabase
+        .from("unit_pick_override" as any)
+        .select("sku_code, store_name, unit_pick")
+        .order("sku_code");
+      if (error) throw error;
+      const list = (overrides as any[] || []);
+      if (list.length === 0) { setUpRows([]); return; }
+
+      const skuCodes = [...new Set(list.map((r: any) => r.sku_code as string))];
+
+      // Fetch display info from data_master
+      const dmMap = new Map<string, { main_barcode: string | null; product_name_la: string | null }>();
+      for (let i = 0; i < skuCodes.length; i += 500) {
+        const slice = skuCodes.slice(i, i + 500);
+        const { data: dm } = await supabase
+          .from("data_master")
+          .select("sku_code, main_barcode, product_name_la")
+          .in("sku_code", slice)
+          .eq("packing_size_qty", 1);
+        for (const d of (dm || [])) {
+          if (!dmMap.has(d.sku_code)) dmMap.set(d.sku_code, { main_barcode: d.main_barcode, product_name_la: d.product_name_la });
+        }
+      }
+
+      // Fetch pack/box from range_store
+      const rsMap = new Map<string, { pack_qty: number | null; box_qty: number | null }>();
+      for (let i = 0; i < skuCodes.length; i += 500) {
+        const slice = skuCodes.slice(i, i + 500);
+        const { data: rs } = await (supabase as any)
+          .from("range_store")
+          .select("sku_code, store_name, pack_qty, box_qty")
+          .in("sku_code", slice);
+        for (const r of (rs || [])) rsMap.set(`${r.sku_code}|${r.store_name}`, { pack_qty: r.pack_qty, box_qty: r.box_qty });
+      }
+
+      const rows: UPRow[] = list.map((r: any) => ({
+        sku_code: r.sku_code,
+        store_name: r.store_name,
+        unit_pick: r.unit_pick,
+        main_barcode: dmMap.get(r.sku_code)?.main_barcode ?? null,
+        product_name_la: dmMap.get(r.sku_code)?.product_name_la ?? null,
+        pack_qty: rsMap.get(`${r.sku_code}|${r.store_name}`)?.pack_qty ?? null,
+        box_qty: rsMap.get(`${r.sku_code}|${r.store_name}`)?.box_qty ?? null,
+      }));
+      setUpRows(rows);
+      // Also refresh override ref
+      const map = new Map<string, number>();
+      for (const r of list) map.set(`${r.sku_code}|${r.store_name}`, Number(r.unit_pick));
+      unitPickOverrideRef.current = map;
+    } catch (err: any) {
+      toast({ title: "Error loading Unit Pick", description: err.message, variant: "destructive" });
+    } finally {
+      setUpLoading(false);
+    }
+  };
+
+  const importUnitPickExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    setUpImporting(true);
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json<any>(ws);
+      const norm = (s: string) => String(s || "").toLowerCase().replace(/[\s_\-]+/g, "");
+      const sample = json[0] || {};
+      const keyMap: Record<string, string> = {};
+      for (const k of Object.keys(sample)) {
+        const n = norm(k);
+        if (n === "skucode" || n === "sku") keyMap[k] = "sku_code";
+        else if (n === "barcode" || n === "mainbarcode") keyMap[k] = "barcode";
+        else if (n === "storename" || n === "store") keyMap[k] = "store_name";
+        else if (n === "unitpick" || n === "unitpicking") keyMap[k] = "unit_pick";
+      }
+      const skuColKey = Object.keys(keyMap).find(k => keyMap[k] === "sku_code");
+      const bcColKey = Object.keys(keyMap).find(k => keyMap[k] === "barcode");
+      const storeColKey = Object.keys(keyMap).find(k => keyMap[k] === "store_name");
+      const upColKey = Object.keys(keyMap).find(k => keyMap[k] === "unit_pick");
+      if (!upColKey) throw new Error("ไม่พบคอลัมน์ unit_pick");
+      if (!storeColKey) throw new Error("ไม่พบคอลัมน์ store_name");
+      if (!skuColKey && !bcColKey) throw new Error("ไม่พบคอลัมน์ sku_code หรือ barcode");
+
+      // Collect raw rows
+      const rawRows: { lookup: string; isBc: boolean; store_name: string; unit_pick: number }[] = [];
+      for (const row of json) {
+        const sku = skuColKey ? String(row[skuColKey] ?? "").trim() : "";
+        const bc = bcColKey ? String(row[bcColKey] ?? "").trim() : "";
+        const lookup = sku || bc;
+        if (!lookup) continue;
+        const store = storeColKey ? String(row[storeColKey] ?? "").trim() : "";
+        if (!store) continue;
+        const up = Number(row[upColKey]);
+        if (!Number.isFinite(up) || up < 1) continue;
+        rawRows.push({ lookup, isBc: !sku && !!bc, store_name: store, unit_pick: up });
+      }
+
+      // Resolve barcodes → sku_code
+      const bcSet = new Set(rawRows.filter(r => r.isBc).map(r => r.lookup));
+      const barcodeToSku = new Map<string, string>();
+      if (bcSet.size > 0) {
+        const all = Array.from(bcSet);
+        for (let i = 0; i < all.length; i += 500) {
+          const slice = all.slice(i, i + 500);
+          const inExpr = slice.map(s => `"${String(s).replace(/"/g, '""')}"`).join(",");
+          const { data: dm } = await supabase
+            .from("data_master")
+            .select("sku_code, main_barcode, barcode")
+            .or(`main_barcode.in.(${inExpr}),barcode.in.(${inExpr})`);
+          for (const m of (dm || [])) {
+            if (!m.sku_code) continue;
+            if (m.main_barcode && bcSet.has(m.main_barcode)) barcodeToSku.set(m.main_barcode, m.sku_code);
+            if (m.barcode && bcSet.has(m.barcode)) barcodeToSku.set(m.barcode, m.sku_code);
+          }
+        }
+      }
+
+      // Build upsert payload (distinct by sku_code × store_name, last row wins)
+      const upsertMap = new Map<string, { sku_code: string; store_name: string; unit_pick: number }>();
+      for (const r of rawRows) {
+        const sku = r.isBc ? (barcodeToSku.get(r.lookup) || "") : r.lookup;
+        if (!sku) continue;
+        upsertMap.set(`${sku}|${r.store_name}`, { sku_code: sku, store_name: r.store_name, unit_pick: r.unit_pick });
+      }
+      const payload = Array.from(upsertMap.values());
+      if (payload.length === 0) throw new Error("ไม่มีข้อมูลที่ valid สำหรับ import");
+
+      const { error } = await (supabase as any)
+        .from("unit_pick_override")
+        .upsert(payload, { onConflict: "sku_code,store_name" });
+      if (error) throw error;
+      toast({ title: `Import สำเร็จ ${payload.length.toLocaleString()} แถว` });
+      await loadUPRows();
+    } catch (err: any) {
+      toast({ title: "Import Error", description: err.message, variant: "destructive" });
+    } finally {
+      setUpImporting(false);
+    }
+  };
+
+  const deleteUPSelected = async () => {
+    if (upSelected.size === 0) return;
+    const pairs = Array.from(upSelected).map(k => {
+      const [sku_code, ...rest] = k.split("|");
+      return { sku_code, store_name: rest.join("|") };
+    });
+    try {
+      for (const p of pairs) {
+        const { error } = await (supabase as any)
+          .from("unit_pick_override")
+          .delete()
+          .eq("sku_code", p.sku_code)
+          .eq("store_name", p.store_name);
+        if (error) throw error;
+      }
+      toast({ title: `ลบ ${pairs.length} แถวเรียบร้อย` });
+      setUpSelected(new Set());
+      await loadUPRows();
+    } catch (err: any) {
+      toast({ title: "Delete Error", description: err.message, variant: "destructive" });
+    }
+  };
 
   const buildStagingParams = (pageNum: number) => {
     const p: any = { p_user_id: user?.id, p_limit: PAGE_SIZE, p_offset: pageNum * PAGE_SIZE };
@@ -459,7 +664,10 @@ export default function MinmaxCalPage() {
       setEditsMap(new Map());
       setPage(0);
 
-      const calcRows: CalcRow[] = (stageResult.rows || []).map(mapStagingRow);
+      // Load unit_pick overrides from DB before mapping rows
+      await loadUnitPickOverrideRef();
+
+      const calcRows: CalcRow[] = (stageResult.rows || []).map(r => applyUPOverride(mapStagingRow(r), n));
 
       // Phase 2 (Doc merge) — removed: Cal returns ONLY computed rows.
       const finalRows: CalcRow[] = calcRows;
@@ -591,7 +799,6 @@ export default function MinmaxCalPage() {
     type_store: r.type_store || "",
     size_store: "",
     unit_pick: r.unit_pick == null || r.unit_pick === "" ? 1 : Number(r.unit_pick),
-    unit_pick_edit: null,
     avg_sale: 0,
     rank_sale: "D",
     rank_factor: 7,
@@ -622,7 +829,7 @@ export default function MinmaxCalPage() {
       if (error) throw error;
       const result = data as { total: number; rows: any[] };
       setViewPagingTotal(result.total);
-      setRows((result.rows || []).map(mapViewRow));
+      setRows((result.rows || []).map(r => applyUPOverride(mapViewRow(r))));
       setPage(pageNum);
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -654,7 +861,7 @@ export default function MinmaxCalPage() {
       if (error) throw error;
       const result = data as { total: number; rows: any[] };
       const ms = Math.round(performance.now() - t0);
-      const mapped = (result.rows || []).map(mapViewRow);
+      const mapped = (result.rows || []).map(r => applyUPOverride(mapViewRow(r)));
       setRows(mapped);
       setHasData(true);
       setPage(0);
@@ -822,26 +1029,12 @@ export default function MinmaxCalPage() {
           const e = editMap.get(k);
           if (e) {
             updated++;
-            const newUnitPickEdit = e.unitPick ?? r.unit_pick_edit;
             const newMinEdit = e.min ?? r.min_edit;
             const merged = {
               ...r,
               min_edit: newMinEdit,
               max_edit: e.max ?? r.max_edit,
-              unit_pick_edit: newUnitPickEdit,
             };
-            // Recompute max_cal when unit_pick_edit changed (skip Doc rows)
-            if (!r.from_doc && e.unitPick != null) {
-              const upEdit = (newUnitPickEdit != null && Number(newUnitPickEdit) > 0)
-                ? Number(newUnitPickEdit)
-                : (Number(r.unit_pick) || 1);
-              const avg = Number(r.avg_sale) || 0;
-              const minCal = Number(r.min_cal) || 0;
-              let newMax = Math.ceil(minCal + avg * nFactor + upEdit);
-              if (avg === 0 && newMax < 4) newMax = 4;
-              else if ((r as any).min_floored && newMax < 6) newMax = 6;
-              merged.max_cal = newMax;
-            }
             return merged;
           }
         }
@@ -893,7 +1086,7 @@ export default function MinmaxCalPage() {
           sku_code: r.sku_code,
           store_name: r.store_name,
           type_store: r.type_store || null,
-          unit_pick: String(r.unit_pick_edit ?? r.unit_pick ?? 1),
+          unit_pick: String(r.unit_pick ?? 1),
           min_final: f.min,
           max_final: f.max,
         };
@@ -1277,34 +1470,8 @@ export default function MinmaxCalPage() {
     });
   };
 
-  const setUnitPickEdit = (r: CalcRow, value: string) => {
-    const v = value === "" ? null : Number(value);
-    const cleaned = Number.isNaN(v as any) ? null : v;
-    let newMaxForEdit = 0;
-    setRows(prev => prev.map(x => {
-      if (!(x.sku_code === r.sku_code && x.store_name === r.store_name)) return x;
-      if (x.from_doc) return { ...x, unit_pick_edit: cleaned };
-      const upEdit = (cleaned != null && cleaned > 0) ? cleaned : (Number(x.unit_pick) || 1);
-      const avg = Number(x.avg_sale) || 0;
-      const minCal = Number(x.min_cal) || 0;
-      let newMax = Math.ceil(minCal + avg * nFactor + upEdit);
-      if (avg === 0 && newMax < 4) newMax = 4;
-      else if (x.min_floored && newMax < 6) newMax = 6;
-      newMaxForEdit = newMax;
-      return { ...x, unit_pick_edit: cleaned, max_cal: newMax };
-    }));
-    if (hasStaging) {
-      setEditsMap(prev => {
-        const next = new Map(prev);
-        const key = rowKey(r);
-        next.set(key, { ...next.get(key), unit_pick_edit: cleaned, max_cal: newMaxForEdit });
-        return next;
-      });
-    }
-  };
-
   // Keyboard nav: Enter/Arrow keys to move between editable cells
-  const NAV_COLS = ["min_edit", "max_edit", "unit_pick_edit"] as const;
+  const NAV_COLS = ["min_edit", "max_edit"] as const;
   const handleEditKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, rowIdx: number, col: typeof NAV_COLS[number]) => {
     const k = e.key;
     if (!["Enter", "ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight"].includes(k)) return;
@@ -1471,6 +1638,9 @@ export default function MinmaxCalPage() {
           <TabsTrigger value="calc" className="text-xs">Calc</TabsTrigger>
           <TabsTrigger value="report" className="text-xs">
             <BarChart3 className="w-3 h-3 mr-1" /> Report ({reportRows.length})
+          </TabsTrigger>
+          <TabsTrigger value="unitpick" className="text-xs" onClick={() => { if (tab !== "unitpick") loadUPRows(); }}>
+            Unit Pick {upRows.length > 0 && `(${upRows.length})`}
           </TabsTrigger>
         </TabsList>
 
@@ -1664,7 +1834,7 @@ export default function MinmaxCalPage() {
                       </th>
                       {[
                         "SKU Code", "Product Name", "Store", "Type", "Size", "Item Type", "Buying",
-                        "Pack", "Box", "Unit Pick", "Unit Pick Edit",
+                        "Pack", "Box", "Unit Pick",
                         "Avg Sale", "Rank", "Min Cal", "Max Cal", "Min Edit", "Max Edit", "Min", "Max", "DOH Min", "DOH Max", "Source",
                       ].map(h => (
                         <th key={h} className="px-2 py-1.5 text-left font-medium border-b border-border whitespace-nowrap bg-muted">
@@ -1708,16 +1878,6 @@ export default function MinmaxCalPage() {
                           <td className="px-2 py-1 text-right tabular-nums">{r.pack_qty ?? "-"}</td>
                           <td className="px-2 py-1 text-right tabular-nums">{r.box_qty ?? "-"}</td>
                           <td className="px-2 py-1 text-right">{r.unit_pick}</td>
-                          <td className="px-2 py-1 w-20">
-                            <Input
-                              type="number" value={r.unit_pick_edit ?? ""}
-                              disabled={r.from_doc}
-                              data-nav={`r${i}-cunit_pick_edit`}
-                              onChange={(e) => setUnitPickEdit(r, e.target.value)}
-                              onKeyDown={(e) => handleEditKeyDown(e, i, "unit_pick_edit")}
-                              className="h-6 text-xs px-1 text-right"
-                            />
-                          </td>
                           <td className="px-2 py-1 text-right">{r.avg_sale.toFixed(2)}</td>
                           <td className="px-2 py-1">
                             <Badge variant="outline" className="text-[10px] px-1 py-0 h-4">
@@ -1997,6 +2157,133 @@ export default function MinmaxCalPage() {
               </div>
             );
           })()}
+        </TabsContent>
+
+        {/* ============== UNIT PICK TAB ============== */}
+        <TabsContent value="unitpick" className="flex-1 min-h-0 flex flex-col overflow-hidden px-6 !mt-2 data-[state=inactive]:hidden data-[state=active]:flex">
+          {/* Toolbar */}
+          <div className="pb-2 flex items-center gap-2 flex-wrap">
+            <Button size="sm" variant="outline" className="text-xs h-7"
+              onClick={() => upFileRef.current?.click()}
+              disabled={upImporting}>
+              {upImporting ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Upload className="w-3.5 h-3.5 mr-1" />}
+              Import Upsert
+            </Button>
+            <input ref={upFileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={importUnitPickExcel} />
+            <Button size="sm" variant="destructive" className="text-xs h-7"
+              onClick={deleteUPSelected}
+              disabled={upSelected.size === 0}>
+              <Trash2 className="w-3.5 h-3.5 mr-1" /> Delete ({upSelected.size})
+            </Button>
+            <Button size="sm" variant="outline" className="text-xs h-7"
+              onClick={loadUPRows} disabled={upLoading}>
+              {upLoading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5 mr-1" />}
+              Refresh
+            </Button>
+            <div className="flex-1" />
+            <div className="relative">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+              <Input
+                value={upSearch}
+                onChange={e => setUpSearch(e.target.value)}
+                placeholder="ค้นหา SKU / Store / Barcode..."
+                className="pl-7 h-7 text-xs w-64"
+              />
+              {upSearch && (
+                <button className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" onClick={() => setUpSearch("")}>
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+            <span className="text-xs text-muted-foreground">
+              {(() => {
+                const q = upSearch.trim().toLowerCase();
+                const filtered = q ? upRows.filter(r =>
+                  r.sku_code.toLowerCase().includes(q) ||
+                  r.store_name.toLowerCase().includes(q) ||
+                  (r.main_barcode || "").toLowerCase().includes(q) ||
+                  (r.product_name_la || "").toLowerCase().includes(q)
+                ) : upRows;
+                return `${filtered.length.toLocaleString()} / ${upRows.length.toLocaleString()} แถว`;
+              })()}
+            </span>
+          </div>
+
+          {/* Table */}
+          <div className="flex-1 overflow-auto border border-border rounded-md">
+            {upLoading ? (
+              <div className="flex items-center justify-center py-16 gap-2 text-muted-foreground text-sm">
+                <Loader2 className="w-5 h-5 animate-spin" /> กำลังโหลด...
+              </div>
+            ) : (() => {
+              const q = upSearch.trim().toLowerCase();
+              const filtered = q ? upRows.filter(r =>
+                r.sku_code.toLowerCase().includes(q) ||
+                r.store_name.toLowerCase().includes(q) ||
+                (r.main_barcode || "").toLowerCase().includes(q) ||
+                (r.product_name_la || "").toLowerCase().includes(q)
+              ) : upRows;
+              return (
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 z-10">
+                    <tr>
+                      <th className="px-2 py-1.5 w-8 border-b border-border bg-muted">
+                        <Checkbox
+                          checked={filtered.length > 0 && filtered.every(r => upSelected.has(`${r.sku_code}|${r.store_name}`))}
+                          onCheckedChange={v => {
+                            setUpSelected(prev => {
+                              const next = new Set(prev);
+                              if (v) filtered.forEach(r => next.add(`${r.sku_code}|${r.store_name}`));
+                              else filtered.forEach(r => next.delete(`${r.sku_code}|${r.store_name}`));
+                              return next;
+                            });
+                          }}
+                        />
+                      </th>
+                      {["Store Name", "SKU Code", "Barcode", "Product Name", "Pack", "Box", "Unit Pick"].map(h => (
+                        <th key={h} className="px-2 py-1.5 text-left font-medium border-b border-border whitespace-nowrap bg-muted">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.length === 0 ? (
+                      <tr><td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">ไม่มีข้อมูล</td></tr>
+                    ) : filtered.map(r => {
+                      const key = `${r.sku_code}|${r.store_name}`;
+                      return (
+                        <tr key={key} className={cn("border-b border-border/40 hover:bg-muted/30", upSelected.has(key) && "bg-primary/5")}>
+                          <td className="px-2 py-1 w-8">
+                            <Checkbox
+                              checked={upSelected.has(key)}
+                              onCheckedChange={v => {
+                                setUpSelected(prev => {
+                                  const next = new Set(prev);
+                                  if (v) next.add(key); else next.delete(key);
+                                  return next;
+                                });
+                              }}
+                            />
+                          </td>
+                          <td className="px-2 py-1">{r.store_name}</td>
+                          <td className="px-2 py-1 font-mono">{r.sku_code}</td>
+                          <td className="px-2 py-1 font-mono text-muted-foreground">{r.main_barcode ?? "-"}</td>
+                          <td className="px-2 py-1 max-w-[240px] truncate" title={r.product_name_la ?? ""}>{r.product_name_la ?? "-"}</td>
+                          <td className="px-2 py-1 text-right tabular-nums">{r.pack_qty ?? "-"}</td>
+                          <td className="px-2 py-1 text-right tabular-nums">{r.box_qty ?? "-"}</td>
+                          <td className="px-2 py-1 text-right font-semibold tabular-nums">{r.unit_pick}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              );
+            })()}
+          </div>
+
+          {/* Import hint */}
+          <p className="text-[11px] text-muted-foreground mt-1">
+            ไฟล์ Excel ต้องมีคอลัมน์: <code>store_name</code>, <code>unit_pick</code> และ <code>sku_code</code> หรือ <code>barcode</code>
+          </p>
         </TabsContent>
       </Tabs>
 
