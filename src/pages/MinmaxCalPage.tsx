@@ -960,17 +960,15 @@ export default function MinmaxCalPage() {
         else if (n === "minqty" || n === "min" || n === "minval") keyMap[k] = "min_qty";
         else if (n === "maxqty" || n === "max" || n === "maxval") keyMap[k] = "max_qty";
         else if (n === "storename" || n === "store") keyMap[k] = "store_name";
-        else if (n === "unitpick" || n === "unitpicking") keyMap[k] = "unit_pick";
       }
       const skuColKey = Object.keys(keyMap).find(k => keyMap[k] === "sku_code");
       const bcColKey = Object.keys(keyMap).find(k => keyMap[k] === "barcode");
       const minColKey = Object.keys(keyMap).find(k => keyMap[k] === "min_qty");
       const maxColKey = Object.keys(keyMap).find(k => keyMap[k] === "max_qty");
-      const upColKey = Object.keys(keyMap).find(k => keyMap[k] === "unit_pick");
       const storeColKey = Object.keys(keyMap).find(k => keyMap[k] === "store_name");
 
       // editMap key = "<lookupKey>|<store>" where lookupKey is sku OR barcode (whichever provided)
-      const editMap = new Map<string, { min?: number; max?: number; unitPick?: number; storeFilter?: string }>();
+      const editMap = new Map<string, { min?: number; max?: number; storeFilter?: string }>();
       const barcodeKeys = new Set<string>();
       for (const row of json) {
         const sku = skuColKey ? String(row[skuColKey] ?? "").trim() : "";
@@ -980,13 +978,11 @@ export default function MinmaxCalPage() {
         if (!sku && bc) barcodeKeys.add(bc);
         const minRaw = minColKey ? row[minColKey] : undefined;
         const maxRaw = maxColKey ? row[maxColKey] : undefined;
-        const upRaw = upColKey ? row[upColKey] : undefined;
         const storeRaw = storeColKey ? row[storeColKey] : undefined;
         const min = minRaw === undefined || minRaw === "" ? undefined : Number(minRaw);
         const max = maxRaw === undefined || maxRaw === "" ? undefined : Number(maxRaw);
-        const unitPick = upRaw === undefined || upRaw === "" ? undefined : Number(upRaw);
         const storeFilter = storeRaw ? String(storeRaw).trim() : undefined;
-        editMap.set(lookupKey + "|" + (storeFilter || ""), { min, max, unitPick, storeFilter });
+        editMap.set(lookupKey + "|" + (storeFilter || ""), { min, max, storeFilter });
       }
 
       // Resolve barcodes → sku_code via data_master (main_barcode, barcode)
@@ -1361,7 +1357,7 @@ export default function MinmaxCalPage() {
 
 
   const exportTemplate = () => {
-    const ws = XLSX.utils.json_to_sheet([{ sku_code: "", barcode: "", store_name: "", min_qty: "", max_qty: "", unit_pick: "" }]);
+    const ws = XLSX.utils.json_to_sheet([{ sku_code: "", barcode: "", store_name: "", min_qty: "", max_qty: "" }]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "MinMax_Import");
     XLSX.writeFile(wb, "minmax_import_template.xlsx");
@@ -2315,7 +2311,7 @@ export default function MinmaxCalPage() {
           <DialogHeader>
             <DialogTitle>Import Min/Max</DialogTitle>
             <DialogDescription>
-              ไฟล์ Excel ต้องมีคอลัมน์: <code>sku_code</code>, <code>min_qty</code>, <code>max_qty</code>, <code>unit_pick</code>
+              ไฟล์ Excel ต้องมีคอลัมน์: <code>sku_code</code>, <code>min_qty</code>, <code>max_qty</code>
               (ใส่ <code>store_name</code> เพิ่มเพื่อระบุร้าน ถ้าไม่ใส่จะ apply ทุกร้านของ SKU นั้น)
             </DialogDescription>
           </DialogHeader>
