@@ -553,18 +553,19 @@ export default function MinmaxCalPage() {
         rawRows.push({ lookup, isBc: !sku && !!bc, store_name: store, unit_pick: up });
       }
 
-      // Resolve barcodes → sku_code
+      // Resolve barcodes → sku_code (parallel chunks)
       const bcSet = new Set(rawRows.filter(r => r.isBc).map(r => r.lookup));
       const barcodeToSku = new Map<string, string>();
       if (bcSet.size > 0) {
         const all = Array.from(bcSet);
-        for (let i = 0; i < all.length; i += 500) {
-          const slice = all.slice(i, i + 500);
+        const chunks: string[][] = [];
+        for (let i = 0; i < all.length; i += 500) chunks.push(all.slice(i, i + 500));
+        const results = await Promise.all(chunks.map(slice => {
           const inExpr = slice.map(s => `"${String(s).replace(/"/g, '""')}"`).join(",");
-          const { data: dm } = await supabase
-            .from("data_master")
-            .select("sku_code, main_barcode, barcode")
+          return supabase.from("data_master").select("sku_code, main_barcode, barcode")
             .or(`main_barcode.in.(${inExpr}),barcode.in.(${inExpr})`);
+        }));
+        for (const { data: dm } of results) {
           for (const m of (dm || [])) {
             if (!m.sku_code) continue;
             if (m.main_barcode && bcSet.has(m.main_barcode)) barcodeToSku.set(m.main_barcode, m.sku_code);
@@ -583,12 +584,21 @@ export default function MinmaxCalPage() {
       const payload = Array.from(upsertMap.values());
       if (payload.length === 0) throw new Error("ไม่มีข้อมูลที่ valid สำหรับ import");
 
-      const { error } = await (supabase as any)
-        .from("unit_pick_override")
-        .upsert(payload, { onConflict: "sku_code,store_name" });
-      if (error) throw error;
+      // Upsert in chunks of 500 rows (parallel, max 4 concurrent)
+      const UPSERT_CHUNK = 500;
+      const UPSERT_CONCURRENCY = 4;
+      const upsertChunks: typeof payload[] = [];
+      for (let i = 0; i < payload.length; i += UPSERT_CHUNK) upsertChunks.push(payload.slice(i, i + UPSERT_CHUNK));
+      for (let i = 0; i < upsertChunks.length; i += UPSERT_CONCURRENCY) {
+        const batch = upsertChunks.slice(i, i + UPSERT_CONCURRENCY);
+        await Promise.all(batch.map(chunk =>
+          (supabase as any).from("unit_pick_override").upsert(chunk, { onConflict: "sku_code,store_name" })
+            .then(({ error }: any) => { if (error) throw error; })
+        ));
+      }
       toast({ title: `Import สำเร็จ ${payload.length.toLocaleString()} แถว` });
-      await loadUPRows();
+      // Refresh override ref + display (parallel)
+      await Promise.all([loadUnitPickOverrideRef(), loadUPRows()]);
     } catch (err: any) {
       toast({ title: "Import Error", description: err.message, variant: "destructive" });
     } finally {
