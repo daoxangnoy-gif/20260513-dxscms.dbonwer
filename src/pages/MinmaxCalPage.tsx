@@ -439,9 +439,10 @@ export default function MinmaxCalPage() {
     setUpLoading(true);
     try {
       // Step 1: Load override list only (fast, always fresh)
+      // pageSize=1000 matches PostgREST default row cap — loop continues until partial page
       const list = await fetchAllPaged((from, to) =>
         supabase.from("unit_pick_override" as any).select("sku_code, store_name, unit_pick").order("sku_code").range(from, to) as any,
-        5000
+        1000
       );
       if (list.length === 0) { setUpRows([]); return; }
 
