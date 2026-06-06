@@ -435,129 +435,136 @@ export default function MinmaxCalPage() {
     unitPickOverrideRef.current = map;
   };
 
+  const upEnrichRunRef = useRef(0); // cancel stale background enrichment
+  const [upEnriching, setUpEnriching] = useState(false);
+  const [upEnrichPct, setUpEnrichPct] = useState(0);
+
   const loadUPRows = async (refreshEnrich = false) => {
     setUpLoading(true);
+    const runId = ++upEnrichRunRef.current;
     try {
-      // Step 1: Load override list only (fast, always fresh)
+      // Phase 1: fetch all unit_pick_override rows (fast — simple table)
       const list = await fetchAllPaged((from, to) =>
         supabase.from("unit_pick_override" as any).select("sku_code, size_store, unit_pick").order("sku_code").range(from, to) as any,
         1000
       );
-      if (list.length === 0) { setUpRows([]); return; }
+      if (runId !== upEnrichRunRef.current) return;
+      if (list.length === 0) { setUpRows([]); setUpHasLoaded(true); return; }
 
+      // Update override ref immediately
+      const overrideMap = new Map<string, number>();
+      for (const r of list) overrideMap.set(`${r.sku_code}|${r.size_store}`, Number(r.unit_pick));
+      unitPickOverrideRef.current = overrideMap;
+
+      // Phase 2: show raw rows immediately (no enrichment yet)
+      const rawRows: UPRow[] = list.map((r: any) => ({
+        sku_code: r.sku_code, size_store: r.size_store, unit_pick: r.unit_pick,
+        main_barcode: null, product_name_la: null, product_name_en: null,
+        pack_qty: null, box_qty: null, division: null, department: null, sub_department: null,
+      }));
+
+      // If cache is valid and no refresh needed, apply from cache immediately
       const skuCodes = [...new Set(list.map((r: any) => r.sku_code as string))];
-
-      // Step 2: Enrichment (data_master only — no store needed)
       const cachedEnrich = upEnrichRef.current;
       const hasNewSkus = !cachedEnrich || skuCodes.some(s => !cachedEnrich.rsvMap.has(s));
-      const needEnrich = refreshEnrich || hasNewSkus;
 
-      let enrich: UPEnrich;
-      if (needEnrich) {
-        // chunk size 200 — each SKU has multiple rows in data_master (one per packing_size_qty)
-        // keeping chunk small ensures result stays well under PostgREST 1000-row cap
-        const CHUNK = 200;
-        const dmChunks: string[][] = [];
-        for (let i = 0; i < skuCodes.length; i += CHUNK) dmChunks.push(skuCodes.slice(i, i + CHUNK));
+      if (!refreshEnrich && !hasNewSkus && cachedEnrich) {
+        // Use cache → no background loading needed
+        const { rsvMap } = cachedEnrich;
+        const enriched = rawRows.map(r => ({
+          ...r,
+          main_barcode: rsvMap.get(r.sku_code)?.main_barcode ?? null,
+          product_name_la: rsvMap.get(r.sku_code)?.product_name_la ?? null,
+          product_name_en: rsvMap.get(r.sku_code)?.product_name_en ?? null,
+          pack_qty: rsvMap.get(r.sku_code)?.pack_qty ?? null,
+          box_qty: rsvMap.get(r.sku_code)?.box_qty ?? null,
+          division: rsvMap.get(r.sku_code)?.division ?? null,
+          department: rsvMap.get(r.sku_code)?.department ?? null,
+          sub_department: rsvMap.get(r.sku_code)?.sub_department ?? null,
+        }));
+        setUpRows(enriched);
+        setUpHasLoaded(true);
+        return;
+      }
 
-        // 3 parallel queries per chunk — each returns at most 1 meaningful row per SKU
+      // Show raw rows immediately so user can see first page
+      setUpRows(rawRows);
+      setUpHasLoaded(true);
+      setUpLoading(false);
+
+      // Phase 3: background enrichment — chunk through data_master, update rows progressively
+      setUpEnriching(true);
+      setUpEnrichPct(0);
+      try {
+        type RsvEntry = { main_barcode: string | null; product_name_la: string | null; product_name_en: string | null; pack_qty: number | null; box_qty: number | null; division: string | null; department: string | null; sub_department: string | null };
         type BaseRow = { sku_code: string; main_barcode: string | null; product_name_la: string | null; product_name_en: string | null; division: string | null; department: string | null; sub_department: string | null };
         type PackRow = { sku_code: string; packing_size_qty: number };
 
-        const [baseResults, packResults, boxResults] = await Promise.all([
-          // packing_size_qty = 1 → barcode + name + division
-          Promise.all(dmChunks.map(slice =>
+        const CHUNK = 200;
+        const chunks: string[][] = [];
+        for (let i = 0; i < skuCodes.length; i += CHUNK) chunks.push(skuCodes.slice(i, i + CHUNK));
+
+        const rsvMap = new Map<string, RsvEntry>();
+
+        for (let ci = 0; ci < chunks.length; ci++) {
+          if (runId !== upEnrichRunRef.current) return; // cancelled
+          const slice = chunks[ci];
+          const [baseRows, packRows, boxRows] = await Promise.all([
             supabase.from("data_master")
               .select("sku_code, main_barcode, product_name_la, product_name_en, division, department, sub_department")
               .in("sku_code", slice).eq("packing_size_qty", 1)
-              .then(({ data }) => (data || []) as BaseRow[])
-          )),
-          // unit_of_measure = Pack → min packing_size_qty
-          Promise.all(dmChunks.map(slice =>
+              .then(({ data }) => (data || []) as BaseRow[]),
             supabase.from("data_master")
               .select("sku_code, packing_size_qty")
               .in("sku_code", slice).eq("unit_of_measure", "Pack")
-              .then(({ data }) => (data || []) as PackRow[])
-          )),
-          // unit_of_measure = Box → min packing_size_qty
-          Promise.all(dmChunks.map(slice =>
+              .then(({ data }) => (data || []) as PackRow[]),
             supabase.from("data_master")
               .select("sku_code, packing_size_qty")
               .in("sku_code", slice).eq("unit_of_measure", "Box")
-              .then(({ data }) => (data || []) as PackRow[])
-          )),
-        ]);
+              .then(({ data }) => (data || []) as PackRow[]),
+          ]);
 
-        type RsvEntry = { main_barcode: string | null; product_name_la: string | null; product_name_en: string | null; pack_qty: number | null; box_qty: number | null; division: string | null; department: string | null; sub_department: string | null };
-        const rsvMap = new Map<string, RsvEntry>();
-
-        // base info from packing_size_qty = 1 rows
-        for (const d of baseResults.flat()) {
-          if (!rsvMap.has(d.sku_code)) {
-            rsvMap.set(d.sku_code, {
-              main_barcode: d.main_barcode ?? null,
-              product_name_la: d.product_name_la ?? null,
-              product_name_en: d.product_name_en ?? null,
-              pack_qty: null, box_qty: null,
-              division: d.division ?? null,
-              department: d.department ?? null,
-              sub_department: d.sub_department ?? null,
-            });
-          } else if (!rsvMap.get(d.sku_code)!.main_barcode) {
-            rsvMap.get(d.sku_code)!.main_barcode = d.main_barcode ?? null;
+          for (const d of baseRows) {
+            if (!rsvMap.has(d.sku_code)) {
+              rsvMap.set(d.sku_code, { main_barcode: d.main_barcode ?? null, product_name_la: d.product_name_la ?? null, product_name_en: d.product_name_en ?? null, pack_qty: null, box_qty: null, division: d.division ?? null, department: d.department ?? null, sub_department: d.sub_department ?? null });
+            } else if (!rsvMap.get(d.sku_code)!.main_barcode) {
+              rsvMap.get(d.sku_code)!.main_barcode = d.main_barcode ?? null;
+            }
           }
-        }
-        // ensure all SKUs have an entry even if packing_size_qty=1 row is missing
-        for (const sku of skuCodes) {
-          if (!rsvMap.has(sku)) rsvMap.set(sku, { main_barcode: null, product_name_la: null, product_name_en: null, pack_qty: null, box_qty: null, division: null, department: null, sub_department: null });
+          for (const sku of slice) {
+            if (!rsvMap.has(sku)) rsvMap.set(sku, { main_barcode: null, product_name_la: null, product_name_en: null, pack_qty: null, box_qty: null, division: null, department: null, sub_department: null });
+          }
+          for (const d of packRows) {
+            const e = rsvMap.get(d.sku_code); if (!e) continue;
+            const v = Number(d.packing_size_qty);
+            if (Number.isFinite(v)) e.pack_qty = e.pack_qty == null ? v : Math.min(e.pack_qty, v);
+          }
+          for (const d of boxRows) {
+            const e = rsvMap.get(d.sku_code); if (!e) continue;
+            const v = Number(d.packing_size_qty);
+            if (Number.isFinite(v)) e.box_qty = e.box_qty == null ? v : Math.min(e.box_qty, v);
+          }
+
+          // Apply enriched data to rows processed so far, update state
+          const enrichedSkus = new Set(rsvMap.keys());
+          setUpRows(prev => prev.map(r => {
+            if (!enrichedSkus.has(r.sku_code)) return r;
+            const entry = rsvMap.get(r.sku_code)!;
+            return { ...r, main_barcode: entry.main_barcode, product_name_la: entry.product_name_la, product_name_en: entry.product_name_en, pack_qty: entry.pack_qty, box_qty: entry.box_qty, division: entry.division, department: entry.department, sub_department: entry.sub_department };
+          }));
+          setUpEnrichPct(Math.round(((ci + 1) / chunks.length) * 100));
         }
 
-        // pack_qty: min packing_size_qty where uom = Pack
-        for (const d of packResults.flat()) {
-          const entry = rsvMap.get(d.sku_code);
-          if (!entry) continue;
-          const v = Number(d.packing_size_qty);
-          if (Number.isFinite(v)) entry.pack_qty = entry.pack_qty == null ? v : Math.min(entry.pack_qty, v);
+        if (runId === upEnrichRunRef.current) {
+          upEnrichRef.current = { rsvMap };
         }
-        // box_qty: min packing_size_qty where uom = Box
-        for (const d of boxResults.flat()) {
-          const entry = rsvMap.get(d.sku_code);
-          if (!entry) continue;
-          const v = Number(d.packing_size_qty);
-          if (Number.isFinite(v)) entry.box_qty = entry.box_qty == null ? v : Math.min(entry.box_qty, v);
-        }
-
-        enrich = { rsvMap };
-        upEnrichRef.current = enrich;
-      } else {
-        enrich = cachedEnrich!;
+      } finally {
+        if (runId === upEnrichRunRef.current) { setUpEnriching(false); setUpEnrichPct(0); }
       }
-
-      const { rsvMap } = enrich;
-
-      const rows: UPRow[] = list.map((r: any) => ({
-        sku_code: r.sku_code,
-        size_store: r.size_store,
-        unit_pick: r.unit_pick,
-        main_barcode: rsvMap.get(r.sku_code)?.main_barcode ?? null,
-        product_name_la: rsvMap.get(r.sku_code)?.product_name_la ?? null,
-        product_name_en: rsvMap.get(r.sku_code)?.product_name_en ?? null,
-        pack_qty: rsvMap.get(r.sku_code)?.pack_qty ?? null,
-        box_qty: rsvMap.get(r.sku_code)?.box_qty ?? null,
-        division: rsvMap.get(r.sku_code)?.division ?? null,
-        department: rsvMap.get(r.sku_code)?.department ?? null,
-        sub_department: rsvMap.get(r.sku_code)?.sub_department ?? null,
-      }));
-      setUpRows(rows);
-      setUpHasLoaded(true);
-      // Also refresh override ref
-      const map = new Map<string, number>();
-      for (const r of list) map.set(`${r.sku_code}|${r.size_store}`, Number(r.unit_pick));
-      unitPickOverrideRef.current = map;
     } catch (err: any) {
       toast({ title: "Error loading Unit Pick", description: err.message, variant: "destructive" });
     } finally {
-      setUpLoading(false);
+      if (runId === upEnrichRunRef.current) setUpLoading(false);
     }
   };
 
@@ -2392,6 +2399,15 @@ export default function MinmaxCalPage() {
               </div>
             );
           })()}
+
+          {/* Enrichment progress bar */}
+          {upEnriching && (
+            <div className="flex items-center gap-2 pb-1">
+              <Loader2 className="w-3 h-3 animate-spin text-muted-foreground shrink-0" />
+              <Progress value={upEnrichPct} className="h-1.5 flex-1" />
+              <span className="text-[11px] text-muted-foreground tabular-nums w-8 text-right">{upEnrichPct}%</span>
+            </div>
+          )}
 
           {/* Table */}
           <div className="flex-1 overflow-auto border border-border rounded-md">
