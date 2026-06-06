@@ -1200,6 +1200,7 @@ export default function MinmaxCalPage() {
           store_name: r.store_name,
           type_store: r.type_store || null,
           unit_pick: String(r.unit_pick ?? 1),
+          avg_sale: r.avg_sale || 0,
           min_final: f.min,
           max_final: f.max,
         };
