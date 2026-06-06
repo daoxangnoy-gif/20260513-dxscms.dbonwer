@@ -153,6 +153,11 @@ const ofsCalCache: {
 
 const CAL_PAGE_SIZE = 100;
 
+// module-level cache ป้องกัน re-fetch เมื่อ component unmount/remount
+let _importDocsCache: OfsImportDoc[] = [];
+let _userProfileMapCache: Record<string, string> = {};
+let _resultDocsCache: OfsResultDoc[] = [];
+
 // --------------- Component ---------------
 export default function SAROrderFromStoreTab() {
   const { user, isAdmin, canDo } = useAuth();
@@ -214,10 +219,10 @@ export default function SAROrderFromStoreTab() {
   };
   useEffect(() => () => stopMultiStoreTimer(), []);
   // user profile map
-  const [userProfileMap, setUserProfileMap] = useState<Record<string, string>>({});
+  const [userProfileMap, setUserProfileMap] = useState<Record<string, string>>(_userProfileMapCache);
 
   // ---- HQ TAB ----
-  const [importDocs, setImportDocs] = useState<OfsImportDoc[]>([]);
+  const [importDocs, setImportDocs] = useState<OfsImportDoc[]>(_importDocsCache);
   const [importDocsLoading, setImportDocsLoading] = useState(false);
   const [selectedDocIds, setSelectedDocIds] = useState<Set<string>>(new Set());
   const [expandedDocIds, setExpandedDocIds] = useState<Set<string>>(new Set());
@@ -266,7 +271,7 @@ export default function SAROrderFromStoreTab() {
   const [hqSaving, setHqSaving] = useState(false);
 
   // ---- RESULT DOCS TAB ----
-  const [resultDocs, setResultDocs] = useState<OfsResultDoc[]>([]);
+  const [resultDocs, setResultDocs] = useState<OfsResultDoc[]>(_resultDocsCache);
   const [resultDocsLoading, setResultDocsLoading] = useState(false);
   const [selectedPoIds, setSelectedPoIds] = useState<Set<string>>(new Set());
   const [selectedRoIds, setSelectedRoIds] = useState<Set<string>>(new Set());
@@ -541,20 +546,23 @@ export default function SAROrderFromStoreTab() {
   // HQ TAB — logic
   // ============================================================
 
-  const loadImportDocs = useCallback(async () => {
-    setImportDocsLoading(true);
+  const loadImportDocs = useCallback(async (force = false) => {
+    const hasCache = _importDocsCache.length > 0;
+    if (!hasCache || force) setImportDocsLoading(true);
     try {
       const { data, error } = await (supabase as any).from("ofs_import_docs")
         .select("id, doc_name, store_name, import_count, pass_count, skip_count, user_id, created_at, data, skip_data")
         .order("created_at", { ascending: false }).limit(200);
       if (error) throw error;
-      setImportDocs(data || []);
+      _importDocsCache = data || [];
+      setImportDocs(_importDocsCache);
       // load profiles for importer names
       const userIds = [...new Set((data || []).map((d: any) => d.user_id).filter(Boolean))] as string[];
       if (userIds.length) {
         const { data: profiles } = await (supabase as any).from("profiles").select("user_id,full_name,email").in("user_id", userIds);
         const map: Record<string, string> = {};
         for (const p of (profiles || []) as any[]) map[p.user_id] = p.full_name || p.email || "";
+        _userProfileMapCache = map;
         setUserProfileMap(map);
       }
     } catch (e: any) { toast({ title: "Load error", description: e.message, variant: "destructive" }); }
@@ -886,14 +894,16 @@ export default function SAROrderFromStoreTab() {
   // RESULT DOCS TAB — logic
   // ============================================================
 
-  const loadResultDocs = useCallback(async () => {
-    setResultDocsLoading(true);
+  const loadResultDocs = useCallback(async (force = false) => {
+    const hasCache = _resultDocsCache.length > 0;
+    if (!hasCache || force) setResultDocsLoading(true);
     try {
       const { data, error } = await (supabase as any).from("ofs_result_docs")
         .select("id,doc_name,doc_type,store_name,source_doc_ids,item_count,user_id,created_at")
         .order("created_at", { ascending: false }).limit(300);
       if (error) throw error;
-      setResultDocs(data || []);
+      _resultDocsCache = data || [];
+      setResultDocs(_resultDocsCache);
     } catch (e: any) { toast({ title: "Load error", description: e.message, variant: "destructive" }); }
     finally { setResultDocsLoading(false); }
   }, [toast]);
