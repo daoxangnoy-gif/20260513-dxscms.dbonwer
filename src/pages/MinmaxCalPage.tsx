@@ -307,6 +307,7 @@ export default function MinmaxCalPage() {
   const upEnrichRef = useRef<UPEnrich | null>(null);
   const [upRows, setUpRows] = useState<UPRow[]>([]);
   const [upLoading, setUpLoading] = useState(false);
+  const [upHasLoaded, setUpHasLoaded] = useState(false);
   const [upSearch, setUpSearch] = useState("");
   const [upSelected, setUpSelected] = useState<Set<string>>(new Set());
   const [upImporting, setUpImporting] = useState(false);
@@ -514,6 +515,7 @@ export default function MinmaxCalPage() {
         type_store: storeTypeMap.get(r.store_name) ?? null,
       }));
       setUpRows(rows);
+      setUpHasLoaded(true);
       // Also refresh override ref
       const map = new Map<string, number>();
       for (const r of list) map.set(`${r.sku_code}|${r.store_name}`, Number(r.unit_pick));
@@ -1706,7 +1708,7 @@ export default function MinmaxCalPage() {
           <TabsTrigger value="report" className="text-xs">
             <BarChart3 className="w-3 h-3 mr-1" /> Report ({reportRows.length})
           </TabsTrigger>
-          <TabsTrigger value="unitpick" className="text-xs" onClick={() => { if (tab !== "unitpick") loadUPRows(); }}>
+          <TabsTrigger value="unitpick" className="text-xs">
             Unit Pick {upRows.length > 0 && `(${upRows.length})`}
           </TabsTrigger>
         </TabsList>
@@ -2230,6 +2232,11 @@ export default function MinmaxCalPage() {
         <TabsContent value="unitpick" className="flex-1 min-h-0 flex flex-col overflow-hidden px-6 !mt-2 data-[state=inactive]:hidden data-[state=active]:flex">
           {/* Toolbar row 1: action buttons */}
           <div className="pb-1 flex items-center gap-2 flex-wrap">
+            <Button size="sm" className="text-xs h-7 bg-blue-600 hover:bg-blue-700 text-white"
+              onClick={() => loadUPRows(false)} disabled={upLoading}>
+              {upLoading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Eye className="w-3.5 h-3.5 mr-1" />}
+              Show
+            </Button>
             <Button size="sm" variant="outline" className="text-xs h-7"
               onClick={() => upFileRef.current?.click()}
               disabled={upImporting}>
@@ -2252,10 +2259,63 @@ export default function MinmaxCalPage() {
               <Trash2 className="w-3.5 h-3.5 mr-1" /> Delete ({upSelected.size})
             </Button>
             <Button size="sm" variant="outline" className="text-xs h-7"
-              onClick={loadUPRows} disabled={upLoading}>
+              onClick={() => loadUPRows(true)} disabled={upLoading}>
               {upLoading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5 mr-1" />}
               Refresh
             </Button>
+            {upHasLoaded && upRows.length > 0 && (() => {
+              const q = upSearch.trim().toLowerCase();
+              const filtered = upRows.filter(r => {
+                if (upFilterType.length && !upFilterType.includes(r.type_store ?? "")) return false;
+                if (upFilterStore.length && !upFilterStore.includes(r.store_name)) return false;
+                if (upFilterDiv.length && !upFilterDiv.includes(r.division ?? "")) return false;
+                if (upFilterDept.length && !upFilterDept.includes(r.department ?? "")) return false;
+                if (upFilterSubDept.length && !upFilterSubDept.includes(r.sub_department ?? "")) return false;
+                if (q) return r.sku_code.toLowerCase().includes(q) || r.store_name.toLowerCase().includes(q) || (r.main_barcode || "").toLowerCase().includes(q) || (r.product_name_la || "").toLowerCase().includes(q) || (r.product_name_en || "").toLowerCase().includes(q);
+                return true;
+              });
+              const exportToXlsx = (exportRows: UPRow[], filename: string) => {
+                const data = exportRows.map(r => ({
+                  "Type Store": r.type_store ?? "",
+                  "Store Name": r.store_name,
+                  "SKU Code": r.sku_code,
+                  "Barcode": r.main_barcode ?? "",
+                  "Product Name (LA)": r.product_name_la ?? "",
+                  "Product Name (EN)": r.product_name_en ?? "",
+                  "Division": r.division ?? "",
+                  "Department": r.department ?? "",
+                  "Sub Dept": r.sub_department ?? "",
+                  "Pack": r.pack_qty ?? "",
+                  "Box": r.box_qty ?? "",
+                  "Unit Pick": r.unit_pick,
+                }));
+                const ws = XLSX.utils.json_to_sheet(data);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "UnitPick");
+                XLSX.writeFile(wb, filename);
+              };
+              const selectedRows = upRows.filter(r => upSelected.has(`${r.sku_code}|${r.store_name}`));
+              return (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="sm" variant="outline" className="text-xs h-7">
+                      <Download className="w-3.5 h-3.5 mr-1" /> Export <ChevronDown className="w-3 h-3 ml-1" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    <DropdownMenuItem className="text-xs" onClick={() => exportToXlsx(filtered, "unit_pick_page.xlsx")}>
+                      Export this page ({filtered.length.toLocaleString()} แถว)
+                    </DropdownMenuItem>
+                    <DropdownMenuItem className="text-xs" disabled={selectedRows.length === 0} onClick={() => exportToXlsx(selectedRows, "unit_pick_selected.xlsx")}>
+                      Export selected ({selectedRows.length.toLocaleString()} แถว)
+                    </DropdownMenuItem>
+                    <DropdownMenuItem className="text-xs" onClick={() => exportToXlsx(upRows, "unit_pick_all.xlsx")}>
+                      Export all ({upRows.length.toLocaleString()} แถว)
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              );
+            })()}
           </div>
 
           {/* Toolbar row 2: filters + search */}
@@ -2307,6 +2367,12 @@ export default function MinmaxCalPage() {
               <div className="flex items-center justify-center py-16 gap-2 text-muted-foreground text-sm">
                 <Loader2 className="w-5 h-5 animate-spin" /> กำลังโหลด...
               </div>
+            ) : !upHasLoaded ? (
+              <div className="flex flex-col items-center justify-center py-16 gap-3 text-muted-foreground">
+                <Database className="w-8 h-8 opacity-30" />
+                <p className="text-sm">กด <span className="font-semibold text-blue-600">Show</span> เพื่อดึงข้อมูลจาก DB</p>
+                <p className="text-xs opacity-60">สามารถ Filter ก่อนกด Show เพื่อแสดงเฉพาะข้อมูลที่ต้องการ</p>
+              </div>
             ) : (() => {
               const q = upSearch.trim().toLowerCase();
               const filtered = upRows.filter(r => {
@@ -2326,9 +2392,10 @@ export default function MinmaxCalPage() {
               });
               return (
                 <>
-                  <div className="px-3 py-1 text-[11px] text-muted-foreground border-b border-border bg-muted/50">
-                    แสดง {filtered.length.toLocaleString()} / {upRows.length.toLocaleString()} แถว
-                    {upSelected.size > 0 && <span className="ml-2 text-primary font-medium">· เลือก {upSelected.size} แถว</span>}
+                  <div className="px-3 py-1 text-[11px] text-muted-foreground border-b border-border bg-muted/50 flex items-center gap-3">
+                    <span>แสดง {filtered.length.toLocaleString()} / {upRows.length.toLocaleString()} แถว</span>
+                    {upSelected.size > 0 && <span className="text-primary font-medium">· เลือก {upSelected.size} แถว</span>}
+                    {(() => { const missing = filtered.filter(r => !r.main_barcode).length; return missing > 0 ? <span className="text-amber-600 font-medium">⚠ {missing} แถวไม่พบใน range_store_view (ไม่มี Barcode/ชื่อ)</span> : null; })()}
                   </div>
                   <table className="w-full text-xs">
                     <thead className="sticky top-0 z-10">
@@ -2357,7 +2424,7 @@ export default function MinmaxCalPage() {
                       ) : filtered.map(r => {
                         const key = `${r.sku_code}|${r.store_name}`;
                         return (
-                          <tr key={key} className={cn("border-b border-border/40 hover:bg-muted/30", upSelected.has(key) && "bg-primary/5")}>
+                          <tr key={key} className={cn("border-b border-border/40 hover:bg-muted/30", upSelected.has(key) && "bg-primary/5", !r.main_barcode && "bg-amber-50/60 dark:bg-amber-950/20")}>
                             <td className="px-2 py-1 w-8">
                               <Checkbox
                                 checked={upSelected.has(key)}
