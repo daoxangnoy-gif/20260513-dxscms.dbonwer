@@ -736,10 +736,8 @@ export default function MinmaxCalPage() {
       setEditsMap(new Map());
       setPage(0);
 
-      // Load unit_pick overrides from DB before mapping rows
-      await loadUnitPickOverrideRef();
-
-      const calcRows: CalcRow[] = (stageResult.rows || []).map(r => applyUPOverride(mapStagingRow(r), n));
+      // unit_pick override is now applied inside get_minmax_calc_all (DB-side)
+      const calcRows: CalcRow[] = (stageResult.rows || []).map(mapStagingRow);
 
       // Phase 2 (Doc merge) — removed: Cal returns ONLY computed rows.
       const finalRows: CalcRow[] = calcRows;
