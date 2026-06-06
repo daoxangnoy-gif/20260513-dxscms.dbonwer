@@ -275,6 +275,13 @@ export default function MinmaxCalPage() {
   // Cancel flag for Calculate
   const cancelCalcRef = useRef(false);
 
+  // Staging mode state (Calculate → DB staging → server-side pagination)
+  const [hasStaging, setHasStaging] = useState(false);
+  const [stagingTotal, setStagingTotal] = useState(0);
+  const [stagingFilteredCount, setStagingFilteredCount] = useState(0);
+  const [stagingLoading, setStagingLoading] = useState(false);
+  const [editsMap, setEditsMap] = useState<Map<string, { min_edit?: number | null; max_edit?: number | null; unit_pick_edit?: number | null; max_cal?: number }>>(new Map());
+
   // View button loading (load filtered store rows from minmax)
   const [viewLoading, setViewLoading] = useState(false);
 
@@ -321,6 +328,87 @@ export default function MinmaxCalPage() {
     || subDeptFilter.length > 0 || classFilter.length > 0
     || skuFilter.length > 0 || barcodeFilter.length > 0;
 
+  // ====== Staging helpers ======
+  const mapStagingRow = (r: any): CalcRow => ({
+    sku_code: r.sku_code,
+    product_name_la: r.product_name_la,
+    product_name_en: r.product_name_en,
+    main_barcode: r.main_barcode,
+    unit_of_measure: r.unit_of_measure,
+    store_name: r.store_name,
+    type_store: r.type_store || "",
+    size_store: r.size_store || "",
+    unit_pick: Number(r.unit_pick) || 1,
+    unit_pick_edit: null,
+    avg_sale: Number(r.avg_sale) || 0,
+    rank_sale: r.rank_sale || "D",
+    rank_factor: Number(r.rank_factor) || 7,
+    min_cal: Number(r.min_cal) || 0,
+    max_cal: Number(r.max_cal) || 0,
+    is_default_min: Boolean(r.is_default_min),
+    min_floored: Boolean(r.min_floored),
+    item_type: r.item_type || "",
+    buying_status: r.buying_status || "",
+    division: r.division || "",
+    department: r.department || "",
+    sub_department: r.sub_department || "",
+    class: r.class || "",
+    pack_qty: r.pack_qty == null ? null : Number(r.pack_qty),
+    box_qty: r.box_qty == null ? null : Number(r.box_qty),
+    min_edit: null,
+    max_edit: null,
+  });
+
+  const buildStagingParams = (pageNum: number) => {
+    const p: any = { p_user_id: user?.id, p_limit: PAGE_SIZE, p_offset: pageNum * PAGE_SIZE };
+    if (storeFilter.length) p.p_store_names = storeFilter;
+    if (typeStoreFilter.length) p.p_type_stores = typeStoreFilter;
+    if (itemTypeFilter.length) p.p_item_types = itemTypeFilter;
+    if (buyingFilter.length) p.p_buying_statuses = buyingFilter;
+    if (divisionFilter.length) p.p_divisions = divisionFilter;
+    if (departmentFilter.length) p.p_departments = departmentFilter;
+    if (subDeptFilter.length) p.p_sub_departments = subDeptFilter;
+    if (classFilter.length) p.p_classes = classFilter;
+    if (skuFilter.length) p.p_sku_codes = skuFilter;
+    if (barcodeFilter.length) p.p_barcodes = barcodeFilter;
+    for (const chip of searchChips) {
+      if (chip.col === "sku_code") p.p_search_sku = chip.value;
+      else if (chip.col === "main_barcode") p.p_search_barcode = chip.value;
+      else if (chip.col === "product_name_la" || chip.col === "product_name_en") p.p_search_name = chip.value;
+      else if (chip.col === "store_name") p.p_search_store = chip.value;
+    }
+    if (searchValue.trim() && !p.p_search_name) p.p_search_name = searchValue.trim();
+    return p;
+  };
+
+  const loadStagingPage = useCallback(async (pageNum: number) => {
+    if (!user || !hasStaging) return;
+    setStagingLoading(true);
+    try {
+      const params = buildStagingParams(pageNum);
+      const { data, error } = await (supabase as any).rpc("get_staged_minmax", params);
+      if (error) throw error;
+      const result = data as { total: number; rows: any[] };
+      setStagingFilteredCount(result.total);
+      const currentEditsMap = editsMap;
+      const mapped = (result.rows || []).map((r: any) => {
+        const base = mapStagingRow(r);
+        const edit = currentEditsMap.get(rowKey(base));
+        return edit ? { ...base, ...edit } : base;
+      });
+      setRows(mapped);
+      setPage(pageNum);
+      setHasData(true);
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setStagingLoading(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, hasStaging, storeFilter, typeStoreFilter, itemTypeFilter, buyingFilter,
+      divisionFilter, departmentFilter, subDeptFilter, classFilter, skuFilter,
+      barcodeFilter, searchChips, searchValue, editsMap]);
+
   // ====== Calculate ======
   const calculate = useCallback(async (n: number) => {
     cancelCalcRef.current = false;
@@ -344,88 +432,49 @@ export default function MinmaxCalPage() {
       if (skuFilter.length) params.p_sku_codes = skuFilter;
       if (barcodeFilter.length) params.p_barcodes = barcodeFilter;
 
-      // Fetch all calc rows — single JSONB call (no row-limit pagination)
+      // Calculate in DB → save to staging → return first 100 rows
       setPhasePct(15);
-      setPhaseLabel("กำลังดึงข้อมูลจาก DB...");
+      setPhaseLabel("กำลังคำนวณใน DB...");
       checkCancel();
-      const { data: jsonData, error: jsonErr } = await (supabase as any).rpc("get_minmax_calc_json", params);
-      if (jsonErr) throw jsonErr;
-      const fetched: any[] = Array.isArray(jsonData) ? jsonData : [];
+      if (!user) throw new Error("ต้องเข้าสู่ระบบ");
+      const stageParams: any = {
+        p_user_id: user.id,
+        p_n_factor: n,
+      };
+      if (storeFilter.length) stageParams.p_store_names = storeFilter;
+      if (typeStoreFilter.length) stageParams.p_type_stores = typeStoreFilter;
+      if (itemTypeFilter.length) stageParams.p_item_types = itemTypeFilter;
+      if (buyingFilter.length) stageParams.p_buying_statuses = buyingFilter;
+      if (divisionFilter.length) stageParams.p_divisions = divisionFilter;
+      if (departmentFilter.length) stageParams.p_departments = departmentFilter;
+      if (subDeptFilter.length) stageParams.p_sub_departments = subDeptFilter;
+      if (classFilter.length) stageParams.p_classes = classFilter;
+      if (skuFilter.length) stageParams.p_sku_codes = skuFilter;
+      if (barcodeFilter.length) stageParams.p_barcodes = barcodeFilter;
+      const { data: stageData, error: stageErr } = await (supabase as any).rpc("calculate_and_stage_minmax", stageParams);
+      if (stageErr) throw stageErr;
+      const stageResult = stageData as { total: number; rows: any[] };
       const lastBatchCount = 1;
       const fetchMs = Math.round(performance.now() - t0);
       setPhasePct(60);
-      setPhaseLabel(`รับข้อมูล ${fetched.length.toLocaleString()} แถว · ${fetchMs}ms`);
-      checkCancel();
-      await new Promise(r => setTimeout(r, 0));
+      setPhaseLabel(`คำนวณเสร็จ ${stageResult.total.toLocaleString()} แถว · ${fetchMs}ms`);
       checkCancel();
 
-      const calcRows: CalcRow[] = fetched.map((r: any) => {
-        // unit_pick ดึงจาก Data Cal (RPC get_minmax_calc_all → mm_up)
-        const up = Number(r.unit_pick) || 1;
-        const upEdit = up; // เริ่มต้นยังไม่มี edit → ใช้ค่า default
-        const avg = Number(r.avg_sale) || 0;
-        const rank = r.rank_sale || "D";
-        const rm = rank === "A" ? 21 : rank === "B" ? 14 : rank === "C" ? 10 : 7;
+      // Set staging state
+      setHasStaging(true);
+      setStagingTotal(stageResult.total);
+      setStagingFilteredCount(stageResult.total);
+      setEditsMap(new Map());
+      setPage(0);
 
-        // ===== Min Cal (สูตรใหม่) =====
-        let minCal: number;
-        let isDefMin = false;
-        let floored = false;
-        if (avg === 0) {
-          minCal = 2;             // Case 1: default (ส้ม)
-          isDefMin = true;
-        } else {
-          const raw = Math.ceil(avg * rm);
-          if (raw > 0 && raw < 3) {
-            minCal = 3;            // Case 2: floored (ฟ้า)
-            floored = true;
-          } else {
-            minCal = raw;          // Case 3: ปกติ
-          }
-        }
-
-        // ===== Max Cal (สูตรใหม่) = Min + avg*N + UnitPickEdit =====
-        let maxRecalc = Math.ceil(minCal + avg * nFactor + upEdit);
-        if (avg === 0 && maxRecalc < 4) maxRecalc = 4;       // Case 1 floor
-        else if (floored && maxRecalc < 6) maxRecalc = 6;     // Case 2 floor
-        return {
-          sku_code: r.sku_code,
-          product_name_la: r.product_name_la,
-          product_name_en: r.product_name_en,
-          main_barcode: r.main_barcode,
-          unit_of_measure: r.unit_of_measure,
-          store_name: r.store_name,
-          type_store: r.type_store,
-          size_store: r.size_store,
-          unit_pick: up,
-          unit_pick_edit: null,
-          avg_sale: avg,
-          rank_sale: rank,
-          rank_factor: Number(r.rank_factor) || 7,
-          min_cal: minCal,
-          max_cal: maxRecalc,
-          is_default_min: isDefMin,
-          min_floored: floored,
-          item_type: r.item_type || "",
-          buying_status: r.buying_status || "",
-          division: r.division || "",
-          department: r.department || "",
-          sub_department: r.sub_department || "",
-          class: r.class || "",
-          pack_qty: r.pack_qty == null ? null : Number(r.pack_qty),
-          box_qty: r.box_qty == null ? null : Number(r.box_qty),
-          min_edit: null,
-          max_edit: null,
-        };
-      });
+      const calcRows: CalcRow[] = (stageResult.rows || []).map(mapStagingRow);
 
       // Phase 2 (Doc merge) — removed: Cal returns ONLY computed rows.
-      // Save Doc upserts directly to `minmax`; the View button loads existing rows when needed.
       const finalRows: CalcRow[] = calcRows;
       const mergeMs = 0;
       const mergedFromDoc = 0;
 
-      setPhaseTimes({ fetch: fetchMs, merge: mergeMs, rowCount: calcRows.length, docCount: mergedFromDoc, readBatches: lastBatchCount });
+      setPhaseTimes({ fetch: fetchMs, merge: mergeMs, rowCount: stageResult.total, docCount: mergedFromDoc, readBatches: lastBatchCount });
 
       const _excluded = await (await import("@/lib/filterTemplates")).applyExcludeFilters(finalRows as any[], "minmax_cal");
       setRows(_excluded as any);
@@ -667,10 +716,13 @@ export default function MinmaxCalPage() {
     });
   }, [rows, searchChips, searchValue]);
 
-  const pageRows = useMemo(() =>
-    filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE),
-  [filtered, page]);
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const pageRows = useMemo(() => {
+    if (hasStaging) return rows; // staging mode: rows = current page from DB (already filtered server-side)
+    return filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  }, [rows, filtered, page, hasStaging]);
+  const totalPages = hasStaging
+    ? Math.max(1, Math.ceil(stagingFilteredCount / PAGE_SIZE))
+    : Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
 
   const addSearchChip = (col: keyof CalcRow) => {
     if (!searchValue.trim()) return;
@@ -817,9 +869,24 @@ export default function MinmaxCalPage() {
     };
     try {
       // STEP 1/3 — เตรียม Payload
-      step(1, `เตรียม Payload จาก ${rows.length.toLocaleString()} แถว`, 5);
+      let sourceRows: CalcRow[];
+      if (hasStaging) {
+        step(1, `ดึงข้อมูลทั้งหมดจาก Staging...`, 5);
+        const { data: allStaged, error: allErr } = await (supabase as any)
+          .rpc("get_staged_minmax_all", { p_user_id: user.id });
+        if (allErr) throw allErr;
+        const currentEdits = editsMap;
+        sourceRows = (Array.isArray(allStaged) ? allStaged : []).map((r: any) => {
+          const base = mapStagingRow(r);
+          const edit = currentEdits.get(rowKey(base));
+          return edit ? { ...base, ...edit } : base;
+        });
+      } else {
+        sourceRows = rows;
+      }
+      step(1, `เตรียม Payload จาก ${sourceRows.length.toLocaleString()} แถว`, 5);
       await new Promise(r => setTimeout(r, 0));
-      const payload = rows.map(r => {
+      const payload = sourceRows.map(r => {
         const f = getFinal(r);
         return {
           sku_code: r.sku_code,
@@ -1139,11 +1206,20 @@ export default function MinmaxCalPage() {
   // ====== inline edit ======
   const setEdit = (r: CalcRow, field: "min_edit" | "max_edit", value: string) => {
     const v = value === "" ? null : Number(value);
+    const cleaned = Number.isNaN(v as any) ? null : v;
     setRows(prev => prev.map(x =>
       x.sku_code === r.sku_code && x.store_name === r.store_name
-        ? { ...x, [field]: Number.isNaN(v as any) ? null : v }
+        ? { ...x, [field]: cleaned }
         : x
     ));
+    if (hasStaging) {
+      setEditsMap(prev => {
+        const next = new Map(prev);
+        const key = rowKey(r);
+        next.set(key, { ...next.get(key), [field]: cleaned });
+        return next;
+      });
+    }
     setForceCal(prev => {
       const k = `${r.sku_code}|${r.store_name}`;
       const cur = prev[k] || {};
@@ -1155,10 +1231,9 @@ export default function MinmaxCalPage() {
   const setUnitPickEdit = (r: CalcRow, value: string) => {
     const v = value === "" ? null : Number(value);
     const cleaned = Number.isNaN(v as any) ? null : v;
+    let newMaxForEdit = 0;
     setRows(prev => prev.map(x => {
       if (!(x.sku_code === r.sku_code && x.store_name === r.store_name)) return x;
-      // Recompute max_cal client-side ตามสูตรใหม่ (Min ไม่ขึ้นกับ unit_pick)
-      // ห้ามแตะ from_doc rows (อ่านอย่างเดียว)
       if (x.from_doc) return { ...x, unit_pick_edit: cleaned };
       const upEdit = (cleaned != null && cleaned > 0) ? cleaned : (Number(x.unit_pick) || 1);
       const avg = Number(x.avg_sale) || 0;
@@ -1166,8 +1241,17 @@ export default function MinmaxCalPage() {
       let newMax = Math.ceil(minCal + avg * nFactor + upEdit);
       if (avg === 0 && newMax < 4) newMax = 4;
       else if (x.min_floored && newMax < 6) newMax = 6;
+      newMaxForEdit = newMax;
       return { ...x, unit_pick_edit: cleaned, max_cal: newMax };
     }));
+    if (hasStaging) {
+      setEditsMap(prev => {
+        const next = new Map(prev);
+        const key = rowKey(r);
+        next.set(key, { ...next.get(key), unit_pick_edit: cleaned, max_cal: newMaxForEdit });
+        return next;
+      });
+    }
   };
 
   // Keyboard nav: Enter/Arrow keys to move between editable cells
@@ -1430,7 +1514,15 @@ export default function MinmaxCalPage() {
                 <X className="w-3 h-3 mr-1" /> Clear Filters
               </Button>
             )}
-            {hasFilters && (
+            {hasStaging && (
+              <Button size="sm" variant="default" className="h-7 text-xs ml-auto"
+                disabled={stagingLoading}
+                onClick={() => loadStagingPage(0)}>
+                {stagingLoading ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Eye className="w-3 h-3 mr-1" />}
+                Show
+              </Button>
+            )}
+            {!hasStaging && hasFilters && (
               <Badge variant="outline" className="text-[10px] ml-auto">
                 💡 Calc เฉพาะที่ Filter · ที่เหลือดึงจาก Doc ล่าสุด (เมื่อ Calculate)
               </Badge>
@@ -1659,12 +1751,18 @@ export default function MinmaxCalPage() {
             )}
           </div>
 
-          {filtered.length > PAGE_SIZE && (
+          {(hasStaging ? stagingFilteredCount > PAGE_SIZE : filtered.length > PAGE_SIZE) && (
             <div className="px-6 py-2 border-t border-border flex items-center justify-between bg-card">
               <span className="text-xs text-muted-foreground">หน้า {page + 1} / {totalPages}</span>
               <div className="flex gap-1">
-                <Button size="sm" variant="outline" disabled={page === 0} onClick={() => setPage(p => p - 1)} className="h-7 text-xs">ก่อนหน้า</Button>
-                <Button size="sm" variant="outline" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)} className="h-7 text-xs">ถัดไป</Button>
+                <Button size="sm" variant="outline"
+                  disabled={page === 0 || stagingLoading}
+                  onClick={() => hasStaging ? loadStagingPage(page - 1) : setPage(p => p - 1)}
+                  className="h-7 text-xs">ก่อนหน้า</Button>
+                <Button size="sm" variant="outline"
+                  disabled={page >= totalPages - 1 || stagingLoading}
+                  onClick={() => hasStaging ? loadStagingPage(page + 1) : setPage(p => p + 1)}
+                  className="h-7 text-xs">ถัดไป</Button>
               </div>
             </div>
           )}
