@@ -352,7 +352,6 @@ export default function MinmaxCalPage() {
   }, []);
 
   useEffect(() => { loadFilterOpts(); }, [loadFilterOpts]);
-  useEffect(() => { loadUnitPickOverrideRef(); }, []);
 
   // ====== Load latest MinMax View rows (from minmax table, joined with data_master) ======
   // ใช้ตอน Calc เพื่อ merge ค่าเดิมของ SKU/Store ที่ไม่อยู่ใน filter ปัจจุบัน
@@ -598,7 +597,7 @@ export default function MinmaxCalPage() {
       }
       toast({ title: `Import สำเร็จ ${payload.length.toLocaleString()} แถว` });
       // Refresh override ref + display (parallel)
-      await Promise.all([loadUnitPickOverrideRef(), loadUPRows()]);
+      await loadUPRows();
     } catch (err: any) {
       toast({ title: "Import Error", description: err.message, variant: "destructive" });
     } finally {
@@ -888,7 +887,7 @@ export default function MinmaxCalPage() {
       if (error) throw error;
       const result = data as { total: number; rows: any[] };
       setViewPagingTotal(result.total);
-      setRows((result.rows || []).map(r => applyUPOverride(mapViewRow(r))));
+      setRows((result.rows || []).map(mapViewRow));
       setPage(pageNum);
     } catch (err: any) {
       toast({ title: "Error", description: err.message, variant: "destructive" });
@@ -916,13 +915,12 @@ export default function MinmaxCalPage() {
     try {
       const t0 = performance.now();
       // Reload override ref so latest unit_pick data is applied
-      await loadUnitPickOverrideRef();
       const params = buildViewParams(0);
       const { data, error } = await (supabase as any).rpc("get_minmax_view_page", params);
       if (error) throw error;
       const result = data as { total: number; rows: any[] };
       const ms = Math.round(performance.now() - t0);
-      const mapped = (result.rows || []).map(r => applyUPOverride(mapViewRow(r)));
+      const mapped = (result.rows || []).map(mapViewRow);
       setRows(mapped);
       setHasData(true);
       setPage(0);
