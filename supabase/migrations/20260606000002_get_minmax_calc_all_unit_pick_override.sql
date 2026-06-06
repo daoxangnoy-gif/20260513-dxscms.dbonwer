@@ -126,7 +126,7 @@ BEGIN
     up_over AS (
       SELECT upo.sku_code, upo.store_name, upo.unit_pick
       FROM unit_pick_override upo
-      WHERE upo.sku_code IN (SELECT sku_code FROM master)
+      INNER JOIN master m ON m.sku_code = upo.sku_code
     )
     SELECT
       m.sku_code, m.product_name_la, m.product_name_en, m.main_barcode, m.unit_of_measure,
