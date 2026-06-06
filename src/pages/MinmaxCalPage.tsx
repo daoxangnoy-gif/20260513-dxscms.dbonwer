@@ -607,7 +607,8 @@ export default function MinmaxCalPage() {
         ));
       }
       toast({ title: `Import สำเร็จ ${payload.length.toLocaleString()} แถว` });
-      await loadUPRows(true); // force refresh enrichment for newly added SKUs
+      await loadUnitPickOverrideRef(); // update override map used by Cal (fast — no enrichment)
+      if (upHasLoaded) await loadUPRows(true); // refresh table only if user had already clicked Show
     } catch (err: any) {
       toast({ title: "Import Error", description: err.message, variant: "destructive" });
     } finally {
