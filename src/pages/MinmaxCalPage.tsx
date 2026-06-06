@@ -128,6 +128,10 @@ interface UPRow {
   product_name_la: string | null;
   pack_qty: number | null;
   box_qty: number | null;
+  division: string | null;
+  department: string | null;
+  sub_department: string | null;
+  type_store: string | null;
 }
 
 // Searchable columns for Odoo-style search
@@ -417,16 +421,19 @@ export default function MinmaxCalPage() {
       const skuCodes = [...new Set(list.map((r: any) => r.sku_code as string))];
 
       // Fetch display info from data_master
-      const dmMap = new Map<string, { main_barcode: string | null; product_name_la: string | null }>();
+      const dmMap = new Map<string, { main_barcode: string | null; product_name_la: string | null; division: string | null; department: string | null; sub_department: string | null }>();
       for (let i = 0; i < skuCodes.length; i += 500) {
         const slice = skuCodes.slice(i, i + 500);
         const { data: dm } = await supabase
           .from("data_master")
-          .select("sku_code, main_barcode, product_name_la")
+          .select("sku_code, main_barcode, product_name_la, division, department, sub_department")
           .in("sku_code", slice)
           .eq("packing_size_qty", 1);
         for (const d of (dm || [])) {
-          if (!dmMap.has(d.sku_code)) dmMap.set(d.sku_code, { main_barcode: d.main_barcode, product_name_la: d.product_name_la });
+          if (!dmMap.has(d.sku_code)) dmMap.set(d.sku_code, {
+            main_barcode: d.main_barcode, product_name_la: d.product_name_la,
+            division: (d as any).division ?? null, department: (d as any).department ?? null, sub_department: (d as any).sub_department ?? null,
+          });
         }
       }
 
@@ -441,6 +448,18 @@ export default function MinmaxCalPage() {
         for (const r of (rs || [])) rsMap.set(`${r.sku_code}|${r.store_name}`, { pack_qty: r.pack_qty, box_qty: r.box_qty });
       }
 
+      // Fetch type_store from store_type
+      const storeNames = [...new Set(list.map((r: any) => r.store_name as string))];
+      const storeTypeMap = new Map<string, string>();
+      for (let i = 0; i < storeNames.length; i += 500) {
+        const slice = storeNames.slice(i, i + 500);
+        const { data: st } = await supabase
+          .from("store_type")
+          .select("store_name, type_store")
+          .in("store_name", slice);
+        for (const s of (st || [])) storeTypeMap.set(s.store_name, (s as any).type_store ?? "");
+      }
+
       const rows: UPRow[] = list.map((r: any) => ({
         sku_code: r.sku_code,
         store_name: r.store_name,
@@ -449,6 +468,10 @@ export default function MinmaxCalPage() {
         product_name_la: dmMap.get(r.sku_code)?.product_name_la ?? null,
         pack_qty: rsMap.get(`${r.sku_code}|${r.store_name}`)?.pack_qty ?? null,
         box_qty: rsMap.get(`${r.sku_code}|${r.store_name}`)?.box_qty ?? null,
+        division: dmMap.get(r.sku_code)?.division ?? null,
+        department: dmMap.get(r.sku_code)?.department ?? null,
+        sub_department: dmMap.get(r.sku_code)?.sub_department ?? null,
+        type_store: storeTypeMap.get(r.store_name) ?? null,
       }));
       setUpRows(rows);
       // Also refresh override ref
@@ -2236,14 +2259,14 @@ export default function MinmaxCalPage() {
                           }}
                         />
                       </th>
-                      {["Store Name", "SKU Code", "Barcode", "Product Name", "Pack", "Box", "Unit Pick"].map(h => (
+                      {["Type Store", "Store Name", "SKU Code", "Barcode", "Product Name", "Division", "Department", "Sub Dept", "Pack", "Box", "Unit Pick"].map(h => (
                         <th key={h} className="px-2 py-1.5 text-left font-medium border-b border-border whitespace-nowrap bg-muted">{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
                     {filtered.length === 0 ? (
-                      <tr><td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">ไม่มีข้อมูล</td></tr>
+                      <tr><td colSpan={12} className="px-4 py-8 text-center text-muted-foreground">ไม่มีข้อมูล</td></tr>
                     ) : filtered.map(r => {
                       const key = `${r.sku_code}|${r.store_name}`;
                       return (
@@ -2260,10 +2283,14 @@ export default function MinmaxCalPage() {
                               }}
                             />
                           </td>
+                          <td className="px-2 py-1 text-[11px]">{r.type_store ?? "-"}</td>
                           <td className="px-2 py-1">{r.store_name}</td>
                           <td className="px-2 py-1 font-mono">{r.sku_code}</td>
                           <td className="px-2 py-1 font-mono text-muted-foreground">{r.main_barcode ?? "-"}</td>
-                          <td className="px-2 py-1 max-w-[240px] truncate" title={r.product_name_la ?? ""}>{r.product_name_la ?? "-"}</td>
+                          <td className="px-2 py-1 max-w-[200px] truncate" title={r.product_name_la ?? ""}>{r.product_name_la ?? "-"}</td>
+                          <td className="px-2 py-1 text-[11px]">{r.division ?? "-"}</td>
+                          <td className="px-2 py-1 text-[11px]">{r.department ?? "-"}</td>
+                          <td className="px-2 py-1 text-[11px]">{r.sub_department ?? "-"}</td>
                           <td className="px-2 py-1 text-right tabular-nums">{r.pack_qty ?? "-"}</td>
                           <td className="px-2 py-1 text-right tabular-nums">{r.box_qty ?? "-"}</td>
                           <td className="px-2 py-1 text-right font-semibold tabular-nums">{r.unit_pick}</td>
