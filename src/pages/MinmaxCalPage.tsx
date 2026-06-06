@@ -2315,7 +2315,7 @@ export default function MinmaxCalPage() {
 
           {/* Toolbar row 2: filters + search */}
           {(() => {
-            const allSizes = [...new Set(upRows.map(r => r.size_store).filter(Boolean))].sort();
+            const allSizes = ["Mini", "Super"];
             const allDivs = [...new Set(upRows.map(r => r.division).filter(Boolean) as string[])].sort();
             const allDepts = [...new Set(upRows.map(r => r.department).filter(Boolean) as string[])].sort();
             const allSubDepts = [...new Set(upRows.map(r => r.sub_department).filter(Boolean) as string[])].sort();
