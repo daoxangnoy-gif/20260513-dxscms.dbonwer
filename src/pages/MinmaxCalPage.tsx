@@ -2197,6 +2197,15 @@ export default function MinmaxCalPage() {
               Import Upsert
             </Button>
             <input ref={upFileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={importUnitPickExcel} />
+            <Button size="sm" variant="outline" className="text-xs h-7"
+              onClick={() => {
+                const ws = XLSX.utils.json_to_sheet([{ sku_code: "", barcode: "", store_name: "", unit_pick: "" }]);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "UnitPick_Import");
+                XLSX.writeFile(wb, "unit_pick_import_template.xlsx");
+              }}>
+              <Download className="w-3.5 h-3.5 mr-1" /> Download Template
+            </Button>
             <Button size="sm" variant="destructive" className="text-xs h-7"
               onClick={deleteUPSelected}
               disabled={upSelected.size === 0}>
