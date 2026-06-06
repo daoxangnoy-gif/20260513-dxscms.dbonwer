@@ -420,17 +420,6 @@ export default function MinmaxCalPage() {
     startElapsedTimer();
     try {
       const t0 = performance.now();
-      const params: any = { p_n_factor: n };
-      if (storeFilter.length) params.p_store_names = storeFilter;
-      if (typeStoreFilter.length) params.p_type_stores = typeStoreFilter;
-      if (itemTypeFilter.length) params.p_item_types = itemTypeFilter;
-      if (buyingFilter.length) params.p_buying_statuses = buyingFilter;
-      if (divisionFilter.length) params.p_divisions = divisionFilter;
-      if (departmentFilter.length) params.p_departments = departmentFilter;
-      if (subDeptFilter.length) params.p_sub_departments = subDeptFilter;
-      if (classFilter.length) params.p_classes = classFilter;
-      if (skuFilter.length) params.p_sku_codes = skuFilter;
-      if (barcodeFilter.length) params.p_barcodes = barcodeFilter;
 
       // Calculate in DB → save to staging → return first 100 rows
       setPhasePct(15);
@@ -483,7 +472,7 @@ export default function MinmaxCalPage() {
       setPhasePct(100); setPhaseLabel("");
       toast({
         title: "คำนวณเสร็จสิ้น",
-        description: `Calc ${calcRows.length.toLocaleString()} แถว`,
+        description: `Calc ${stageResult.total.toLocaleString()} แถว`,
       });
     } catch (err: any) {
       if (err?.message === "__CANCELLED__") {
@@ -662,6 +651,7 @@ export default function MinmaxCalPage() {
       setRows(mapped);
       setHasData(true);
       setPage(0);
+      setHasStaging(false); // exit staging mode — view rows are client-side paginated
       setPhaseTimes({ fetch: ms, rowCount: mapped.length });
       setPhasePct(100); setPhaseLabel("");
       toast({ title: "ดึงข้อมูลสำเร็จ", description: `${mapped.length.toLocaleString()} แถว (${ms}ms)` });
@@ -1156,11 +1146,27 @@ export default function MinmaxCalPage() {
   };
 
   // Export current rows (Calc + Doc merged) — supports 3 modes
-  const exportRows = (mode: "page" | "selected" | "all") => {
+  const exportRows = async (mode: "page" | "selected" | "all") => {
     let source: CalcRow[] = [];
     if (mode === "page") source = pageRows;
     else if (mode === "selected") source = filtered.filter(r => selectedKeys.has(rowKey(r)));
-    else source = filtered;
+    else if (hasStaging && mode === "all") {
+      // staging mode: fetch all from DB
+      try {
+        const { data: allStaged, error: allErr } = await (supabase as any)
+          .rpc("get_staged_minmax_all", { p_user_id: user?.id });
+        if (allErr) throw allErr;
+        const currentEdits = editsMap;
+        source = (Array.isArray(allStaged) ? allStaged : []).map((r: any) => {
+          const base = mapStagingRow(r);
+          const edit = currentEdits.get(rowKey(base));
+          return edit ? { ...base, ...edit } : base;
+        });
+      } catch (err: any) {
+        toast({ title: "Export Error", description: err.message, variant: "destructive" });
+        return;
+      }
+    } else source = filtered;
 
     if (source.length === 0) {
       toast({ title: "ไม่มีข้อมูลให้ Export", variant: "destructive" });
@@ -1404,9 +1410,13 @@ export default function MinmaxCalPage() {
                 <span className="text-foreground">② Merge Doc:</span> {phaseTimes.merge}ms{(phaseTimes.docCount ?? 0) > 0 && <> · +<span className="text-amber-600 dark:text-amber-400 font-bold">{(phaseTimes.docCount ?? 0).toLocaleString()}</span> จาก Doc</>}
               </span>
             )}
-            {rows.length > 0 && (
+            {(hasStaging ? stagingTotal > 0 : rows.length > 0) && (
               <span className="font-medium ml-auto">
-                <span className="text-foreground">③ แสดง:</span> <span className="text-primary font-bold">{filtered.length.toLocaleString()}</span> / รวม {rows.length.toLocaleString()} แถว · หน้า {page + 1}/{totalPages} ({Math.min(filtered.length, (page + 1) * PAGE_SIZE) - page * PAGE_SIZE} แถวบนหน้านี้)
+                <span className="text-foreground">③ แสดง:</span>{" "}
+                <span className="text-primary font-bold">
+                  {hasStaging ? stagingFilteredCount.toLocaleString() : filtered.length.toLocaleString()}
+                </span>
+                {" "}/ รวม {hasStaging ? stagingTotal.toLocaleString() : rows.length.toLocaleString()} แถว · หน้า {page + 1}/{totalPages} ({pageRows.length} แถวบนหน้านี้)
               </span>
             )}
           </div>
