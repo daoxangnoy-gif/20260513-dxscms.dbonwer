@@ -454,37 +454,77 @@ export default function MinmaxCalPage() {
 
       let enrich: UPEnrich;
       if (needEnrich) {
+        // chunk size 200 — each SKU has multiple rows in data_master (one per packing_size_qty)
+        // keeping chunk small ensures result stays well under PostgREST 1000-row cap
+        const CHUNK = 200;
         const dmChunks: string[][] = [];
-        for (let i = 0; i < skuCodes.length; i += 500) dmChunks.push(skuCodes.slice(i, i + 500));
+        for (let i = 0; i < skuCodes.length; i += CHUNK) dmChunks.push(skuCodes.slice(i, i + CHUNK));
 
-        const dmResults = await Promise.all(dmChunks.map(slice =>
-          supabase
-            .from("data_master")
-            .select("sku_code, main_barcode, product_name_la, product_name_en, division, department, sub_department, unit_of_measure, packing_size_qty")
-            .in("sku_code", slice)
-            .then(({ data }) => data || [])
-        ));
+        // 3 parallel queries per chunk — each returns at most 1 meaningful row per SKU
+        type BaseRow = { sku_code: string; main_barcode: string | null; product_name_la: string | null; product_name_en: string | null; division: string | null; department: string | null; sub_department: string | null };
+        type PackRow = { sku_code: string; packing_size_qty: number };
+
+        const [baseResults, packResults, boxResults] = await Promise.all([
+          // packing_size_qty = 1 → barcode + name + division
+          Promise.all(dmChunks.map(slice =>
+            supabase.from("data_master")
+              .select("sku_code, main_barcode, product_name_la, product_name_en, division, department, sub_department")
+              .in("sku_code", slice).eq("packing_size_qty", 1)
+              .then(({ data }) => (data || []) as BaseRow[])
+          )),
+          // unit_of_measure = Pack → min packing_size_qty
+          Promise.all(dmChunks.map(slice =>
+            supabase.from("data_master")
+              .select("sku_code, packing_size_qty")
+              .in("sku_code", slice).eq("unit_of_measure", "Pack")
+              .then(({ data }) => (data || []) as PackRow[])
+          )),
+          // unit_of_measure = Box → min packing_size_qty
+          Promise.all(dmChunks.map(slice =>
+            supabase.from("data_master")
+              .select("sku_code, packing_size_qty")
+              .in("sku_code", slice).eq("unit_of_measure", "Box")
+              .then(({ data }) => (data || []) as PackRow[])
+          )),
+        ]);
 
         type RsvEntry = { main_barcode: string | null; product_name_la: string | null; product_name_en: string | null; pack_qty: number | null; box_qty: number | null; division: string | null; department: string | null; sub_department: string | null };
         const rsvMap = new Map<string, RsvEntry>();
-        for (const d of dmResults.flat()) {
-          const sku = (d as any).sku_code as string;
-          const uom = ((d as any).unit_of_measure || "").toString().trim().toLowerCase();
-          const pqty = (d as any).packing_size_qty != null ? Number((d as any).packing_size_qty) : null;
 
-          if (!rsvMap.has(sku)) {
-            rsvMap.set(sku, {
-              main_barcode: null, product_name_la: (d as any).product_name_la ?? null,
-              product_name_en: (d as any).product_name_en ?? null,
+        // base info from packing_size_qty = 1 rows
+        for (const d of baseResults.flat()) {
+          if (!rsvMap.has(d.sku_code)) {
+            rsvMap.set(d.sku_code, {
+              main_barcode: d.main_barcode ?? null,
+              product_name_la: d.product_name_la ?? null,
+              product_name_en: d.product_name_en ?? null,
               pack_qty: null, box_qty: null,
-              division: (d as any).division ?? null, department: (d as any).department ?? null,
-              sub_department: (d as any).sub_department ?? null,
+              division: d.division ?? null,
+              department: d.department ?? null,
+              sub_department: d.sub_department ?? null,
             });
+          } else if (!rsvMap.get(d.sku_code)!.main_barcode) {
+            rsvMap.get(d.sku_code)!.main_barcode = d.main_barcode ?? null;
           }
-          const entry = rsvMap.get(sku)!;
-          if (pqty === 1 && !entry.main_barcode) entry.main_barcode = (d as any).main_barcode ?? null;
-          if (uom === "pack" && pqty != null) entry.pack_qty = entry.pack_qty == null ? pqty : Math.min(entry.pack_qty, pqty);
-          if (uom === "box" && pqty != null) entry.box_qty = entry.box_qty == null ? pqty : Math.min(entry.box_qty, pqty);
+        }
+        // ensure all SKUs have an entry even if packing_size_qty=1 row is missing
+        for (const sku of skuCodes) {
+          if (!rsvMap.has(sku)) rsvMap.set(sku, { main_barcode: null, product_name_la: null, product_name_en: null, pack_qty: null, box_qty: null, division: null, department: null, sub_department: null });
+        }
+
+        // pack_qty: min packing_size_qty where uom = Pack
+        for (const d of packResults.flat()) {
+          const entry = rsvMap.get(d.sku_code);
+          if (!entry) continue;
+          const v = Number(d.packing_size_qty);
+          if (Number.isFinite(v)) entry.pack_qty = entry.pack_qty == null ? v : Math.min(entry.pack_qty, v);
+        }
+        // box_qty: min packing_size_qty where uom = Box
+        for (const d of boxResults.flat()) {
+          const entry = rsvMap.get(d.sku_code);
+          if (!entry) continue;
+          const v = Number(d.packing_size_qty);
+          if (Number.isFinite(v)) entry.box_qty = entry.box_qty == null ? v : Math.min(entry.box_qty, v);
         }
 
         enrich = { rsvMap };
