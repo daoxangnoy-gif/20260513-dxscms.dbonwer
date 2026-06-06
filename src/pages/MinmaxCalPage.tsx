@@ -915,7 +915,7 @@ export default function MinmaxCalPage() {
           delCnt = Number(data) || 0;
         } else if (typeStoreFilter.length > 0) {
           // มี type filter → ลบทุกสาขาใน type (ไม่จำกัดแค่ที่อยู่ใน payload)
-          const scopeStores = (cache.storeList as { store_name: string; type_store: string }[])
+          const scopeStores = filterOpts.stores
             .filter(s => typeStoreFilter.includes(s.type_store))
             .map(s => s.store_name);
           if (scopeStores.length > 0) {
