@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -1188,6 +1189,7 @@ export default function SRRSendDocsPage() {
   const [compareResult, setCompareResult] = useState<{
     matched: number; missing: string[]; extra: string[];
   } | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // ===== Dest scan draft: persist destCodes + state to localStorage =====
   const [hasDestDraft, setHasDestDraft] = useState(false);
@@ -1761,6 +1763,16 @@ export default function SRRSendDocsPage() {
     if (!confirm("ลบเอกสารนี้?")) return;
     const { error } = await supabase.from("document_shipments").delete().eq("id", id);
     if (error) { toast({ title: "ลบไม่สำเร็จ", description: error.message, variant: "destructive" }); return; }
+    setSelectedIds(prev => { const s = new Set(prev); s.delete(id); return s; });
+    load();
+  };
+
+  const handleDeleteSelected = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    if (!confirm(`ลบ ${ids.length} เอกสารที่เลือก?`)) return;
+    const { error } = await supabase.from("document_shipments").delete().in("id", ids);
+    if (error) { toast({ title: "ลบไม่สำเร็จ", description: error.message, variant: "destructive" }); return; }
+    setSelectedIds(new Set());
     load();
   };
 
@@ -1854,21 +1866,64 @@ export default function SRRSendDocsPage() {
             )}
           </div>
 
+          {isAdmin && selectedIds.size > 0 && (
+            <div className="flex items-center gap-2 px-1 py-1.5">
+              <span className="text-sm text-muted-foreground">เลือก {selectedIds.size} รายการ</span>
+              <Button size="sm" variant="destructive" onClick={() => handleDeleteSelected([...selectedIds])}>
+                <Trash2 className="w-3.5 h-3.5 mr-1" />ลบที่เลือก ({selectedIds.size})
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setSelectedIds(new Set())}>ยกเลิก</Button>
+            </div>
+          )}
           <div className="border rounded overflow-auto max-h-[calc(100vh-260px)]">
             <table className="w-full text-sm">
               <thead className="bg-muted sticky top-0 z-10">
-                <tr>
-                  <th className="w-6 p-2"></th>
-                  <th className="text-left p-2">Doc</th>
-                  <th className="text-left p-2">ผู้ฝาก</th>
-                  <th className="text-left p-2">ผู้รับปลายทาง</th>
-                  <th className="text-center p-2">จำนวนฝาก</th>
-                  <th className="text-center p-2">จำนวนถึง</th>
-                  <th className="text-center p-2">สถานะ</th>
-                  <th className="text-left p-2">วันที่เวลา สะแกนฝาก</th>
-                  <th className="text-left p-2">วันที่เวลา สะแกนรับ</th>
-                  <th className="text-right p-2">การจัดการ</th>
-                </tr>
+                {(() => {
+                  const q = depositSearch.trim().toLowerCase();
+                  const visibleIds = (!q ? items : items.filter((s) => {
+                    if ((s.doc_name || "").toLowerCase().includes(q)) return true;
+                    if ((s.depositor_name || "").toLowerCase().includes(q)) return true;
+                    if ((s.receiver_name || "").toLowerCase().includes(q)) return true;
+                    const codes = s.origin_codes || [];
+                    if (codes.some(c => (c || "").toLowerCase().includes(q))) return true;
+                    if (codes.some(c => (poInfoMap[c]?.partner || "").toLowerCase().includes(q))) return true;
+                    const mvs = movements.filter(m => m.shipment_id === s.id);
+                    if (mvs.some(m => (m.depositor_name || "").toLowerCase().includes(q) || (m.receiver_name || "").toLowerCase().includes(q))) return true;
+                    return false;
+                  })).map(s => s.id);
+                  const allChecked = visibleIds.length > 0 && visibleIds.every(id => selectedIds.has(id));
+                  const someChecked = visibleIds.some(id => selectedIds.has(id));
+                  return (
+                    <tr>
+                      <th className="w-8 p-2 text-center">
+                        {isAdmin && (
+                          <Checkbox
+                            checked={allChecked}
+                            ref={(el) => { if (el) (el as any).indeterminate = someChecked && !allChecked; }}
+                            onCheckedChange={(checked) => {
+                              setSelectedIds(prev => {
+                                const s = new Set(prev);
+                                if (checked) visibleIds.forEach(id => s.add(id));
+                                else visibleIds.forEach(id => s.delete(id));
+                                return s;
+                              });
+                            }}
+                          />
+                        )}
+                      </th>
+                      <th className="w-6 p-2"></th>
+                      <th className="text-left p-2">Doc</th>
+                      <th className="text-left p-2">ผู้ฝาก</th>
+                      <th className="text-left p-2">ผู้รับปลายทาง</th>
+                      <th className="text-center p-2">จำนวนฝาก</th>
+                      <th className="text-center p-2">จำนวนถึง</th>
+                      <th className="text-center p-2">สถานะ</th>
+                      <th className="text-left p-2">วันที่เวลา สะแกนฝาก</th>
+                      <th className="text-left p-2">วันที่เวลา สะแกนรับ</th>
+                      <th className="text-right p-2">การจัดการ</th>
+                    </tr>
+                  );
+                })()}
               </thead>
               <tbody>
                 {(() => {
@@ -1885,8 +1940,8 @@ export default function SRRSendDocsPage() {
                     if (mvs.some(m => (m.depositor_name || "").toLowerCase().includes(q) || (m.receiver_name || "").toLowerCase().includes(q))) return true;
                     return false;
                   });
-                  if (loading) return <tr><td colSpan={10} className="text-center p-6 text-muted-foreground">กำลังโหลด...</td></tr>;
-                  if (filteredItems.length === 0) return <tr><td colSpan={10} className="text-center p-6 text-muted-foreground">{q ? "ไม่พบรายการที่ค้นหา" : "ยังไม่มีเอกสาร"}</td></tr>;
+                  if (loading) return <tr><td colSpan={11} className="text-center p-6 text-muted-foreground">กำลังโหลด...</td></tr>;
+                  if (filteredItems.length === 0) return <tr><td colSpan={11} className="text-center p-6 text-muted-foreground">{q ? "ไม่พบรายการที่ค้นหา" : "ยังไม่มีเอกสาร"}</td></tr>;
                   return filteredItems.map((s) => {
                   const originN = s.origin_codes?.length || 0;
                   const destN = s.destination_codes?.length || 0;
@@ -1930,10 +1985,35 @@ export default function SRRSendDocsPage() {
                     docMvs.find(m => m.action === "origin_save")?.location_name || s.depositor_name || "?",
                     ...docMvs.filter(m => m.action !== "origin_save").map(m => m.location_name),
                   ];
+                  const isSelected = selectedIds.has(s.id);
                   return (
                     <FragmentRow key={s.id}>
-                    <tr className="border-t hover:bg-muted/40">
-                      <td className="p-2 text-center">
+                    <tr
+                      className={`border-t hover:bg-muted/40 cursor-pointer ${isSelected ? "bg-blue-50" : ""}`}
+                      onClick={(e) => {
+                        if (!isAdmin) return;
+                        const tag = (e.target as HTMLElement).closest("button,a,input,label");
+                        if (tag) return;
+                        setSelectedIds(prev => {
+                          const s2 = new Set(prev);
+                          if (s2.has(s.id)) s2.delete(s.id); else s2.add(s.id);
+                          return s2;
+                        });
+                      }}
+                    >
+                      <td className="p-2 text-center" onClick={e => e.stopPropagation()}>
+                        {isAdmin && (
+                          <Checkbox
+                            checked={isSelected}
+                            onCheckedChange={() => setSelectedIds(prev => {
+                              const s2 = new Set(prev);
+                              if (s2.has(s.id)) s2.delete(s.id); else s2.add(s.id);
+                              return s2;
+                            })}
+                          />
+                        )}
+                      </td>
+                      <td className="p-2 text-center" onClick={e => e.stopPropagation()}>
                         <Button size="icon" variant="ghost" className="h-6 w-6"
                           onClick={() => setExpandedId(expanded ? null : s.id)}>
                           {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
@@ -1973,7 +2053,7 @@ export default function SRRSendDocsPage() {
                       </td>
                       <td className="p-2 whitespace-nowrap">{fmt(s.origin_scanned_at)}</td>
                       <td className="p-2 whitespace-nowrap">{fmt(s.destination_scanned_at)}</td>
-                      <td className="p-2 text-right space-x-1 whitespace-nowrap">
+                      <td className="p-2 text-right space-x-1 whitespace-nowrap" onClick={e => e.stopPropagation()}>
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button size="icon" variant="ghost" className="h-7 w-7" disabled={fetchingPo}
@@ -2033,7 +2113,7 @@ export default function SRRSendDocsPage() {
                     </tr>
                     {expanded && (
                       <tr className="bg-muted/30">
-                        <td colSpan={10} className="p-3">
+                        <td colSpan={11} className="p-3">
                           <div className="text-xs font-semibold mb-2">รายละเอียด PO ({originN} รายการ) — กด "ดึงข้อมูล PO" เพื่อ Match ข้อมูลจาก List PO</div>
                           <div className="overflow-auto max-h-[60vh] border rounded">
                             <table className="w-full text-xs border">
