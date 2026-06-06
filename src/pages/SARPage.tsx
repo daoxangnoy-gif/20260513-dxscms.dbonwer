@@ -222,7 +222,7 @@ export default function SARPage() {
   const [loadStartedAt, setLoadStartedAt] = useState<number | null>(null);
   const [calcStartedAt, setCalcStartedAt] = useState<number | null>(null);
 
-  const SAR_RAWDOC_CACHE_KEY = "sar_rawdoc_cache_v2";
+  const SAR_RAWDOC_CACHE_KEY = "sar_rawdoc_cache_v1";
 
   const loadRawDoc = useCallback(async () => {
     setRawDocLoading(true);
@@ -518,8 +518,10 @@ export default function SARPage() {
         return {
           sku_code: r.sku_code,
           main_barcode: dm?.main_barcode ?? r.main_barcode,
-          product_name_la: r.product_name_la, product_name_en: r.product_name_en,
-          unit_of_measure: r.unit_of_measure, store_name: r.store_name,
+          product_name_la: r.product_name_la || dm?.product_name_la || null,
+          product_name_en: r.product_name_en || dm?.product_name_en || null,
+          unit_of_measure: r.unit_of_measure || dm?.unit_of_measure || null,
+          store_name: r.store_name,
           type_store: r.type_store || "",
           division: r.division || dm?.division || "",
           department: r.department || dm?.department || "",
