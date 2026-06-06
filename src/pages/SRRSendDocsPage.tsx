@@ -619,13 +619,14 @@ function ReportTab({ items, movements, poInfoMap, ensurePoInfo, canExport, final
   );
   const latestScanByCode: Record<string, { shipmentId: string; location: string }> = {};
   for (const m of allMovesAsc) {
-    if (m.action !== "adjust" && m.action !== "arrived") continue;
+    // origin_save included: ถ้า origin_save ใหม่กว่า arrived เก่า แสดงว่า PO ถูกรับเข้า doc ใหม่แล้ว
+    if (m.action !== "adjust" && m.action !== "arrived" && m.action !== "origin_save") continue;
     for (const c of (m.codes || [])) {
       latestScanByCode[c] = { shipmentId: m.shipment_id, location: m.location_name };
     }
   }
 
-  // For codes never scanned: owner = most recently created shipment having that code in origin_codes
+  // For codes never in any movement: owner = most recently created shipment having that code in origin_codes
   const codeToShipsMap: Record<string, Shipment[]> = {};
   items.forEach(s => {
     (s.origin_codes || []).forEach(c => {
