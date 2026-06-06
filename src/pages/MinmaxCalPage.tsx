@@ -376,13 +376,9 @@ export default function MinmaxCalPage() {
     if (classFilter.length) p.p_classes = classFilter;
     if (skuFilter.length) p.p_sku_codes = skuFilter;
     if (barcodeFilter.length) p.p_barcodes = barcodeFilter;
-    for (const chip of searchChips) {
-      if (chip.col === "sku_code") p.p_search_sku = chip.value;
-      else if (chip.col === "main_barcode") p.p_search_barcode = chip.value;
-      else if (chip.col === "product_name_la" || chip.col === "product_name_en") p.p_search_name = chip.value;
-      else if (chip.col === "store_name") p.p_search_store = chip.value;
-    }
-    if (searchValue.trim() && !p.p_search_name) p.p_search_name = searchValue.trim();
+    // รวม searchChips + searchValue เป็น p_search_any (ค้นข้ามทุก field)
+    const searchTerm = searchChips.map(c => c.value).join(" ").trim() || searchValue.trim();
+    if (searchTerm) p.p_search_any = searchTerm;
     return p;
   };
 
@@ -579,6 +575,8 @@ export default function MinmaxCalPage() {
     if (classFilter.length) p.p_classes = classFilter;
     if (skuFilter.length) p.p_skus = skuFilter;
     if (barcodeFilter.length) p.p_barcodes = barcodeFilter;
+    const searchTerm = searchChips.map(c => c.value).join(" ").trim() || searchValue.trim();
+    if (searchTerm) p.p_search_any = searchTerm;
     return p;
   };
 
@@ -632,7 +630,8 @@ export default function MinmaxCalPage() {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasViewPaging, storeFilter, typeStoreFilter, itemTypeFilter, buyingFilter,
-      divisionFilter, departmentFilter, subDeptFilter, classFilter, skuFilter, barcodeFilter]);
+      divisionFilter, departmentFilter, subDeptFilter, classFilter, skuFilter,
+      barcodeFilter, searchChips, searchValue]);
 
   const handleView = useCallback(async () => {
     const hasAny = storeFilter.length || typeStoreFilter.length || itemTypeFilter.length || buyingFilter.length
