@@ -1316,19 +1316,19 @@ export default function SARPage() {
         </TabsContent>}
 
         {canOnOrder && (
-          <TabsContent value="on_order_dc" className="flex-1 overflow-hidden mt-0 data-[state=active]:flex flex-col">
+          <TabsContent forceMount value="on_order_dc" className="flex-1 overflow-hidden mt-0 data-[state=active]:flex data-[state=inactive]:hidden flex-col">
             <SAROnOrderDCTab />
           </TabsContent>
         )}
 
         {canSkuNoOrd && (
-          <TabsContent value="sku_no_order" className="flex-1 overflow-hidden mt-0 data-[state=active]:flex flex-col">
+          <TabsContent forceMount value="sku_no_order" className="flex-1 overflow-hidden mt-0 data-[state=active]:flex data-[state=inactive]:hidden flex-col">
             <SARSkuNoOrderTab />
           </TabsContent>
         )}
 
         {canOFS && (
-          <TabsContent value="order_from_store" className="flex-1 overflow-hidden mt-0 data-[state=active]:flex flex-col">
+          <TabsContent forceMount value="order_from_store" className="flex-1 overflow-hidden mt-0 data-[state=active]:flex data-[state=inactive]:hidden flex-col">
             <SAROrderFromStoreTab />
           </TabsContent>
         )}
