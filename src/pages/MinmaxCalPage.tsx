@@ -1371,7 +1371,7 @@ export default function MinmaxCalPage() {
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => exportRows("all")}>
-                <Download className="w-3.5 h-3.5 mr-2" /> Export All Filtered ({filtered.length.toLocaleString()})
+                <Download className="w-3.5 h-3.5 mr-2" /> Export All Filtered ({(hasStaging ? stagingFilteredCount : filtered.length).toLocaleString()})
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
