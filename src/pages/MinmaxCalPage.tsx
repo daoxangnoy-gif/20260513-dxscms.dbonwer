@@ -319,7 +319,14 @@ export default function MinmaxCalPage() {
   const [upFilterSubDept, setUpFilterSubDept] = useState<string[]>([]);
   const [upPage, setUpPage] = useState(0);
   const UP_PAGE_SIZE = 100;
+  const [upStoreOpts, setUpStoreOpts] = useState<{ store_name: string; type_store: string }[]>([]);
   useEffect(() => { setUpPage(0); }, [upSearch, upFilterStore, upFilterType, upFilterDiv, upFilterDept, upFilterSubDept]);
+  // Load store options from store_type once on mount (for filter before Show)
+  useEffect(() => {
+    supabase.from("store_type").select("store_name, type_store").then(({ data }) => {
+      if (data) setUpStoreOpts(data as any[]);
+    });
+  }, []);
 
   // View paging state (View → server-side pagination from minmax table)
   const [hasViewPaging, setHasViewPaging] = useState(false);
@@ -2326,8 +2333,10 @@ export default function MinmaxCalPage() {
 
           {/* Toolbar row 2: filters + search */}
           {(() => {
-            const allTypes = [...new Set(upRows.map(r => r.type_store).filter(Boolean) as string[])].sort();
-            const allStores = [...new Set(upRows.map(r => r.store_name))].sort();
+            // Type Store + Store: from store_type (available before Show)
+            const allTypes = [...new Set(upStoreOpts.map(r => r.type_store).filter(Boolean))].sort();
+            const allStores = [...new Set(upStoreOpts.map(r => r.store_name))].sort();
+            // Division/Dept/SubDept: from loaded data (available after Show)
             const allDivs = [...new Set(upRows.map(r => r.division).filter(Boolean) as string[])].sort();
             const allDepts = [...new Set(upRows.map(r => r.department).filter(Boolean) as string[])].sort();
             const allSubDepts = [...new Set(upRows.map(r => r.sub_department).filter(Boolean) as string[])].sort();
