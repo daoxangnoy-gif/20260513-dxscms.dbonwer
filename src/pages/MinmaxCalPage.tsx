@@ -344,14 +344,14 @@ export default function MinmaxCalPage() {
       if (skuFilter.length) params.p_sku_codes = skuFilter;
       if (barcodeFilter.length) params.p_barcodes = barcodeFilter;
 
-      // Fetch all calc rows in batches
+      // Fetch all calc rows — single JSONB call (no row-limit pagination)
       setPhasePct(15);
-      let lastBatchCount = 0;
-      const fetched = await fetchAllCalc(params, (loaded, batches) => {
-        lastBatchCount = batches;
-        setPhaseLabel(`อ่าน batch #${batches} · รวม ${loaded.toLocaleString()} แถว`);
-        setPhasePct(Math.min(60, 15 + batches * 5));
-      }, () => cancelCalcRef.current);
+      setPhaseLabel("กำลังดึงข้อมูลจาก DB...");
+      checkCancel();
+      const { data: jsonData, error: jsonErr } = await (supabase as any).rpc("get_minmax_calc_json", params);
+      if (jsonErr) throw jsonErr;
+      const fetched: any[] = Array.isArray(jsonData) ? jsonData : [];
+      const lastBatchCount = 1;
       const fetchMs = Math.round(performance.now() - t0);
       setPhasePct(60);
       setPhaseLabel(`รับข้อมูล ${fetched.length.toLocaleString()} แถว · ${fetchMs}ms`);
