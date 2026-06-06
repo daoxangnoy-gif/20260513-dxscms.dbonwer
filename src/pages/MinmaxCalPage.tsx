@@ -317,6 +317,8 @@ export default function MinmaxCalPage() {
   const [upPage, setUpPage] = useState(0);
   const UP_PAGE_SIZE = 100;
   useEffect(() => { setUpPage(0); }, [upSearch, upFilterSize, upFilterDiv, upFilterDept, upFilterSubDept]);
+  const [upEdits, setUpEdits] = useState<Map<string, string>>(new Map()); // key=sku|size, value=edited string
+  const [upSaving, setUpSaving] = useState(false);
 
   // View paging state (View → server-side pagination from minmax table)
   const [hasViewPaging, setHasViewPaging] = useState(false);
@@ -2305,6 +2307,45 @@ export default function MinmaxCalPage() {
               disabled={upSelected.size === 0}>
               <Trash2 className="w-3.5 h-3.5 mr-1" /> Delete ({upSelected.size})
             </Button>
+            {upEdits.size > 0 && (
+              <Button size="sm" className="text-xs h-7 bg-green-600 hover:bg-green-700"
+                disabled={upSaving}
+                onClick={async () => {
+                  setUpSaving(true);
+                  try {
+                    const payload = Array.from(upEdits.entries())
+                      .map(([key, val]) => {
+                        const [sku_code, ...rest] = key.split("|");
+                        const v = Number(val);
+                        return Number.isFinite(v) && v >= 1 ? { sku_code, size_store: rest.join("|"), unit_pick: v } : null;
+                      })
+                      .filter(Boolean) as { sku_code: string; size_store: string; unit_pick: number }[];
+                    if (payload.length === 0) { toast({ title: "ไม่มีค่าที่ valid", variant: "destructive" }); return; }
+                    const CHUNK = 500;
+                    for (let i = 0; i < payload.length; i += CHUNK) {
+                      const { error } = await (supabase as any).from("unit_pick_override").upsert(payload.slice(i, i + CHUNK), { onConflict: "sku_code,size_store" });
+                      if (error) throw error;
+                    }
+                    // Apply edits to upRows
+                    const editMap = new Map(payload.map(p => [`${p.sku_code}|${p.size_store}`, p.unit_pick]));
+                    setUpRows(prev => prev.map(r => {
+                      const newVal = editMap.get(`${r.sku_code}|${r.size_store}`);
+                      return newVal != null ? { ...r, unit_pick: newVal } : r;
+                    }));
+                    // Update override ref
+                    for (const [key, val] of editMap) unitPickOverrideRef.current.set(key, val);
+                    setUpEdits(new Map());
+                    toast({ title: `บันทึก ${payload.length} รายการเรียบร้อย` });
+                  } catch (err: any) {
+                    toast({ title: "Save Error", description: err.message, variant: "destructive" });
+                  } finally {
+                    setUpSaving(false);
+                  }
+                }}>
+                {upSaving ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-1" />}
+                Save ({upEdits.size})
+              </Button>
+            )}
             {upHasLoaded && upRows.length > 0 && (() => {
               const q = upSearch.trim().toLowerCase();
               const filtered = upRows.filter(r => {
@@ -2478,16 +2519,18 @@ export default function MinmaxCalPage() {
                             }}
                           />
                         </th>
-                        {["Size Store", "SKU Code", "Barcode", "Product Name (LA)", "Product Name (EN)", "Division", "Department", "Sub Dept", "Pack", "Box", "Unit Pick"].map(h => (
-                          <th key={h} className="px-2 py-1.5 text-left font-medium border-b border-border whitespace-nowrap bg-muted">{h}</th>
+                        {["Size Store", "SKU Code", "Barcode", "Product Name (LA)", "Product Name (EN)", "Division", "Department", "Sub Dept", "Pack", "Box", "Unit Pick", "Edit"].map(h => (
+                          <th key={h} className={cn("px-2 py-1.5 text-left font-medium border-b border-border whitespace-nowrap bg-muted", h === "Edit" && "text-blue-600")}>{h}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
                       {pageRows.length === 0 ? (
-                        <tr><td colSpan={12} className="px-4 py-8 text-center text-muted-foreground">ไม่มีข้อมูล</td></tr>
-                      ) : pageRows.map(r => {
+                        <tr><td colSpan={13} className="px-4 py-8 text-center text-muted-foreground">ไม่มีข้อมูล</td></tr>
+                      ) : pageRows.map((r, rowIdx) => {
                         const key = `${r.sku_code}|${r.size_store}`;
+                        const editVal = upEdits.get(key);
+                        const isEdited = editVal !== undefined && editVal !== String(r.unit_pick);
                         return (
                           <tr key={key} className={cn("border-b border-border/40 hover:bg-muted/30", upSelected.has(key) && "bg-primary/5", !r.main_barcode && "bg-amber-50/60 dark:bg-amber-950/20")}>
                             <td className="px-2 py-1 w-8">
@@ -2512,7 +2555,40 @@ export default function MinmaxCalPage() {
                             <td className="px-2 py-1 text-[11px]">{r.sub_department ?? "-"}</td>
                             <td className="px-2 py-1 text-right tabular-nums">{r.pack_qty ?? "-"}</td>
                             <td className="px-2 py-1 text-right tabular-nums">{r.box_qty ?? "-"}</td>
-                            <td className="px-2 py-1 text-right font-semibold tabular-nums">{r.unit_pick}</td>
+                            <td className={cn("px-2 py-1 text-right font-semibold tabular-nums", isEdited && "line-through text-muted-foreground")}>{r.unit_pick}</td>
+                            <td className="px-1 py-0.5 w-16">
+                              <input
+                                type="number"
+                                min={1}
+                                data-upidx={rowIdx}
+                                value={editVal ?? String(r.unit_pick)}
+                                className={cn(
+                                  "w-14 h-6 text-xs text-right px-1 rounded border tabular-nums font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500",
+                                  isEdited ? "border-blue-400 bg-blue-50 text-blue-700 dark:bg-blue-950/30" : "border-border bg-background"
+                                )}
+                                onChange={e => {
+                                  const v = e.target.value;
+                                  setUpEdits(prev => {
+                                    const next = new Map(prev);
+                                    if (v === "" || v === String(r.unit_pick)) next.delete(key);
+                                    else next.set(key, v);
+                                    return next;
+                                  });
+                                }}
+                                onKeyDown={e => {
+                                  if (e.key === "Enter" || e.key === "ArrowDown") {
+                                    e.preventDefault();
+                                    const next = document.querySelector<HTMLInputElement>(`[data-upidx="${rowIdx + 1}"]`);
+                                    next?.focus(); next?.select();
+                                  } else if (e.key === "ArrowUp") {
+                                    e.preventDefault();
+                                    const prev = document.querySelector<HTMLInputElement>(`[data-upidx="${rowIdx - 1}"]`);
+                                    prev?.focus(); prev?.select();
+                                  }
+                                }}
+                                onFocus={e => e.target.select()}
+                              />
+                            </td>
                           </tr>
                         );
                       })}
