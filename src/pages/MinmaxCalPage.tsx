@@ -2390,7 +2390,7 @@ export default function MinmaxCalPage() {
                   <div className="px-3 py-1 text-[11px] text-muted-foreground border-b border-border bg-muted/50 flex items-center gap-3">
                     <span>กรอง {filtered.length.toLocaleString()} / {upRows.length.toLocaleString()} แถว</span>
                     {upSelected.size > 0 && <span className="text-primary font-medium">· เลือก {upSelected.size} แถว</span>}
-                    {missingCount > 0 && <span className="text-amber-600 font-medium">⚠ {missingCount} แถวไม่พบใน range_store_view</span>}
+                    {missingCount > 0 && <span className="text-amber-600 font-medium">⚠ {missingCount} แถวไม่พบใน data_master</span>}
                     <div className="flex-1" />
                     <span>หน้า {safePage + 1} / {totalPages}</span>
                     <button
