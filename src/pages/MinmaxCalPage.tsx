@@ -126,6 +126,7 @@ interface UPRow {
   unit_pick: number;
   main_barcode: string | null;
   product_name_la: string | null;
+  product_name_en: string | null;
   pack_qty: number | null;
   box_qty: number | null;
   division: string | null;
@@ -304,6 +305,11 @@ export default function MinmaxCalPage() {
   const [upSelected, setUpSelected] = useState<Set<string>>(new Set());
   const [upImporting, setUpImporting] = useState(false);
   const upFileRef = useRef<HTMLInputElement>(null);
+  const [upFilterStore, setUpFilterStore] = useState<string[]>([]);
+  const [upFilterType, setUpFilterType] = useState<string[]>([]);
+  const [upFilterDiv, setUpFilterDiv] = useState<string[]>([]);
+  const [upFilterDept, setUpFilterDept] = useState<string[]>([]);
+  const [upFilterSubDept, setUpFilterSubDept] = useState<string[]>([]);
 
   // View paging state (View → server-side pagination from minmax table)
   const [hasViewPaging, setHasViewPaging] = useState(false);
@@ -421,17 +427,18 @@ export default function MinmaxCalPage() {
       const skuCodes = [...new Set(list.map((r: any) => r.sku_code as string))];
 
       // Fetch display info from data_master
-      const dmMap = new Map<string, { main_barcode: string | null; product_name_la: string | null; division: string | null; department: string | null; sub_department: string | null }>();
+      const dmMap = new Map<string, { main_barcode: string | null; product_name_la: string | null; product_name_en: string | null; division: string | null; department: string | null; sub_department: string | null }>();
       for (let i = 0; i < skuCodes.length; i += 500) {
         const slice = skuCodes.slice(i, i + 500);
         const { data: dm } = await supabase
           .from("data_master")
-          .select("sku_code, main_barcode, product_name_la, division, department, sub_department")
+          .select("sku_code, main_barcode, product_name_la, product_name_en, division, department, sub_department")
           .in("sku_code", slice)
           .eq("packing_size_qty", 1);
         for (const d of (dm || [])) {
           if (!dmMap.has(d.sku_code)) dmMap.set(d.sku_code, {
             main_barcode: d.main_barcode, product_name_la: d.product_name_la,
+            product_name_en: (d as any).product_name_en ?? null,
             division: (d as any).division ?? null, department: (d as any).department ?? null, sub_department: (d as any).sub_department ?? null,
           });
         }
@@ -466,6 +473,7 @@ export default function MinmaxCalPage() {
         unit_pick: r.unit_pick,
         main_barcode: dmMap.get(r.sku_code)?.main_barcode ?? null,
         product_name_la: dmMap.get(r.sku_code)?.product_name_la ?? null,
+        product_name_en: dmMap.get(r.sku_code)?.product_name_en ?? null,
         pack_qty: rsMap.get(`${r.sku_code}|${r.store_name}`)?.pack_qty ?? null,
         box_qty: rsMap.get(`${r.sku_code}|${r.store_name}`)?.box_qty ?? null,
         division: dmMap.get(r.sku_code)?.division ?? null,
@@ -2180,8 +2188,8 @@ export default function MinmaxCalPage() {
 
         {/* ============== UNIT PICK TAB ============== */}
         <TabsContent value="unitpick" className="flex-1 min-h-0 flex flex-col overflow-hidden px-6 !mt-2 data-[state=inactive]:hidden data-[state=active]:flex">
-          {/* Toolbar */}
-          <div className="pb-2 flex items-center gap-2 flex-wrap">
+          {/* Toolbar row 1: action buttons */}
+          <div className="pb-1 flex items-center gap-2 flex-wrap">
             <Button size="sm" variant="outline" className="text-xs h-7"
               onClick={() => upFileRef.current?.click()}
               disabled={upImporting}>
@@ -2199,34 +2207,50 @@ export default function MinmaxCalPage() {
               {upLoading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5 mr-1" />}
               Refresh
             </Button>
-            <div className="flex-1" />
-            <div className="relative">
-              <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-              <Input
-                value={upSearch}
-                onChange={e => setUpSearch(e.target.value)}
-                placeholder="ค้นหา SKU / Store / Barcode..."
-                className="pl-7 h-7 text-xs w-64"
-              />
-              {upSearch && (
-                <button className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" onClick={() => setUpSearch("")}>
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
-            <span className="text-xs text-muted-foreground">
-              {(() => {
-                const q = upSearch.trim().toLowerCase();
-                const filtered = q ? upRows.filter(r =>
-                  r.sku_code.toLowerCase().includes(q) ||
-                  r.store_name.toLowerCase().includes(q) ||
-                  (r.main_barcode || "").toLowerCase().includes(q) ||
-                  (r.product_name_la || "").toLowerCase().includes(q)
-                ) : upRows;
-                return `${filtered.length.toLocaleString()} / ${upRows.length.toLocaleString()} แถว`;
-              })()}
-            </span>
           </div>
+
+          {/* Toolbar row 2: filters + search */}
+          {(() => {
+            const allTypes = [...new Set(upRows.map(r => r.type_store).filter(Boolean) as string[])].sort();
+            const allStores = [...new Set(upRows.map(r => r.store_name))].sort();
+            const allDivs = [...new Set(upRows.map(r => r.division).filter(Boolean) as string[])].sort();
+            const allDepts = [...new Set(upRows.map(r => r.department).filter(Boolean) as string[])].sort();
+            const allSubDepts = [...new Set(upRows.map(r => r.sub_department).filter(Boolean) as string[])].sort();
+            return (
+              <div className="pb-2 flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-medium text-muted-foreground">Filter:</span>
+                <MultiSelectFilter label="Type Store" icon={<Layers className="w-3 h-3 mr-1" />}
+                  options={allTypes} selected={upFilterType} onChange={setUpFilterType} width="w-44" />
+                <MultiSelectFilter label="Store" icon={<Store className="w-3 h-3 mr-1" />}
+                  options={allStores} selected={upFilterStore} onChange={setUpFilterStore} width="w-72" />
+                <MultiSelectFilter label="Division" icon={<Tag className="w-3 h-3 mr-1" />}
+                  options={allDivs} selected={upFilterDiv} onChange={setUpFilterDiv} width="w-52" />
+                <MultiSelectFilter label="Department" options={allDepts} selected={upFilterDept} onChange={setUpFilterDept} width="w-52" />
+                <MultiSelectFilter label="Sub Dept" options={allSubDepts} selected={upFilterSubDept} onChange={setUpFilterSubDept} width="w-52" />
+                {(upFilterType.length || upFilterStore.length || upFilterDiv.length || upFilterDept.length || upFilterSubDept.length) ? (
+                  <button className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
+                    onClick={() => { setUpFilterType([]); setUpFilterStore([]); setUpFilterDiv([]); setUpFilterDept([]); setUpFilterSubDept([]); }}>
+                    <X className="w-3 h-3" /> Clear
+                  </button>
+                ) : null}
+                <div className="flex-1" />
+                <div className="relative">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                  <Input
+                    value={upSearch}
+                    onChange={e => setUpSearch(e.target.value)}
+                    placeholder="SKU / Barcode / ชื่อสินค้า / Store..."
+                    className="pl-7 h-7 text-xs w-72"
+                  />
+                  {upSearch && (
+                    <button className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" onClick={() => setUpSearch("")}>
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Table */}
           <div className="flex-1 overflow-auto border border-border rounded-md">
@@ -2236,69 +2260,85 @@ export default function MinmaxCalPage() {
               </div>
             ) : (() => {
               const q = upSearch.trim().toLowerCase();
-              const filtered = q ? upRows.filter(r =>
-                r.sku_code.toLowerCase().includes(q) ||
-                r.store_name.toLowerCase().includes(q) ||
-                (r.main_barcode || "").toLowerCase().includes(q) ||
-                (r.product_name_la || "").toLowerCase().includes(q)
-              ) : upRows;
+              const filtered = upRows.filter(r => {
+                if (upFilterType.length && !upFilterType.includes(r.type_store ?? "")) return false;
+                if (upFilterStore.length && !upFilterStore.includes(r.store_name)) return false;
+                if (upFilterDiv.length && !upFilterDiv.includes(r.division ?? "")) return false;
+                if (upFilterDept.length && !upFilterDept.includes(r.department ?? "")) return false;
+                if (upFilterSubDept.length && !upFilterSubDept.includes(r.sub_department ?? "")) return false;
+                if (q) {
+                  return r.sku_code.toLowerCase().includes(q) ||
+                    r.store_name.toLowerCase().includes(q) ||
+                    (r.main_barcode || "").toLowerCase().includes(q) ||
+                    (r.product_name_la || "").toLowerCase().includes(q) ||
+                    (r.product_name_en || "").toLowerCase().includes(q);
+                }
+                return true;
+              });
               return (
-                <table className="w-full text-xs">
-                  <thead className="sticky top-0 z-10">
-                    <tr>
-                      <th className="px-2 py-1.5 w-8 border-b border-border bg-muted">
-                        <Checkbox
-                          checked={filtered.length > 0 && filtered.every(r => upSelected.has(`${r.sku_code}|${r.store_name}`))}
-                          onCheckedChange={v => {
-                            setUpSelected(prev => {
-                              const next = new Set(prev);
-                              if (v) filtered.forEach(r => next.add(`${r.sku_code}|${r.store_name}`));
-                              else filtered.forEach(r => next.delete(`${r.sku_code}|${r.store_name}`));
-                              return next;
-                            });
-                          }}
-                        />
-                      </th>
-                      {["Type Store", "Store Name", "SKU Code", "Barcode", "Product Name", "Division", "Department", "Sub Dept", "Pack", "Box", "Unit Pick"].map(h => (
-                        <th key={h} className="px-2 py-1.5 text-left font-medium border-b border-border whitespace-nowrap bg-muted">{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filtered.length === 0 ? (
-                      <tr><td colSpan={12} className="px-4 py-8 text-center text-muted-foreground">ไม่มีข้อมูล</td></tr>
-                    ) : filtered.map(r => {
-                      const key = `${r.sku_code}|${r.store_name}`;
-                      return (
-                        <tr key={key} className={cn("border-b border-border/40 hover:bg-muted/30", upSelected.has(key) && "bg-primary/5")}>
-                          <td className="px-2 py-1 w-8">
-                            <Checkbox
-                              checked={upSelected.has(key)}
-                              onCheckedChange={v => {
-                                setUpSelected(prev => {
-                                  const next = new Set(prev);
-                                  if (v) next.add(key); else next.delete(key);
-                                  return next;
-                                });
-                              }}
-                            />
-                          </td>
-                          <td className="px-2 py-1 text-[11px]">{r.type_store ?? "-"}</td>
-                          <td className="px-2 py-1">{r.store_name}</td>
-                          <td className="px-2 py-1 font-mono">{r.sku_code}</td>
-                          <td className="px-2 py-1 font-mono text-muted-foreground">{r.main_barcode ?? "-"}</td>
-                          <td className="px-2 py-1 max-w-[200px] truncate" title={r.product_name_la ?? ""}>{r.product_name_la ?? "-"}</td>
-                          <td className="px-2 py-1 text-[11px]">{r.division ?? "-"}</td>
-                          <td className="px-2 py-1 text-[11px]">{r.department ?? "-"}</td>
-                          <td className="px-2 py-1 text-[11px]">{r.sub_department ?? "-"}</td>
-                          <td className="px-2 py-1 text-right tabular-nums">{r.pack_qty ?? "-"}</td>
-                          <td className="px-2 py-1 text-right tabular-nums">{r.box_qty ?? "-"}</td>
-                          <td className="px-2 py-1 text-right font-semibold tabular-nums">{r.unit_pick}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                <>
+                  <div className="px-3 py-1 text-[11px] text-muted-foreground border-b border-border bg-muted/50">
+                    แสดง {filtered.length.toLocaleString()} / {upRows.length.toLocaleString()} แถว
+                    {upSelected.size > 0 && <span className="ml-2 text-primary font-medium">· เลือก {upSelected.size} แถว</span>}
+                  </div>
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 z-10">
+                      <tr>
+                        <th className="px-2 py-1.5 w-8 border-b border-border bg-muted">
+                          <Checkbox
+                            checked={filtered.length > 0 && filtered.every(r => upSelected.has(`${r.sku_code}|${r.store_name}`))}
+                            onCheckedChange={v => {
+                              setUpSelected(prev => {
+                                const next = new Set(prev);
+                                if (v) filtered.forEach(r => next.add(`${r.sku_code}|${r.store_name}`));
+                                else filtered.forEach(r => next.delete(`${r.sku_code}|${r.store_name}`));
+                                return next;
+                              });
+                            }}
+                          />
+                        </th>
+                        {["Type Store", "Store Name", "SKU Code", "Barcode", "Product Name (LA)", "Product Name (EN)", "Division", "Department", "Sub Dept", "Pack", "Box", "Unit Pick"].map(h => (
+                          <th key={h} className="px-2 py-1.5 text-left font-medium border-b border-border whitespace-nowrap bg-muted">{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filtered.length === 0 ? (
+                        <tr><td colSpan={13} className="px-4 py-8 text-center text-muted-foreground">ไม่มีข้อมูล</td></tr>
+                      ) : filtered.map(r => {
+                        const key = `${r.sku_code}|${r.store_name}`;
+                        return (
+                          <tr key={key} className={cn("border-b border-border/40 hover:bg-muted/30", upSelected.has(key) && "bg-primary/5")}>
+                            <td className="px-2 py-1 w-8">
+                              <Checkbox
+                                checked={upSelected.has(key)}
+                                onCheckedChange={v => {
+                                  setUpSelected(prev => {
+                                    const next = new Set(prev);
+                                    if (v) next.add(key); else next.delete(key);
+                                    return next;
+                                  });
+                                }}
+                              />
+                            </td>
+                            <td className="px-2 py-1 text-[11px]">{r.type_store ?? "-"}</td>
+                            <td className="px-2 py-1">{r.store_name}</td>
+                            <td className="px-2 py-1 font-mono">{r.sku_code}</td>
+                            <td className="px-2 py-1 font-mono text-muted-foreground">{r.main_barcode ?? "-"}</td>
+                            <td className="px-2 py-1 max-w-[180px] truncate" title={r.product_name_la ?? ""}>{r.product_name_la ?? "-"}</td>
+                            <td className="px-2 py-1 max-w-[180px] truncate" title={r.product_name_en ?? ""}>{r.product_name_en ?? "-"}</td>
+                            <td className="px-2 py-1 text-[11px]">{r.division ?? "-"}</td>
+                            <td className="px-2 py-1 text-[11px]">{r.department ?? "-"}</td>
+                            <td className="px-2 py-1 text-[11px]">{r.sub_department ?? "-"}</td>
+                            <td className="px-2 py-1 text-right tabular-nums">{r.pack_qty ?? "-"}</td>
+                            <td className="px-2 py-1 text-right tabular-nums">{r.box_qty ?? "-"}</td>
+                            <td className="px-2 py-1 text-right font-semibold tabular-nums">{r.unit_pick}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </>
               );
             })()}
           </div>
