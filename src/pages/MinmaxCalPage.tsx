@@ -406,66 +406,97 @@ export default function MinmaxCalPage() {
     return { ...r, unit_pick: up, max_cal: newMax };
   };
 
+  // helper: fetch all rows from a paginated query (bypass PostgREST 1000-row cap)
+  const fetchAllPaged = async (queryFn: (from: number, to: number) => Promise<{ data: any[] | null; error: any }>, pageSize = 1000): Promise<any[]> => {
+    const all: any[] = [];
+    let offset = 0;
+    while (true) {
+      const { data, error } = await queryFn(offset, offset + pageSize - 1);
+      if (error) throw error;
+      all.push(...(data || []));
+      if ((data || []).length < pageSize) break;
+      offset += pageSize;
+    }
+    return all;
+  };
+
   const loadUnitPickOverrideRef = async () => {
-    const { data } = await supabase.from("unit_pick_override" as any).select("sku_code, store_name, unit_pick");
+    const all = await fetchAllPaged((from, to) =>
+      supabase.from("unit_pick_override" as any).select("sku_code, store_name, unit_pick").range(from, to) as any
+    );
     const map = new Map<string, number>();
-    for (const r of (data as any[] || [])) map.set(`${r.sku_code}|${r.store_name}`, Number(r.unit_pick));
+    for (const r of all) map.set(`${r.sku_code}|${r.store_name}`, Number(r.unit_pick));
     unitPickOverrideRef.current = map;
   };
 
   const loadUPRows = async () => {
     setUpLoading(true);
     try {
-      const { data: overrides, error } = await supabase
-        .from("unit_pick_override" as any)
-        .select("sku_code, store_name, unit_pick")
-        .order("sku_code");
-      if (error) throw error;
-      const list = (overrides as any[] || []);
+      // Load overrides (paginated)
+      const list = await fetchAllPaged((from, to) =>
+        supabase.from("unit_pick_override" as any).select("sku_code, store_name, unit_pick").order("sku_code").range(from, to) as any
+      );
       if (list.length === 0) { setUpRows([]); return; }
 
       const skuCodes = [...new Set(list.map((r: any) => r.sku_code as string))];
-
-      // Fetch display info from data_master
-      const dmMap = new Map<string, { main_barcode: string | null; product_name_la: string | null; product_name_en: string | null; division: string | null; department: string | null; sub_department: string | null }>();
-      for (let i = 0; i < skuCodes.length; i += 500) {
-        const slice = skuCodes.slice(i, i + 500);
-        const { data: dm } = await supabase
-          .from("data_master")
-          .select("sku_code, main_barcode, product_name_la, product_name_en, division, department, sub_department")
-          .in("sku_code", slice)
-          .eq("packing_size_qty", 1);
-        for (const d of (dm || [])) {
-          if (!dmMap.has(d.sku_code)) dmMap.set(d.sku_code, {
-            main_barcode: d.main_barcode, product_name_la: d.product_name_la,
-            product_name_en: (d as any).product_name_en ?? null,
-            division: (d as any).division ?? null, department: (d as any).department ?? null, sub_department: (d as any).sub_department ?? null,
-          });
-        }
-      }
-
-      // Fetch pack/box from range_store
-      const rsMap = new Map<string, { pack_qty: number | null; box_qty: number | null }>();
-      for (let i = 0; i < skuCodes.length; i += 500) {
-        const slice = skuCodes.slice(i, i + 500);
-        const { data: rs } = await (supabase as any)
-          .from("range_store")
-          .select("sku_code, store_name, pack_qty, box_qty")
-          .in("sku_code", slice);
-        for (const r of (rs || [])) rsMap.set(`${r.sku_code}|${r.store_name}`, { pack_qty: r.pack_qty, box_qty: r.box_qty });
-      }
-
-      // Fetch type_store from store_type
       const storeNames = [...new Set(list.map((r: any) => r.store_name as string))];
-      const storeTypeMap = new Map<string, string>();
-      for (let i = 0; i < storeNames.length; i += 500) {
-        const slice = storeNames.slice(i, i + 500);
-        const { data: st } = await supabase
-          .from("store_type")
-          .select("store_name, type_store")
-          .in("store_name", slice);
-        for (const s of (st || [])) storeTypeMap.set(s.store_name, (s as any).type_store ?? "");
+
+      // Run all 3 lookups in parallel
+      const [dmAll, rsAll, stAll] = await Promise.all([
+        // data_master chunks
+        (async () => {
+          const res: any[] = [];
+          for (let i = 0; i < skuCodes.length; i += 500) {
+            const slice = skuCodes.slice(i, i + 500);
+            const { data } = await supabase
+              .from("data_master")
+              .select("sku_code, main_barcode, product_name_la, product_name_en, division, department, sub_department")
+              .in("sku_code", slice)
+              .eq("packing_size_qty", 1);
+            res.push(...(data || []));
+          }
+          return res;
+        })(),
+        // range_store — paginated per sku chunk to bypass 1000-row cap
+        (async () => {
+          const res: any[] = [];
+          for (let i = 0; i < skuCodes.length; i += 200) {
+            const slice = skuCodes.slice(i, i + 200);
+            const chunk = await fetchAllPaged((from, to) =>
+              (supabase as any).from("range_store")
+                .select("sku_code, store_name, pack_qty, box_qty")
+                .in("sku_code", slice)
+                .range(from, to)
+            );
+            res.push(...chunk);
+          }
+          return res;
+        })(),
+        // store_type
+        (async () => {
+          const res: any[] = [];
+          for (let i = 0; i < storeNames.length; i += 500) {
+            const slice = storeNames.slice(i, i + 500);
+            const { data } = await supabase.from("store_type").select("store_name, type_store").in("store_name", slice);
+            res.push(...(data || []));
+          }
+          return res;
+        })(),
+      ]);
+
+      // Build lookup maps
+      const dmMap = new Map<string, { main_barcode: string | null; product_name_la: string | null; product_name_en: string | null; division: string | null; department: string | null; sub_department: string | null }>();
+      for (const d of dmAll) {
+        if (!dmMap.has(d.sku_code)) dmMap.set(d.sku_code, {
+          main_barcode: d.main_barcode, product_name_la: d.product_name_la,
+          product_name_en: d.product_name_en ?? null,
+          division: d.division ?? null, department: d.department ?? null, sub_department: d.sub_department ?? null,
+        });
       }
+      const rsMap = new Map<string, { pack_qty: number | null; box_qty: number | null }>();
+      for (const r of rsAll) rsMap.set(`${r.sku_code}|${r.store_name}`, { pack_qty: r.pack_qty, box_qty: r.box_qty });
+      const storeTypeMap = new Map<string, string>();
+      for (const s of stAll) storeTypeMap.set(s.store_name, (s as any).type_store ?? "");
 
       const rows: UPRow[] = list.map((r: any) => ({
         sku_code: r.sku_code,
@@ -887,6 +918,8 @@ export default function MinmaxCalPage() {
     startElapsedTimer();
     try {
       const t0 = performance.now();
+      // Reload override ref so latest unit_pick data is applied
+      await loadUnitPickOverrideRef();
       const params = buildViewParams(0);
       const { data, error } = await (supabase as any).rpc("get_minmax_view_page", params);
       if (error) throw error;
