@@ -158,7 +158,21 @@ export default function SARPage() {
   const [skuFilter, setSkuFilter] = useState<string[]>(sarState.skuFilter);
   const [barcodeFilter, setBarcodeFilter] = useState<string[]>(sarState.barcodeFilter);
 
-  // filterOpts is derived from rawDoc cross-filter counts below
+  // Filter options loaded from get_minmax_filter_options (fast, no cross-filter counts)
+  const [filterOptsLoading, setFilterOptsLoading] = useState(false);
+  const [filterOptsState, setFilterOptsState] = useState<{
+    stores: { store_name: string; type_store: string }[];
+    types: string[];
+    itemTypes: string[];
+    buyings: string[];
+    divisions: string[];
+    departments: string[];
+    subDepartments: string[];
+    classes: string[];
+  }>({ stores: [], types: [], itemTypes: [], buyings: [], divisions: [], departments: [], subDepartments: [], classes: [] });
+
+  // rank map: sku_code → { rank_sale, rank_factor } — loaded once from get_minmax_master
+  const rankMapRef = useRef<Map<string, { rank_sale: string; rank_factor: number }>>(new Map());
 
   // Import barcode/sku set
   const [importedSet, setImportedSet] = useState<Set<string>>(new Set(sarState.importedKeys));
@@ -214,177 +228,67 @@ export default function SARPage() {
     sarState.importSkipped = importSkipped;
   }, [mode, storeFilter, typeStoreFilter, itemTypeFilter, buyingFilter, divisionFilter, departmentFilter, subDeptFilter, classFilter, skuFilter, barcodeFilter, importedSet, importedFileLabel, importedRows, importSkipped]);
 
-  // Raw doc cache for cross-filter counts
-  const [rawDoc, setRawDoc] = useState<DocRowRaw[]>([]);
-  const [rawDocLoading, setRawDocLoading] = useState(false);
-
   // Elapsed-time tracking for ดึงข้อมูล / คำนวณ
   const [loadStartedAt, setLoadStartedAt] = useState<number | null>(null);
   const [calcStartedAt, setCalcStartedAt] = useState<number | null>(null);
 
-  const SAR_RAWDOC_CACHE_KEY = "sar_rawdoc_minmax_v2";
-
-  const loadRawDoc = useCallback(async () => {
-    setRawDocLoading(true);
+  // โหลด filter options จาก get_minmax_filter_options (เร็ว — 1 RPC call, ไม่ต้องโหลด rows ทั้งหมด)
+  const loadFilterOpts = useCallback(async () => {
+    setFilterOptsLoading(true);
     try {
-      // probe แรก: ดึง 1 row เพื่อรู้ total count → ใช้เป็น cache fingerprint
-      const { data: probeData, error: probeErr } = await (supabase as any)
-        .rpc("get_minmax_view_page", { p_limit: 1, p_offset: 0 });
-      if (probeErr) throw probeErr;
-      const probeTotal = (probeData as { total: number; rows: any[] })?.total || 0;
-      const cacheKey = `${SAR_RAWDOC_CACHE_KEY}_${probeTotal}`;
-
-      // ✅ Session cache
-      const cached = sessionStorage.getItem(cacheKey);
-      if (cached) {
-        try {
-          setRawDoc(JSON.parse(cached) as DocRowRaw[]);
-          return;
-        } catch { /* parse error → re-fetch */ }
+      const [optsResult, masterResult] = await Promise.all([
+        (supabase as any).rpc("get_minmax_filter_options").single(),
+        (supabase as any).rpc("get_minmax_master"),
+      ]);
+      if (optsResult.data) {
+        const d = optsResult.data;
+        const stores = (d.stores || []) as { store_name: string; type_store: string }[];
+        const types = Array.from(new Set(stores.map((s: any) => s.type_store).filter(Boolean))).sort() as string[];
+        setFilterOptsState({
+          stores,
+          types,
+          itemTypes: d.item_types || [],
+          buyings: d.buying_statuses || [],
+          divisions: d.divisions || [],
+          departments: d.departments || [],
+          subDepartments: d.sub_departments || [],
+          classes: d.classes || [],
+        });
       }
-
-      // ดึงข้อมูลจาก minmax table ผ่าน get_minmax_view_page (same RPC as MinMax Cal → View)
-      // return shape: { total: number; rows: any[] }
-      const PAGE = 1000;
-      const all: any[] = [];
-      let offset = 0;
-      let firstTotal = 0;
-      while (true) {
-        const { data, error } = await (supabase as any)
-          .rpc("get_minmax_view_page", { p_limit: PAGE, p_offset: offset });
-        if (error) throw error;
-        const result = data as { total: number; rows: any[] };
-        if (offset === 0) firstTotal = result.total || 0;
-        all.push(...(result.rows || []));
-        if ((result.rows || []).length < PAGE) break;
-        offset += PAGE;
-      }
-
-      if (all.length === 0) { setRawDoc([]); return; }
-
-      // ดึง rank_sale ต่อ sku_code จาก get_minmax_master
-      const rankMap = new Map<string, string>();
-      let mOffset = 0;
-      while (true) {
-        const { data: mData, error: mErr } = await (supabase as any)
-          .rpc("get_minmax_master")
-          .range(mOffset, mOffset + PAGE - 1);
-        if (mErr || !mData?.length) break;
-        for (const m of mData) {
-          if (m.sku_code && m.rank_sale && !rankMap.has(m.sku_code))
-            rankMap.set(m.sku_code, m.rank_sale);
+      // สร้าง rank map จาก get_minmax_master
+      const newRankMap = new Map<string, { rank_sale: string; rank_factor: number }>();
+      for (const m of (masterResult.data || []) as any[]) {
+        if (m.sku_code && m.rank_sale) {
+          const rank = m.rank_sale as string;
+          const factor = rank === "A" ? 21 : rank === "B" ? 14 : rank === "C" ? 10 : 7;
+          newRankMap.set(m.sku_code, { rank_sale: rank, rank_factor: factor });
         }
-        if (mData.length < PAGE) break;
-        mOffset += PAGE;
       }
-
-      const enriched: DocRowRaw[] = all.map((r: any) => {
-        const rank = rankMap.get(r.sku_code) || "D";
-        const factor = rank === "A" ? 21 : rank === "B" ? 14 : rank === "C" ? 10 : 7;
-        return {
-          sku_code: r.sku_code,
-          product_name_la: r.product_name_la || null,
-          product_name_en: r.product_name_en || null,
-          main_barcode: r.main_barcode || null,
-          unit_of_measure: r.unit_of_measure || null,
-          store_name: r.store_name || "",
-          type_store: r.type_store || "",
-          unit_pick: r.unit_pick != null ? Number(r.unit_pick) : 1,
-          pack_qty: r.pack_qty ?? null,
-          box_qty: r.box_qty ?? null,
-          avg_sale: 0, // ดึงต่อ request ใน fetchData (เฉพาะ filtered rows)
-          rank_sale: rank,
-          rank_factor: factor,
-          division: r.division || "",
-          department: r.department || "",
-          sub_department: r.sub_department || "",
-          class: r.class || "",
-          item_type: r.item_type || "",
-          buying_status: r.buying_status || "",
-          min_final: Number(r.min_val) || 0,
-          max_final: Number(r.max_val) || 0,
-        };
-      });
-
-      // บันทึก session cache (ล้าง key เก่าก่อน เพื่อประหยัด sessionStorage)
-      try {
-        for (const k of Object.keys(sessionStorage)) {
-          if (k.startsWith("sar_rawdoc")) sessionStorage.removeItem(k);
-        }
-        sessionStorage.setItem(cacheKey, JSON.stringify(enriched));
-      } catch { /* sessionStorage full → skip */ }
-
-      setRawDoc(enriched);
+      rankMapRef.current = newRankMap;
     } catch (e: any) {
-      console.warn("load raw doc (minmax table)", e);
+      console.warn("loadFilterOpts error", e);
     } finally {
-      setRawDocLoading(false);
+      setFilterOptsLoading(false);
     }
   }, []);
-  useEffect(() => { loadRawDoc(); }, [loadRawDoc]);
+  useEffect(() => { loadFilterOpts(); }, [loadFilterOpts]);
 
-  // Cross-filter aware option counts (each field's count ignores its own selection)
-  // Optimized: O(N × activeFilters) using Set.has + pre-extracted row values
-  const filterCounts = useMemo(() => {
-    const keys = ["stores", "types", "itemTypes", "buyings", "divisions", "departments", "subDepartments", "classes"] as const;
-    const cols: (keyof DocRowRaw)[] = ["store_name", "type_store", "item_type", "buying_status", "division", "department", "sub_department", "class"];
-    const sels = [storeFilter, typeStoreFilter, itemTypeFilter, buyingFilter, divisionFilter, departmentFilter, subDeptFilter, classFilter];
-    const selSets: (Set<string> | null)[] = sels.map(s => s.length ? new Set(s) : null);
-    const activeIdx: number[] = [];
-    for (let i = 0; i < 8; i++) if (selSets[i]) activeIdx.push(i);
-    const out: Record<string, Record<string, number>> = {};
-    for (const k of keys) out[k] = {};
-    const vals = new Array<string>(8);
-    for (let i = 0; i < rawDoc.length; i++) {
-      const r = rawDoc[i] as any;
-      for (let j = 0; j < 8; j++) {
-        const v = r[cols[j]];
-        vals[j] = v == null ? "" : String(v);
-      }
-      // Count active filters that this row fails
-      let firstMiss = -1, missCount = 0;
-      for (const ai of activeIdx) {
-        if (!selSets[ai]!.has(vals[ai])) {
-          if (++missCount === 1) firstMiss = ai;
-          else break;
-        }
-      }
-      if (missCount === 0) {
-        // Row matches all → contribute to every field's count
-        for (let j = 0; j < 8; j++) {
-          const v = vals[j];
-          if (v) out[keys[j]][v] = (out[keys[j]][v] || 0) + 1;
-        }
-      } else if (missCount === 1) {
-        // Row matches all except one → contribute only to that one field
-        const v = vals[firstMiss];
-        if (v) out[keys[firstMiss]][v] = (out[keys[firstMiss]][v] || 0) + 1;
-      }
-      // missCount >= 2 → row contributes to nothing
-    }
-    return out;
-  }, [rawDoc, storeFilter, typeStoreFilter, itemTypeFilter, buyingFilter, divisionFilter, departmentFilter, subDeptFilter, classFilter]);
-
-  // Filter options derived from counts (only show keys with count > 0 given other selections)
+  // Filter options derived directly from filterOptsState
   const filterOpts = useMemo(() => ({
-    stores: Object.keys(filterCounts.stores || {}),
-    types: Object.keys(filterCounts.types || {}),
-    itemTypes: Object.keys(filterCounts.itemTypes || {}),
-    buyings: Object.keys(filterCounts.buyings || {}),
-    divisions: Object.keys(filterCounts.divisions || {}),
-    departments: Object.keys(filterCounts.departments || {}),
-    subDepartments: Object.keys(filterCounts.subDepartments || {}),
-    classes: Object.keys(filterCounts.classes || {}),
-  }), [filterCounts]);
+    stores: filterOptsState.stores.map(s => s.store_name),
+    types: filterOptsState.types,
+    itemTypes: filterOptsState.itemTypes,
+    buyings: filterOptsState.buyings,
+    divisions: filterOptsState.divisions,
+    departments: filterOptsState.departments,
+    subDepartments: filterOptsState.subDepartments,
+    classes: filterOptsState.classes,
+  }), [filterOptsState]);
 
-  // Unique stores for Priority dialog (from current Min/Max doc)
-  const priorityStores = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const r of rawDoc) {
-      if (r.store_name && !map.has(r.store_name)) map.set(r.store_name, r.type_store || "");
-    }
-    return Array.from(map.entries()).map(([store_name, type_store]) => ({ store_name, type_store }));
-  }, [rawDoc]);
+  // Unique stores for Priority dialog
+  const priorityStores = useMemo(() =>
+    filterOptsState.stores.map(s => ({ store_name: s.store_name, type_store: s.type_store })),
+  [filterOptsState.stores]);
 
   // helper: map DocRowRaw (enriched by RPC) → SARRow
   const mapDocRowToSARRow = (r: DocRowRaw): SARRow => {
@@ -427,37 +331,56 @@ export default function SARPage() {
     setLoading(true);
     setLoadStartedAt(Date.now());
     try {
-      if (!rawDoc.length) {
+      if (filterOpts.stores.length === 0) {
         toast({ title: "ไม่พบข้อมูล Min/Max", description: "กรุณา Save Min/Max ก่อนใช้งาน SAR", variant: "destructive" });
         setRows([]); setCalculated(false); return;
       }
 
-      let filtered: DocRowRaw[] = [];
+      // ดึง filtered rows จาก minmax table แบบ server-side (ไม่ต้องโหลด rows ทั้งหมดเข้า memory)
+      setProgressLabel("กำลังดึงข้อมูล Min/Max...");
+      setProgressPct(10);
+
+      let filtered: any[] = [];
 
       if (mode === "filter") {
-        setProgressLabel("กำลังกรองข้อมูล...");
-        setProgressPct(10);
-        // filter rawDoc ที่อยู่ใน memory แล้ว — ไม่มี network call
-        filtered = rawDoc.filter(r =>
-          (storeFilter.length === 0     || storeFilter.includes(r.store_name)) &&
-          (typeStoreFilter.length === 0 || typeStoreFilter.includes(r.type_store)) &&
-          (itemTypeFilter.length === 0  || itemTypeFilter.includes(r.item_type || "")) &&
-          (buyingFilter.length === 0    || buyingFilter.includes(r.buying_status || "")) &&
-          (divisionFilter.length === 0  || divisionFilter.includes(r.division || "")) &&
-          (departmentFilter.length === 0 || departmentFilter.includes(r.department || "")) &&
-          (subDeptFilter.length === 0   || subDeptFilter.includes(r.sub_department || "")) &&
-          (classFilter.length === 0     || classFilter.includes(r.class || "")) &&
-          (skuFilter.length === 0       || skuFilter.includes(r.sku_code)) &&
-          (barcodeFilter.length === 0   || (r.main_barcode != null && barcodeFilter.includes(r.main_barcode)))
-        );
+        // build filter params สำหรับ get_minmax_view_by_stores
+        const params: Record<string, any> = {};
+        if (storeFilter.length) params.p_stores = storeFilter;
+        if (typeStoreFilter.length) params.p_type_stores = typeStoreFilter;
+        if (itemTypeFilter.length) params.p_item_types = itemTypeFilter;
+        if (buyingFilter.length) params.p_buying_statuses = buyingFilter;
+        if (divisionFilter.length) params.p_divisions = divisionFilter;
+        if (departmentFilter.length) params.p_departments = departmentFilter;
+        if (subDeptFilter.length) params.p_sub_departments = subDeptFilter;
+        if (classFilter.length) params.p_classes = classFilter;
+        if (skuFilter.length) params.p_skus = skuFilter;
+        if (barcodeFilter.length) params.p_barcodes = barcodeFilter;
+
+        // ต้องมี filter อย่างน้อย 1 อย่าง
+        if (Object.keys(params).length === 0) {
+          toast({ title: "กรุณาเลือก Filter", description: "เลือก Store, Division หรือ filter อื่นๆ ก่อนดึงข้อมูล", variant: "destructive" });
+          return;
+        }
+
+        // paginated fetch
+        const PAGE = 1000;
+        let off = 0;
+        while (true) {
+          const { data, error } = await (supabase as any)
+            .rpc("get_minmax_view_by_stores", params)
+            .range(off, off + PAGE - 1);
+          if (error) throw error;
+          filtered.push(...(data || []));
+          if ((data || []).length < PAGE) break;
+          off += PAGE;
+        }
       } else {
-        // import mode — resolve barcodes → filter rawDoc
+        // import mode — resolve barcodes → fetch from minmax by sku list
         if (importedSet.size === 0) {
           toast({ title: "ยังไม่ Import", description: "กรุณา Import barcode/SKU ก่อน", variant: "destructive" });
           return;
         }
         setProgressLabel(`กำลัง resolve barcode → SKU (${importedSet.size.toLocaleString()} keys)...`);
-        setProgressPct(10);
         const keys = Array.from(importedSet);
         const resolvedSkus = new Set<string>(keys);
         const CHUNK_BC = 500;
@@ -469,18 +392,33 @@ export default function SARPage() {
           if (bcErr) { console.warn("[SAR import] barcode resolve error", bcErr); continue; }
           for (const m of (bcRows || []) as any[]) { if (m.sku_code) resolvedSkus.add(String(m.sku_code)); }
         }
-        filtered = rawDoc.filter(r => resolvedSkus.has(r.sku_code));
+        // fetch minmax rows for resolved skus
+        const skuArr = Array.from(resolvedSkus);
+        const CHUNK_S2 = 500;
+        for (let i = 0; i < skuArr.length; i += CHUNK_S2) {
+          const skuSlice = skuArr.slice(i, i + CHUNK_S2);
+          const PAGE = 1000; let off2 = 0;
+          while (true) {
+            const { data, error } = await (supabase as any)
+              .rpc("get_minmax_view_by_stores", { p_skus: skuSlice })
+              .range(off2, off2 + PAGE - 1);
+            if (error) throw error;
+            filtered.push(...(data || []));
+            if ((data || []).length < PAGE) break;
+            off2 += PAGE;
+          }
+        }
         if (filtered.length === 0) {
-          toast({ title: "ไม่พบข้อมูล", description: `Import ${importedSet.size} keys แต่ไม่ match กับข้อมูล Min/Max`, variant: "destructive" });
+          toast({ title: "ไม่พบข้อมูล", description: `Import ${importedSet.size} keys แต่ไม่มีข้อมูล Min/Max`, variant: "destructive" });
         }
       }
 
       setProgressPct(30);
-      setProgressLabel(`กรองได้ ${filtered.length.toLocaleString()} แถว — กำลังดึง Master...`);
+      setProgressLabel(`ได้ ${filtered.length.toLocaleString()} แถว — กำลังดึง Master...`);
 
-      // เรียก RPC เพื่อ enrich data_master + pack_box สำหรับ filtered SKUs เท่านั้น
-      const filteredSkus = [...new Set(filtered.map(r => r.sku_code).filter(Boolean))];
-      const filteredStores = [...new Set(filtered.map(r => r.store_name).filter(Boolean))];
+      // เรียก RPC เพื่อ enrich cost/price สำหรับ filtered SKUs
+      const filteredSkus = [...new Set(filtered.map((r: any) => r.sku_code).filter(Boolean))];
+      const filteredStores = [...new Set(filtered.map((r: any) => r.store_name).filter(Boolean))];
 
       const [enrichResult] = await Promise.all([
         (supabase as any).rpc("get_sar_enrich_data", { p_sku_codes: filteredSkus }),
@@ -521,13 +459,14 @@ export default function SARPage() {
       const rsvMap = new Map<string, { pack_qty: number | null; box_qty: number | null }>();
       for (const r of (enrichData?.pack_box || []) as any[]) { if (r.sku_code && !rsvMap.has(r.sku_code)) rsvMap.set(r.sku_code, { pack_qty: r.pack_qty ?? null, box_qty: r.box_qty ?? null }); }
 
-      const mapped: SARRow[] = filtered.map(r => {
+      const mapped: SARRow[] = filtered.map((r: any) => {
         const dm = dmMap.get(r.sku_code);
         const rsv = rsvMap.get(r.sku_code);
-        const up = Number(r.unit_pick_edit ?? r.unit_pick ?? 1) || 1;
+        const up = Number(r.unit_pick ?? 1) || 1;
+        const rankInfo = rankMapRef.current.get(r.sku_code) ?? { rank_sale: "D", rank_factor: 7 };
         return {
           sku_code: r.sku_code,
-          main_barcode: dm?.main_barcode ?? r.main_barcode,
+          main_barcode: r.main_barcode ?? dm?.main_barcode ?? null,
           product_name_la: r.product_name_la || dm?.product_name_la || null,
           product_name_en: r.product_name_en || dm?.product_name_en || null,
           unit_of_measure: r.unit_of_measure || dm?.unit_of_measure || null,
@@ -546,10 +485,10 @@ export default function SARPage() {
           price_jm: dm?.jmart_price != null ? Number(dm.jmart_price) : null,
           pack_size: up === 1 ? "Unit" : `1x${up}`,
           avg_sale: avgSaleMap.get(`${r.sku_code}|${r.store_name}`) ?? 0,
-          rank_sale: r.rank_sale || "D",
-          rank_factor: Number(r.rank_factor) || 7,
-          min_val: Number(r.min_final ?? r.min_cal ?? 0) || 0,
-          max_val: Number(r.max_final ?? r.max_cal ?? 0) || 0,
+          rank_sale: rankInfo.rank_sale,
+          rank_factor: rankInfo.rank_factor,
+          min_val: Number(r.min_val ?? 0) || 0,
+          max_val: Number(r.max_val ?? 0) || 0,
           stock_dc: 0, stock_store: 0, on_order: 0,
           sar_suggest1: 0, sar_suggest2: 0, tt_order: 0, suggest_order_edit: null,
           final_order_unit: 0, final_order_uom: 0, doh_min: 0, doh_max: 0, doh_stock: 0, doh_tobe: 0,
@@ -1132,14 +1071,14 @@ export default function SARPage() {
 
               {mode === "filter" ? (
                 <>
-                  <MultiSelectFilter label="Store" options={filterOpts.stores} selected={storeFilter} onChange={setStoreFilter} width="w-80" counts={filterCounts.stores} loading={rawDocLoading} loadingLabel="กำลังโหลดข้อมูล Store..." />
-                  <MultiSelectFilter label="Type Store" options={filterOpts.types} selected={typeStoreFilter} onChange={setTypeStoreFilter} counts={filterCounts.types} loading={rawDocLoading} loadingLabel="กำลังโหลด Type Store..." />
-                  <MultiSelectFilter label="Item Type" options={filterOpts.itemTypes} selected={itemTypeFilter} onChange={setItemTypeFilter} counts={filterCounts.itemTypes} loading={rawDocLoading} loadingLabel="กำลังโหลด Item Type..." />
-                  <MultiSelectFilter label="Buying Status" options={filterOpts.buyings} selected={buyingFilter} onChange={setBuyingFilter} counts={filterCounts.buyings} loading={rawDocLoading} loadingLabel="กำลังโหลด Buying Status..." />
-                  <MultiSelectFilter label="Division" options={filterOpts.divisions} selected={divisionFilter} onChange={setDivisionFilter} counts={filterCounts.divisions} loading={rawDocLoading} loadingLabel="กำลังโหลด Division..." />
-                  <MultiSelectFilter label="Department" options={filterOpts.departments} selected={departmentFilter} onChange={setDepartmentFilter} counts={filterCounts.departments} loading={rawDocLoading} loadingLabel="กำลังโหลด Department..." />
-                  <MultiSelectFilter label="Sub-Department" options={filterOpts.subDepartments} selected={subDeptFilter} onChange={setSubDeptFilter} counts={filterCounts.subDepartments} loading={rawDocLoading} loadingLabel="กำลังโหลด Sub-Department..." />
-                  <MultiSelectFilter label="Class" options={filterOpts.classes} selected={classFilter} onChange={setClassFilter} counts={filterCounts.classes} loading={rawDocLoading} loadingLabel="กำลังโหลด Class..." />
+                  <MultiSelectFilter label="Store" options={filterOpts.stores} selected={storeFilter} onChange={setStoreFilter} width="w-80" loading={filterOptsLoading} loadingLabel="กำลังโหลดข้อมูล Store..." />
+                  <MultiSelectFilter label="Type Store" options={filterOpts.types} selected={typeStoreFilter} onChange={setTypeStoreFilter} loading={filterOptsLoading} loadingLabel="กำลังโหลด Type Store..." />
+                  <MultiSelectFilter label="Item Type" options={filterOpts.itemTypes} selected={itemTypeFilter} onChange={setItemTypeFilter} loading={filterOptsLoading} loadingLabel="กำลังโหลด Item Type..." />
+                  <MultiSelectFilter label="Buying Status" options={filterOpts.buyings} selected={buyingFilter} onChange={setBuyingFilter} loading={filterOptsLoading} loadingLabel="กำลังโหลด Buying Status..." />
+                  <MultiSelectFilter label="Division" options={filterOpts.divisions} selected={divisionFilter} onChange={setDivisionFilter} loading={filterOptsLoading} loadingLabel="กำลังโหลด Division..." />
+                  <MultiSelectFilter label="Department" options={filterOpts.departments} selected={departmentFilter} onChange={setDepartmentFilter} loading={filterOptsLoading} loadingLabel="กำลังโหลด Department..." />
+                  <MultiSelectFilter label="Sub-Department" options={filterOpts.subDepartments} selected={subDeptFilter} onChange={setSubDeptFilter} loading={filterOptsLoading} loadingLabel="กำลังโหลด Sub-Department..." />
+                  <MultiSelectFilter label="Class" options={filterOpts.classes} selected={classFilter} onChange={setClassFilter} loading={filterOptsLoading} loadingLabel="กำลังโหลด Class..." />
                   <Input
                     placeholder="SKU (คั่นด้วย ,)"
                     className="h-8 text-xs w-40"
