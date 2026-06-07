@@ -227,10 +227,12 @@ export default function SARPage() {
   const loadRawDoc = useCallback(async () => {
     setRawDocLoading(true);
     try {
-      // ใช้จำนวน row รวมเป็น cache fingerprint (เร็วกว่า query updated_at)
-      const { data: summary } = await (supabase as any).rpc("get_minmax_report_summary");
-      const totalCount = (summary || []).reduce((sum: number, r: any) => sum + (Number(r.sku_count) || 0), 0);
-      const cacheKey = `${SAR_RAWDOC_CACHE_KEY}_${totalCount}`;
+      // probe แรก: ดึง 1 row เพื่อรู้ total count → ใช้เป็น cache fingerprint
+      const { data: probeData, error: probeErr } = await (supabase as any)
+        .rpc("get_minmax_view_page", { p_limit: 1, p_offset: 0 });
+      if (probeErr) throw probeErr;
+      const probeTotal = (probeData as { total: number; rows: any[] })?.total || 0;
+      const cacheKey = `${SAR_RAWDOC_CACHE_KEY}_${probeTotal}`;
 
       // ✅ Session cache
       const cached = sessionStorage.getItem(cacheKey);
@@ -241,17 +243,20 @@ export default function SARPage() {
         } catch { /* parse error → re-fetch */ }
       }
 
-      // ดึงข้อมูลจาก minmax table (ผ่าน RPC ที่ enrich ครบ) แบบ paginated
+      // ดึงข้อมูลจาก minmax table ผ่าน get_minmax_view_page (same RPC as MinMax Cal → View)
+      // return shape: { total: number; rows: any[] }
       const PAGE = 1000;
       const all: any[] = [];
       let offset = 0;
+      let firstTotal = 0;
       while (true) {
         const { data, error } = await (supabase as any)
-          .rpc("get_minmax_view_by_stores", {})
-          .range(offset, offset + PAGE - 1);
+          .rpc("get_minmax_view_page", { p_limit: PAGE, p_offset: offset });
         if (error) throw error;
-        all.push(...(data || []));
-        if ((data || []).length < PAGE) break;
+        const result = data as { total: number; rows: any[] };
+        if (offset === 0) firstTotal = result.total || 0;
+        all.push(...(result.rows || []));
+        if ((result.rows || []).length < PAGE) break;
         offset += PAGE;
       }
 
