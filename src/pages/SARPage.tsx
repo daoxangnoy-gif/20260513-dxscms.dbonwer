@@ -222,22 +222,17 @@ export default function SARPage() {
   const [loadStartedAt, setLoadStartedAt] = useState<number | null>(null);
   const [calcStartedAt, setCalcStartedAt] = useState<number | null>(null);
 
-  const SAR_RAWDOC_CACHE_KEY = "sar_rawdoc_cache_v1";
+  const SAR_RAWDOC_CACHE_KEY = "sar_rawdoc_minmax_v2";
 
   const loadRawDoc = useCallback(async () => {
     setRawDocLoading(true);
     try {
-      // ดึง id + created_at ก่อนเพื่อเช็ค session cache
-      const { data: meta } = await supabase
-        .from("minmax_cal_documents")
-        .select("id, created_at, data")
-        .order("created_at", { ascending: false })
-        .limit(1).maybeSingle();
-      if (!meta?.data || !Array.isArray(meta.data)) return;
+      // ใช้จำนวน row รวมเป็น cache fingerprint (เร็วกว่า query updated_at)
+      const { data: summary } = await (supabase as any).rpc("get_minmax_report_summary");
+      const totalCount = (summary || []).reduce((sum: number, r: any) => sum + (Number(r.sku_count) || 0), 0);
+      const cacheKey = `${SAR_RAWDOC_CACHE_KEY}_${totalCount}`;
 
-      const cacheKey = `${SAR_RAWDOC_CACHE_KEY}_${meta.id}`;
-
-      // ✅ Session cache: ถ้า doc เดิม (same id) ใช้ข้อมูลที่ enrich แล้วทันที
+      // ✅ Session cache
       const cached = sessionStorage.getItem(cacheKey);
       if (cached) {
         try {
@@ -246,94 +241,77 @@ export default function SARPage() {
         } catch { /* parse error → re-fetch */ }
       }
 
-      const raw = meta.data as unknown as DocRowRaw[];
-
-      // enrich division/dept/class/product_name เฉพาะถ้า minmax doc ไม่มีข้อมูลเหล่านี้
-      const needsEnrich = raw.some(r => !r.division || !r.department || !r.sub_department || !r.class || !r.item_type || !r.buying_status || !r.product_name_la || !r.unit_of_measure);
-      if (needsEnrich) {
-        const skus = Array.from(new Set(raw.map(r => r.sku_code).filter(Boolean)));
-        const dmMap = new Map<string, { division: string; department: string; sub_department: string; class: string; item_type: string; buying_status: string; product_name_la: string; product_name_en: string; unit_of_measure: string }>();
-
-        // ✅ Parallel fetch: ยิง chunks พร้อมกันทั้งหมดแทนการรอทีละรอบ
-        const CHUNK = 1000; // เพิ่มจาก 500 → 1000 ลดจำนวน round-trip
-        const chunks: string[][] = [];
-        for (let i = 0; i < skus.length; i += CHUNK) chunks.push(skus.slice(i, i + CHUNK));
-
-        const chunkResults = await Promise.all(chunks.map(async (slice) => {
-          const rows: any[] = [];
-          let off = 0;
-          const PAGE = 1000;
-          while (true) {
-            const { data: dm, error } = await supabase.from("data_master")
-              .select("sku_code, division, department, sub_department, class, item_type, buying_status, product_name_la, product_name_en, unit_of_measure")
-              .in("sku_code", slice)
-              .range(off, off + PAGE - 1);
-            if (error) break;
-            rows.push(...(dm || []));
-            if ((dm || []).length < PAGE) break;
-            off += PAGE;
-          }
-          return rows;
-        }));
-
-        for (const batch of chunkResults) {
-          for (const m of batch) {
-            if (!m.sku_code) continue;
-            const ex = dmMap.get(m.sku_code);
-            if (!ex || (!ex.division && m.division)) {
-              dmMap.set(m.sku_code, {
-                division: m.division || ex?.division || "",
-                department: m.department || ex?.department || "",
-                sub_department: m.sub_department || ex?.sub_department || "",
-                class: m.class || ex?.class || "",
-                item_type: m.item_type || ex?.item_type || "",
-                buying_status: m.buying_status || ex?.buying_status || "",
-                product_name_la: m.product_name_la || ex?.product_name_la || "",
-                product_name_en: m.product_name_en || ex?.product_name_en || "",
-                unit_of_measure: m.unit_of_measure || ex?.unit_of_measure || "",
-              });
-            }
-          }
-        }
-
-        const enriched = raw.map(r => {
-          const m = dmMap.get(r.sku_code);
-          if (!m) return r;
-          return {
-            ...r,
-            division: r.division || m.division,
-            department: r.department || m.department,
-            sub_department: r.sub_department || m.sub_department,
-            class: r.class || m.class,
-            item_type: r.item_type || m.item_type,
-            buying_status: r.buying_status || m.buying_status,
-            product_name_la: r.product_name_la || m.product_name_la || null,
-            product_name_en: r.product_name_en || m.product_name_en || null,
-            unit_of_measure: r.unit_of_measure || m.unit_of_measure || null,
-          };
-        });
-
-        // บันทึก session cache (ล้าง key เก่าก่อน เพื่อประหยัด sessionStorage)
-        try {
-          for (const k of Object.keys(sessionStorage)) {
-            if (k.startsWith(SAR_RAWDOC_CACHE_KEY)) sessionStorage.removeItem(k);
-          }
-          sessionStorage.setItem(cacheKey, JSON.stringify(enriched));
-        } catch { /* sessionStorage full → skip */ }
-
-        setRawDoc(enriched);
-      } else {
-        // doc ที่มีข้อมูลครบแล้ว → cache เลย
-        try {
-          for (const k of Object.keys(sessionStorage)) {
-            if (k.startsWith(SAR_RAWDOC_CACHE_KEY)) sessionStorage.removeItem(k);
-          }
-          sessionStorage.setItem(cacheKey, JSON.stringify(raw));
-        } catch { /* skip */ }
-        setRawDoc(raw);
+      // ดึงข้อมูลจาก minmax table (ผ่าน RPC ที่ enrich ครบ) แบบ paginated
+      const PAGE = 1000;
+      const all: any[] = [];
+      let offset = 0;
+      while (true) {
+        const { data, error } = await (supabase as any)
+          .rpc("get_minmax_view_by_stores", {})
+          .range(offset, offset + PAGE - 1);
+        if (error) throw error;
+        all.push(...(data || []));
+        if ((data || []).length < PAGE) break;
+        offset += PAGE;
       }
+
+      if (all.length === 0) { setRawDoc([]); return; }
+
+      // ดึง rank_sale ต่อ sku_code จาก get_minmax_master
+      const rankMap = new Map<string, string>();
+      let mOffset = 0;
+      while (true) {
+        const { data: mData, error: mErr } = await (supabase as any)
+          .rpc("get_minmax_master")
+          .range(mOffset, mOffset + PAGE - 1);
+        if (mErr || !mData?.length) break;
+        for (const m of mData) {
+          if (m.sku_code && m.rank_sale && !rankMap.has(m.sku_code))
+            rankMap.set(m.sku_code, m.rank_sale);
+        }
+        if (mData.length < PAGE) break;
+        mOffset += PAGE;
+      }
+
+      const enriched: DocRowRaw[] = all.map((r: any) => {
+        const rank = rankMap.get(r.sku_code) || "D";
+        const factor = rank === "A" ? 21 : rank === "B" ? 14 : rank === "C" ? 10 : 7;
+        return {
+          sku_code: r.sku_code,
+          product_name_la: r.product_name_la || null,
+          product_name_en: r.product_name_en || null,
+          main_barcode: r.main_barcode || null,
+          unit_of_measure: r.unit_of_measure || null,
+          store_name: r.store_name || "",
+          type_store: r.type_store || "",
+          unit_pick: r.unit_pick != null ? Number(r.unit_pick) : 1,
+          pack_qty: r.pack_qty ?? null,
+          box_qty: r.box_qty ?? null,
+          avg_sale: 0, // ดึงต่อ request ใน fetchData (เฉพาะ filtered rows)
+          rank_sale: rank,
+          rank_factor: factor,
+          division: r.division || "",
+          department: r.department || "",
+          sub_department: r.sub_department || "",
+          class: r.class || "",
+          item_type: r.item_type || "",
+          buying_status: r.buying_status || "",
+          min_final: Number(r.min_val) || 0,
+          max_final: Number(r.max_val) || 0,
+        };
+      });
+
+      // บันทึก session cache (ล้าง key เก่าก่อน เพื่อประหยัด sessionStorage)
+      try {
+        for (const k of Object.keys(sessionStorage)) {
+          if (k.startsWith("sar_rawdoc")) sessionStorage.removeItem(k);
+        }
+        sessionStorage.setItem(cacheKey, JSON.stringify(enriched));
+      } catch { /* sessionStorage full → skip */ }
+
+      setRawDoc(enriched);
     } catch (e: any) {
-      console.warn("load raw doc", e);
+      console.warn("load raw doc (minmax table)", e);
     } finally {
       setRawDocLoading(false);
     }
@@ -445,7 +423,7 @@ export default function SARPage() {
     setLoadStartedAt(Date.now());
     try {
       if (!rawDoc.length) {
-        toast({ title: "ไม่พบ Min/Max Doc", description: "กรุณาคำนวณ Min/Max ก่อน", variant: "destructive" });
+        toast({ title: "ไม่พบข้อมูล Min/Max", description: "กรุณา Save Min/Max ก่อนใช้งาน SAR", variant: "destructive" });
         setRows([]); setCalculated(false); return;
       }
 
@@ -488,7 +466,7 @@ export default function SARPage() {
         }
         filtered = rawDoc.filter(r => resolvedSkus.has(r.sku_code));
         if (filtered.length === 0) {
-          toast({ title: "ไม่พบข้อมูล", description: `Import ${importedSet.size} keys แต่ไม่ match กับ Min/Max Doc`, variant: "destructive" });
+          toast({ title: "ไม่พบข้อมูล", description: `Import ${importedSet.size} keys แต่ไม่ match กับข้อมูล Min/Max`, variant: "destructive" });
         }
       }
 
@@ -497,10 +475,37 @@ export default function SARPage() {
 
       // เรียก RPC เพื่อ enrich data_master + pack_box สำหรับ filtered SKUs เท่านั้น
       const filteredSkus = [...new Set(filtered.map(r => r.sku_code).filter(Boolean))];
-      const { data: enrichData, error: enrichErr } = await (supabase as any).rpc("get_sar_enrich_data", {
-        p_sku_codes: filteredSkus,
-      });
-      if (enrichErr) throw enrichErr;
+      const filteredStores = [...new Set(filtered.map(r => r.store_name).filter(Boolean))];
+
+      const [enrichResult] = await Promise.all([
+        (supabase as any).rpc("get_sar_enrich_data", { p_sku_codes: filteredSkus }),
+      ]);
+      if (enrichResult.error) throw enrichResult.error;
+      const enrichData = enrichResult.data;
+
+      // ดึง avg_sale จาก sales_by_week เฉพาะ filtered SKUs × stores (สด + เร็ว)
+      setProgressLabel("กำลังดึง Avg Sale...");
+      const avgSaleMap = new Map<string, number>(); // key: `${sku}|${store}`
+      const CHUNK_S = 500;
+      for (let i = 0; i < filteredSkus.length; i += CHUNK_S) {
+        const skuSlice = filteredSkus.slice(i, i + CHUNK_S);
+        let sOff = 0;
+        while (true) {
+          const { data: salesRows, error: salesErr } = await (supabase as any)
+            .from("sales_by_week")
+            .select("item_id, store_name, avg_day")
+            .in("item_id", skuSlice)
+            .in("store_name", filteredStores)
+            .range(sOff, sOff + 999);
+          if (salesErr || !salesRows?.length) break;
+          for (const s of salesRows) {
+            if (s.item_id && s.store_name)
+              avgSaleMap.set(`${s.item_id}|${s.store_name}`, Number(s.avg_day) || 0);
+          }
+          if (salesRows.length < 1000) break;
+          sOff += 1000;
+        }
+      }
 
       setProgressPct(80);
       setProgressLabel("สร้าง rows...");
@@ -535,7 +540,8 @@ export default function SARPage() {
           price2km: dm?.list_price != null ? Number(dm.list_price) : null,
           price_jm: dm?.jmart_price != null ? Number(dm.jmart_price) : null,
           pack_size: up === 1 ? "Unit" : `1x${up}`,
-          avg_sale: Number(r.avg_sale) || 0, rank_sale: r.rank_sale || "D",
+          avg_sale: avgSaleMap.get(`${r.sku_code}|${r.store_name}`) ?? 0,
+          rank_sale: r.rank_sale || "D",
           rank_factor: Number(r.rank_factor) || 7,
           min_val: Number(r.min_final ?? r.min_cal ?? 0) || 0,
           max_val: Number(r.max_final ?? r.max_cal ?? 0) || 0,
