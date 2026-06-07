@@ -1178,12 +1178,22 @@ export default function MinmaxCalPage() {
       // STEP 1/3 — เตรียม Payload
       let sourceRows: CalcRow[];
       if (hasStaging) {
-        step(1, `ดึงข้อมูลทั้งหมดจาก Staging...`, 5);
-        const { data: allStaged, error: allErr } = await (supabase as any)
-          .rpc("get_staged_minmax_all", { p_user_id: user.id });
-        if (allErr) throw allErr;
+        // ดึง staged ทีละ batch (กัน payload ก้อนเดียวใหญ่เกิน → Failed to fetch)
+        const PAGE = 5000;
+        const allStaged: any[] = [];
+        let offset = 0;
+        while (true) {
+          step(1, `ดึงข้อมูลจาก Staging... ${allStaged.length.toLocaleString()} แถว`, 5);
+          const { data, error: allErr } = await (supabase as any)
+            .rpc("get_staged_minmax", { p_user_id: user.id, p_limit: PAGE, p_offset: offset });
+          if (allErr) throw allErr;
+          const batch = (data?.rows || []) as any[];
+          allStaged.push(...batch);
+          if (batch.length < PAGE) break;
+          offset += PAGE;
+        }
         const currentEdits = editsMap;
-        sourceRows = (Array.isArray(allStaged) ? allStaged : []).map((r: any) => {
+        sourceRows = allStaged.map((r: any) => {
           const base = mapStagingRow(r);
           const edit = currentEdits.get(rowKey(base));
           return edit ? { ...base, ...edit } : base;
