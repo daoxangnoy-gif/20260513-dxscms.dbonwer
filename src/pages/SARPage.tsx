@@ -171,9 +171,6 @@ export default function SARPage() {
     classes: string[];
   }>({ stores: [], types: [], itemTypes: [], buyings: [], divisions: [], departments: [], subDepartments: [], classes: [] });
 
-  // rank map: sku_code → { rank_sale, rank_factor } — loaded once from get_minmax_master
-  const rankMapRef = useRef<Map<string, { rank_sale: string; rank_factor: number }>>(new Map());
-
   // Import barcode/sku set
   const [importedSet, setImportedSet] = useState<Set<string>>(new Set(sarState.importedKeys));
   const [importedFileLabel, setImportedFileLabel] = useState<string>(sarState.importedFileLabel);
@@ -236,12 +233,8 @@ export default function SARPage() {
   const loadFilterOpts = useCallback(async () => {
     setFilterOptsLoading(true);
     try {
-      const [optsResult, masterResult] = await Promise.all([
-        (supabase as any).rpc("get_minmax_filter_options").single(),
-        (supabase as any).rpc("get_minmax_master"),
-      ]);
-      if (optsResult.data) {
-        const d = optsResult.data;
+      const { data: d } = await (supabase as any).rpc("get_minmax_filter_options").single();
+      if (d) {
         const stores = (d.stores || []) as { store_name: string; type_store: string }[];
         const types = Array.from(new Set(stores.map((s: any) => s.type_store).filter(Boolean))).sort() as string[];
         setFilterOptsState({
@@ -255,16 +248,6 @@ export default function SARPage() {
           classes: d.classes || [],
         });
       }
-      // สร้าง rank map จาก get_minmax_master
-      const newRankMap = new Map<string, { rank_sale: string; rank_factor: number }>();
-      for (const m of (masterResult.data || []) as any[]) {
-        if (m.sku_code && m.rank_sale) {
-          const rank = m.rank_sale as string;
-          const factor = rank === "A" ? 21 : rank === "B" ? 14 : rank === "C" ? 10 : 7;
-          newRankMap.set(m.sku_code, { rank_sale: rank, rank_factor: factor });
-        }
-      }
-      rankMapRef.current = newRankMap;
     } catch (e: any) {
       console.warn("loadFilterOpts error", e);
     } finally {
@@ -336,46 +319,31 @@ export default function SARPage() {
         setRows([]); setCalculated(false); return;
       }
 
-      // ดึง filtered rows จาก minmax table แบบ server-side (ไม่ต้องโหลด rows ทั้งหมดเข้า memory)
+      // ดึงข้อมูลทั้งหมด (minmax + price + avg_sale + rank + pack/box) ใน RPC เดียว server-side
       setProgressLabel("กำลังดึงข้อมูล Min/Max...");
-      setProgressPct(10);
+      setProgressPct(20);
 
-      let filtered: any[] = [];
+      // build filter params
+      const params: Record<string, any> = {};
+      if (storeFilter.length) params.p_stores = storeFilter;
+      if (typeStoreFilter.length) params.p_type_stores = typeStoreFilter;
+      if (itemTypeFilter.length) params.p_item_types = itemTypeFilter;
+      if (buyingFilter.length) params.p_buying_statuses = buyingFilter;
+      if (divisionFilter.length) params.p_divisions = divisionFilter;
+      if (departmentFilter.length) params.p_departments = departmentFilter;
+      if (subDeptFilter.length) params.p_sub_departments = subDeptFilter;
+      if (classFilter.length) params.p_classes = classFilter;
+      if (skuFilter.length) params.p_skus = skuFilter;
+      if (barcodeFilter.length) params.p_barcodes = barcodeFilter;
 
       if (mode === "filter") {
-        // build filter params สำหรับ get_minmax_view_by_stores
-        const params: Record<string, any> = {};
-        if (storeFilter.length) params.p_stores = storeFilter;
-        if (typeStoreFilter.length) params.p_type_stores = typeStoreFilter;
-        if (itemTypeFilter.length) params.p_item_types = itemTypeFilter;
-        if (buyingFilter.length) params.p_buying_statuses = buyingFilter;
-        if (divisionFilter.length) params.p_divisions = divisionFilter;
-        if (departmentFilter.length) params.p_departments = departmentFilter;
-        if (subDeptFilter.length) params.p_sub_departments = subDeptFilter;
-        if (classFilter.length) params.p_classes = classFilter;
-        if (skuFilter.length) params.p_skus = skuFilter;
-        if (barcodeFilter.length) params.p_barcodes = barcodeFilter;
-
-        // ต้องมี filter อย่างน้อย 1 อย่าง
+        // ต้องมี filter อย่างน้อย 1 อย่าง (ป้องกันดึง minmax ทั้งตาราง)
         if (Object.keys(params).length === 0) {
           toast({ title: "กรุณาเลือก Filter", description: "เลือก Store, Division หรือ filter อื่นๆ ก่อนดึงข้อมูล", variant: "destructive" });
           return;
         }
-
-        // paginated fetch
-        const PAGE = 1000;
-        let off = 0;
-        while (true) {
-          const { data, error } = await (supabase as any)
-            .rpc("get_minmax_view_by_stores", params)
-            .range(off, off + PAGE - 1);
-          if (error) throw error;
-          filtered.push(...(data || []));
-          if ((data || []).length < PAGE) break;
-          off += PAGE;
-        }
       } else {
-        // import mode — resolve barcodes → fetch from minmax by sku list
+        // import mode — resolve barcodes → SKU แล้วส่งเป็น p_skus
         if (importedSet.size === 0) {
           toast({ title: "ยังไม่ Import", description: "กรุณา Import barcode/SKU ก่อน", variant: "destructive" });
           return;
@@ -384,109 +352,63 @@ export default function SARPage() {
         const keys = Array.from(importedSet);
         const resolvedSkus = new Set<string>(keys);
         const CHUNK_BC = 500;
-        for (let i = 0; i < keys.length; i += CHUNK_BC) {
-          const slice = keys.slice(i, i + CHUNK_BC);
-          const { data: bcRows, error: bcErr } = await supabase
-            .from("data_master").select("sku_code, main_barcode, barcode")
-            .or(`main_barcode.in.(${slice.map(s => `"${s}"`).join(",")}),barcode.in.(${slice.map(s => `"${s}"`).join(",")})`);
+        // resolve barcodes แบบขนาน
+        const bcChunks: string[][] = [];
+        for (let i = 0; i < keys.length; i += CHUNK_BC) bcChunks.push(keys.slice(i, i + CHUNK_BC));
+        const bcResults = await Promise.all(bcChunks.map(slice =>
+          supabase.from("data_master").select("sku_code, main_barcode, barcode")
+            .or(`main_barcode.in.(${slice.map(s => `"${s}"`).join(",")}),barcode.in.(${slice.map(s => `"${s}"`).join(",")})`)
+        ));
+        for (const { data: bcRows, error: bcErr } of bcResults) {
           if (bcErr) { console.warn("[SAR import] barcode resolve error", bcErr); continue; }
           for (const m of (bcRows || []) as any[]) { if (m.sku_code) resolvedSkus.add(String(m.sku_code)); }
         }
-        // fetch minmax rows for resolved skus
-        const skuArr = Array.from(resolvedSkus);
-        const CHUNK_S2 = 500;
-        for (let i = 0; i < skuArr.length; i += CHUNK_S2) {
-          const skuSlice = skuArr.slice(i, i + CHUNK_S2);
-          const PAGE = 1000; let off2 = 0;
-          while (true) {
-            const { data, error } = await (supabase as any)
-              .rpc("get_minmax_view_by_stores", { p_skus: skuSlice })
-              .range(off2, off2 + PAGE - 1);
-            if (error) throw error;
-            filtered.push(...(data || []));
-            if ((data || []).length < PAGE) break;
-            off2 += PAGE;
-          }
-        }
-        if (filtered.length === 0) {
-          toast({ title: "ไม่พบข้อมูล", description: `Import ${importedSet.size} keys แต่ไม่มีข้อมูล Min/Max`, variant: "destructive" });
-        }
+        params.p_skus = Array.from(resolvedSkus);
       }
 
-      setProgressPct(30);
-      setProgressLabel(`ได้ ${filtered.length.toLocaleString()} แถว — กำลังดึง Master...`);
+      // ⚡ 1 round trip — RPC return jsonb array ทั้งหมด (ไม่ต้อง paginate/enrich/avg_sale แยก)
+      const { data: fullData, error: fullErr } = await (supabase as any).rpc("get_sar_data_full", params);
+      if (fullErr) throw fullErr;
+      const filtered: any[] = Array.isArray(fullData) ? fullData : [];
 
-      // เรียก RPC เพื่อ enrich cost/price สำหรับ filtered SKUs
-      const filteredSkus = [...new Set(filtered.map((r: any) => r.sku_code).filter(Boolean))];
-      const filteredStores = [...new Set(filtered.map((r: any) => r.store_name).filter(Boolean))];
-
-      const [enrichResult] = await Promise.all([
-        (supabase as any).rpc("get_sar_enrich_data", { p_sku_codes: filteredSkus }),
-      ]);
-      if (enrichResult.error) throw enrichResult.error;
-      const enrichData = enrichResult.data;
-
-      // ดึง avg_sale จาก sales_by_week เฉพาะ filtered SKUs × stores (สด + เร็ว)
-      setProgressLabel("กำลังดึง Avg Sale...");
-      const avgSaleMap = new Map<string, number>(); // key: `${sku}|${store}`
-      const CHUNK_S = 500;
-      for (let i = 0; i < filteredSkus.length; i += CHUNK_S) {
-        const skuSlice = filteredSkus.slice(i, i + CHUNK_S);
-        let sOff = 0;
-        while (true) {
-          const { data: salesRows, error: salesErr } = await (supabase as any)
-            .from("sales_by_week")
-            .select("item_id, store_name, avg_day")
-            .in("item_id", skuSlice)
-            .in("store_name", filteredStores)
-            .range(sOff, sOff + 999);
-          if (salesErr || !salesRows?.length) break;
-          for (const s of salesRows) {
-            if (s.item_id && s.store_name)
-              avgSaleMap.set(`${s.item_id}|${s.store_name}`, Number(s.avg_day) || 0);
-          }
-          if (salesRows.length < 1000) break;
-          sOff += 1000;
-        }
+      if (filtered.length === 0) {
+        const msg = mode === "import"
+          ? `Import ${importedSet.size} keys แต่ไม่มีข้อมูล Min/Max`
+          : "ไม่พบข้อมูลตาม Filter ที่เลือก";
+        toast({ title: "ไม่พบข้อมูล", description: msg, variant: "destructive" });
       }
 
       setProgressPct(80);
-      setProgressLabel("สร้าง rows...");
+      setProgressLabel(`ได้ ${filtered.length.toLocaleString()} แถว — สร้าง rows...`);
 
-      // build enrich maps
-      const dmMap = new Map<string, any>();
-      for (const r of (enrichData?.dm || []) as any[]) { if (r.sku_code && !dmMap.has(r.sku_code)) dmMap.set(r.sku_code, r); }
-      const rsvMap = new Map<string, { pack_qty: number | null; box_qty: number | null }>();
-      for (const r of (enrichData?.pack_box || []) as any[]) { if (r.sku_code && !rsvMap.has(r.sku_code)) rsvMap.set(r.sku_code, { pack_qty: r.pack_qty ?? null, box_qty: r.box_qty ?? null }); }
+      const rankFactorOf = (rank: string) => rank === "A" ? 21 : rank === "B" ? 14 : rank === "C" ? 10 : 7;
 
       const mapped: SARRow[] = filtered.map((r: any) => {
-        const dm = dmMap.get(r.sku_code);
-        const rsv = rsvMap.get(r.sku_code);
         const up = Number(r.unit_pick ?? 1) || 1;
-        const rankInfo = rankMapRef.current.get(r.sku_code) ?? { rank_sale: "D", rank_factor: 7 };
+        const rank = r.rank_sale || "D";
         return {
           sku_code: r.sku_code,
-          main_barcode: r.main_barcode ?? dm?.main_barcode ?? null,
-          product_name_la: r.product_name_la || dm?.product_name_la || null,
-          product_name_en: r.product_name_en || dm?.product_name_en || null,
-          unit_of_measure: r.unit_of_measure || dm?.unit_of_measure || null,
+          main_barcode: r.main_barcode ?? null,
+          product_name_la: r.product_name_la ?? null,
+          product_name_en: r.product_name_en ?? null,
+          unit_of_measure: r.unit_of_measure ?? null,
           store_name: r.store_name,
           type_store: r.type_store || "",
-          division: r.division || dm?.division || "",
-          department: r.department || dm?.department || "",
-          sub_department: r.sub_department || dm?.sub_department || "",
-          item_type: r.item_type || dm?.item_type || "",
-          buying_status: r.buying_status || dm?.buying_status || "",
+          division: r.division || "",
+          department: r.department || "",
+          sub_department: r.sub_department || "",
+          item_type: r.item_type || "",
+          buying_status: r.buying_status || "",
           unit_pick: up,
-          pack_qty: r.pack_qty ?? rsv?.pack_qty ?? null,
-          box_qty: r.box_qty ?? rsv?.box_qty ?? null,
-          cost: dm?.standard_price != null ? Number(dm.standard_price) : null,
-          price2km: dm?.list_price != null ? Number(dm.list_price) : null,
-          price_jm: dm?.jmart_price != null ? Number(dm.jmart_price) : null,
+          pack_qty: r.pack_qty ?? null,
+          box_qty: r.box_qty ?? null,
+          cost: r.standard_price != null ? Number(r.standard_price) : null,
+          price2km: r.list_price != null ? Number(r.list_price) : null,
+          price_jm: r.jmart_price != null ? Number(r.jmart_price) : null,
           pack_size: up === 1 ? "Unit" : `1x${up}`,
-          avg_sale: avgSaleMap.get(`${r.sku_code}|${r.store_name}`) ?? 0,
-          rank_sale: rankInfo.rank_sale,
-          rank_factor: rankInfo.rank_factor,
+          avg_sale: Number(r.avg_sale) || 0,
+          rank_sale: rank,
+          rank_factor: rankFactorOf(rank),
           min_val: Number(r.min_val ?? 0) || 0,
           max_val: Number(r.max_val ?? 0) || 0,
           stock_dc: 0, stock_store: 0, on_order: 0,
