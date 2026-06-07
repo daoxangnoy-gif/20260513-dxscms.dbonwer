@@ -49,6 +49,13 @@ AS $function$
     FROM public.range_store_view rsv
     CROSS JOIN LATERAL jsonb_each(COALESCE(rsv.range_data, '{}'::jsonb)) kv
     WHERE COALESCE(kv.value->>'apply_yn','N') = 'Y'
+  ),
+  sales_agg AS (
+    -- sales_by_week เก็บ sku ใน id18 (ไม่ใช่ item_id) และมีหลายแถวต่อ sku×store → SUM
+    SELECT sw.id18 AS sku_code, sw.store_name, COALESCE(SUM(sw.avg_day),0) AS avg_sale
+    FROM public.sales_by_week sw
+    WHERE sw.id18 IS NOT NULL AND sw.store_name IS NOT NULL
+    GROUP BY sw.id18, sw.store_name
   )
   SELECT COALESCE(jsonb_agg(row_to_json(t)::jsonb), '[]'::jsonb)
   FROM (
@@ -68,13 +75,13 @@ AS $function$
       ry.pack_qty, ry.box_qty,
       p.standard_price, p.list_price, p.jmart_price,
       COALESCE(rk.final_rank,'D') AS rank_sale,
-      COALESCE(sb.avg_day, 0) AS avg_sale
+      COALESCE(sa.avg_sale, 0) AS avg_sale
     FROM public.minmax m
     LEFT JOIN dm d ON d.sku_code = m.item_id
     LEFT JOIN price p ON p.sku_code = m.item_id
     LEFT JOIN rk ON rk.item_id = m.item_id
     LEFT JOIN rsv_per_store ry ON ry.sku_code = m.item_id AND ry.store_name = m.store_name
-    LEFT JOIN public.sales_by_week sb ON sb.item_id = m.item_id AND sb.store_name = m.store_name
+    LEFT JOIN sales_agg sa ON sa.sku_code = m.item_id AND sa.store_name = m.store_name
     WHERE (p_stores          IS NULL OR cardinality(p_stores)=0          OR m.store_name = ANY(p_stores))
       AND (p_type_stores     IS NULL OR cardinality(p_type_stores)=0     OR m.type_store = ANY(p_type_stores))
       AND (p_item_types      IS NULL OR cardinality(p_item_types)=0      OR COALESCE(d.item_type,'') = ANY(p_item_types))
