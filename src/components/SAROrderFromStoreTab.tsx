@@ -52,13 +52,6 @@ interface OfsResultDoc {
   item_count: number; user_id: string | null; created_at: string;
 }
 
-interface DocRowRaw {
-  sku_code: string; store_name: string; type_store?: string;
-  unit_pick?: number; unit_pick_edit?: number | null;
-  avg_sale?: number; rank_sale?: string; rank_factor?: number;
-  min_cal?: number; max_cal?: number; min_final?: number; max_final?: number;
-}
-
 interface ProcessedRow extends SARRow {
   qty_import: number; division_group: string;
   _doc_type?: string;
@@ -643,64 +636,74 @@ export default function SAROrderFromStoreTab() {
       const allStores = [...new Set(selectedDocs.map(d => d.store_name))];
 
       setProgressPct(30); setProgressLabel(`ดึงข้อมูล ${allSkus.length.toLocaleString()} SKU × ${allStores.length} store...`);
-      const { data: calcData, error: rpcError } = await (supabase as any).rpc("get_ofs_calc_data", {
-        p_sku_codes: allSkus,
-        p_store_names: allStores,
-      });
-      if (rpcError) throw rpcError;
+
+      // ⚡ ยิงทุกอย่างขนานพร้อมกัน (เหมือน SAR — อ่าน min/max จาก minmax table)
+      //  P1 get_sar_data_full → min/max/avg/rank/price/pack/box/dm meta จาก "minmax table"
+      //  P2 get_sar_calc_data → stock_dc / stock_store / on_order
+      //  P3 data_master      → vendor + unit barcode/uom (packing=1) + division_group
+      //  P4 po_cost          → po_cost_unit
+      //  P5 store_type       → ship_to
+      const shipToFetch = allStores.length
+        ? (async () => {
+            const chunks: string[][] = [];
+            for (let i = 0; i < allStores.length; i += 500) chunks.push(allStores.slice(i, i + 500));
+            const results = await Promise.all(chunks.map(ch => (supabase.from("store_type" as any) as any).select("store_name,ship_to").in("store_name", ch).then(({ data }: any) => data || [])));
+            return results.flat();
+          })()
+        : Promise.resolve([] as any[]);
+
+      const [fullRes, calcRes, dmExtraRows, poCostRows, shipToRows] = await Promise.all([
+        (supabase as any).rpc("get_sar_data_full", { p_skus: allSkus, p_stores: allStores }),
+        (supabase as any).rpc("get_sar_calc_data", { p_sku_codes: allSkus, p_store_names: allStores }),
+        queryInChunks<any>("data_master", "sku_code", allSkus, "sku_code,main_barcode,unit_of_measure,vendor_code,vendor_display_name,division_group,packing_size_qty"),
+        queryInChunks<any>("po_cost", "item_id", allSkus, "item_id,po_cost_unit"),
+        shipToFetch,
+      ]);
+      if (fullRes.error) throw fullRes.error;
+      if (calcRes.error) throw calcRes.error;
 
       setProgressPct(85); setProgressLabel("สร้าง rows...");
-      const dmMap = new Map<string, any>();
-      for (const r of (calcData?.dm || []) as any[]) { if (r.sku_code && !dmMap.has(r.sku_code)) dmMap.set(r.sku_code, r); }
 
-      const mmMap = new Map<string, DocRowRaw>();
-      for (const r of (calcData?.mm || []) as any[]) { const k = `${r.sku_code}\x00${r.store_name}`; if (!mmMap.has(k)) mmMap.set(k, r as DocRowRaw); }
+      // P1 — minmax table rows (key = sku\x00store)
+      const mmMap = new Map<string, any>();
+      const fullArr: any[] = Array.isArray(fullRes.data) ? fullRes.data : [];
+      for (const r of fullArr) { const k = `${r.sku_code}\x00${r.store_name}`; if (!mmMap.has(k)) mmMap.set(k, r); }
 
+      // P2 — stock / on_order
+      const calcData = calcRes.data || {};
       const stockDCMap = new Map<string, number>();
-      for (const r of (calcData?.stock_dc || []) as any[]) stockDCMap.set(r.item_id, Number(r.qty) || 0);
-
+      for (const r of (calcData.stock_dc || []) as any[]) stockDCMap.set(r.item_id, Number(r.qty) || 0);
       const stockStoreMap = new Map<string, number>();
-      for (const r of (calcData?.stock_store || []) as any[]) stockStoreMap.set(`${r.item_id}\x00${r.company}`, Number(r.qty) || 0);
-
+      for (const r of (calcData.stock_store || []) as any[]) stockStoreMap.set(`${r.item_id}\x00${r.company}`, Number(r.qty) || 0);
       const onOrderMap = new Map<string, number>();
-      for (const r of (calcData?.on_order || []) as any[]) onOrderMap.set(`${r.sku_code}\x00${r.store_name}`, Number(r.qty) || 0);
+      for (const r of (calcData.on_order || []) as any[]) onOrderMap.set(`${r.sku_code}\x00${r.store_name}`, Number(r.qty) || 0);
 
-      const rsvMap = new Map<string, { pack_qty: number | null; box_qty: number | null }>();
-      for (const r of (calcData?.pack_box || []) as any[]) { if (!rsvMap.has(r.sku_code)) rsvMap.set(r.sku_code, { pack_qty: r.pack_qty ?? null, box_qty: r.box_qty ?? null }); }
-
-      const stTypeMap = new Map<string, string>();
-      for (const r of (calcData?.store_types || []) as any[]) stTypeMap.set(r.store_name, r.type_store || "");
-
-      // Fetch unit barcode/UoM from data_master (packing_size_qty=1)
-      setProgressPct(88); setProgressLabel("ดึงข้อมูล Vendor...");
-      const dmUnitRows = await queryInChunks<any>("data_master", "sku_code", allSkus, "sku_code,main_barcode,unit_of_measure", q => q.eq("packing_size_qty", 1));
+      // P3 — vendor + unit barcode/uom (packing=1) + division_group จาก data_master ก้อนเดียว
       const skuToUnitBarcode = new Map<string, string>();
       const skuToUnitUom = new Map<string, string>();
-      for (const r of dmUnitRows) {
-        if (r.sku_code) {
+      const skuToVendorCode = new Map<string, string>();
+      const skuToVendorName = new Map<string, string>();
+      const skuToDivGroup = new Map<string, string>();
+      for (const r of dmExtraRows) {
+        if (!r.sku_code) continue;
+        if (Number(r.packing_size_qty) === 1 && !skuToUnitBarcode.has(r.sku_code)) {
           skuToUnitBarcode.set(r.sku_code, r.main_barcode || "");
           skuToUnitUom.set(r.sku_code, r.unit_of_measure || "");
         }
-      }
-
-      // Fetch vendor_code WITHOUT packing_size_qty filter (take first non-empty per SKU)
-      const dmVendorRows = await queryInChunks<any>("data_master", "sku_code", allSkus, "sku_code,vendor_code,vendor_display_name");
-      const skuToVendorCode = new Map<string, string>();
-      const skuToVendorName = new Map<string, string>();
-      for (const r of dmVendorRows) {
-        if (r.sku_code && r.vendor_code && !skuToVendorCode.has(r.sku_code)) {
+        if (r.vendor_code && !skuToVendorCode.has(r.sku_code)) {
           skuToVendorCode.set(r.sku_code, r.vendor_code);
           skuToVendorName.set(r.sku_code, r.vendor_display_name || "");
         }
+        if (r.division_group && !skuToDivGroup.has(r.sku_code)) skuToDivGroup.set(r.sku_code, r.division_group);
       }
 
+      // vendor currency (ขึ้นกับ vendor codes → รอ P3)
       const allVendorCodes = [...new Set(Array.from(skuToVendorCode.values()).filter(Boolean))];
       const vendorMasterRows = allVendorCodes.length ? await queryInChunks<any>("vendor_master", "vendor_code", allVendorCodes, "vendor_code,currency") : [];
       const vendorCurrencyMap = new Map<string, string>();
       for (const r of vendorMasterRows) { if (r.vendor_code) vendorCurrencyMap.set(r.vendor_code, r.currency || ""); }
 
-      // Fetch po_cost_unit from po_cost table (key = item_id = sku_code)
-      const poCostRows = await queryInChunks<any>("po_cost", "item_id", allSkus, "item_id,po_cost_unit");
+      // P4 — po_cost_unit
       const skuToPoCostUnit = new Map<string, number | null>();
       for (const r of poCostRows) {
         if (r.item_id && !skuToPoCostUnit.has(r.item_id)) {
@@ -708,15 +711,7 @@ export default function SAROrderFromStoreTab() {
         }
       }
 
-      // Fetch ship_to from store_type for D2S Picking Type
-      const shipToRows = allStores.length
-        ? await (async () => {
-            const chunks: string[][] = [];
-            for (let i = 0; i < allStores.length; i += 500) chunks.push(allStores.slice(i, i + 500));
-            const results = await Promise.all(chunks.map(ch => (supabase.from("store_type" as any) as any).select("store_name,ship_to").in("store_name", ch).then(({ data }: any) => data || [])));
-            return results.flat();
-          })()
-        : [];
+      // P5 — ship_to
       const storeShipToMap = new Map<string, string>();
       for (const r of shipToRows as any[]) { if (r.store_name) storeShipToMap.set(r.store_name, r.ship_to || ""); }
 
@@ -724,24 +719,24 @@ export default function SAROrderFromStoreTab() {
       for (const [key, { qty, main_barcode: mb, product_name_la: pnLa }] of storeSkuMap) {
         const [storeName, sku] = key.split("\x00");
         const lookupKey = `${sku}\x00${storeName}`;
-        const dm = dmMap.get(sku);
         const mm = mmMap.get(lookupKey);
-        const rsv = rsvMap.get(sku);
-        const up = Number(mm?.unit_pick_edit ?? mm?.unit_pick ?? 1) || 1;
+        const up = Number(mm?.unit_pick ?? 1) || 1;
+        const rank = mm?.rank_sale || "D";
         const sarRow: SARRow = {
-          sku_code: sku, main_barcode: dm?.main_barcode ?? mb ?? null,
-          product_name_la: dm?.product_name_la ?? pnLa ?? null, product_name_en: dm?.product_name_en ?? null,
-          unit_of_measure: dm?.unit_of_measure ?? null, store_name: storeName,
-          type_store: mm?.type_store || stTypeMap.get(storeName) || "",
-          division: dm?.division ?? "", department: dm?.department ?? "", sub_department: dm?.sub_department ?? "",
-          item_type: dm?.item_type ?? "", buying_status: dm?.buying_status ?? "",
-          unit_pick: up, pack_qty: rsv?.pack_qty ?? null, box_qty: rsv?.box_qty ?? null,
-          cost: dm?.standard_price != null ? Number(dm.standard_price) : null,
-          price2km: dm?.list_price != null ? Number(dm.list_price) : null,
-          price_jm: dm?.jmart_price != null ? Number(dm.jmart_price) : null,
+          sku_code: sku, main_barcode: mm?.main_barcode ?? mb ?? null,
+          product_name_la: mm?.product_name_la ?? pnLa ?? null, product_name_en: mm?.product_name_en ?? null,
+          unit_of_measure: mm?.unit_of_measure ?? null, store_name: storeName,
+          type_store: mm?.type_store || "",
+          division: mm?.division ?? "", department: mm?.department ?? "", sub_department: mm?.sub_department ?? "",
+          item_type: mm?.item_type ?? "", buying_status: mm?.buying_status ?? "",
+          unit_pick: up, pack_qty: mm?.pack_qty ?? null, box_qty: mm?.box_qty ?? null,
+          cost: mm?.standard_price != null ? Number(mm.standard_price) : null,
+          price2km: mm?.list_price != null ? Number(mm.list_price) : null,
+          price_jm: mm?.jmart_price != null ? Number(mm.jmart_price) : null,
           pack_size: up === 1 ? "Unit" : `1x${up}`,
-          avg_sale: Number(mm?.avg_sale) || 0, rank_sale: mm?.rank_sale || "D", rank_factor: Number(mm?.rank_factor) || 7,
-          min_val: Number(mm?.min_final ?? mm?.min_cal ?? 0) || 0, max_val: Number(mm?.max_final ?? mm?.max_cal ?? 0) || 0,
+          avg_sale: Number(mm?.avg_sale) || 0, rank_sale: rank,
+          rank_factor: rank === "A" ? 21 : rank === "B" ? 14 : rank === "C" ? 10 : 7,
+          min_val: Number(mm?.min_val ?? 0) || 0, max_val: Number(mm?.max_val ?? 0) || 0,
           stock_dc: stockDCMap.get(sku) || 0, stock_store: stockStoreMap.get(lookupKey) || 0,
           on_order: onOrderMap.get(lookupKey) || 0,
           sar_suggest1: 0, sar_suggest2: 0, tt_order: 0, suggest_order_edit: null,
@@ -750,11 +745,11 @@ export default function SAROrderFromStoreTab() {
         const vCode = skuToVendorCode.get(sku) || "";
         const vName = skuToVendorName.get(sku) || "";
         const vCurr = vendorCurrencyMap.get(vCode) || "";
-        const uBarcode = skuToUnitBarcode.get(sku) || dm?.main_barcode || mb || "";
-        const uUom = skuToUnitUom.get(sku) || dm?.unit_of_measure || "";
+        const uBarcode = skuToUnitBarcode.get(sku) || mm?.main_barcode || mb || "";
+        const uUom = skuToUnitUom.get(sku) || mm?.unit_of_measure || "";
         const shipTo = storeShipToMap.get(storeName) || "";
         const poCostUnit = skuToPoCostUnit.has(sku) ? skuToPoCostUnit.get(sku)! : null;
-        rows.push({ ...sarRow, qty_import: qty, division_group: dm?.division_group ?? "", stock_store_orig: sarRow.stock_store, vendor_code: vCode, vendor_name: vName, currency: vCurr, unit_barcode: uBarcode, unit_uom: uUom, ship_to: shipTo, po_cost_unit: poCostUnit });
+        rows.push({ ...sarRow, qty_import: qty, division_group: skuToDivGroup.get(sku) ?? "", stock_store_orig: sarRow.stock_store, vendor_code: vCode, vendor_name: vName, currency: vCurr, unit_barcode: uBarcode, unit_uom: uUom, ship_to: shipTo, po_cost_unit: poCostUnit });
       }
 
       setHqRows(rows); setHqFetched(true); setProgressPct(100);
