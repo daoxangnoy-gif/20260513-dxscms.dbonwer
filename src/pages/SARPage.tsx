@@ -27,37 +27,6 @@ import { ImportSkipBar, ImportSkipDialog, type SkippedItem } from "@/components/
 type Mode = "filter" | "import";
 const PAGE_SIZE_OPTIONS = [100, 500, 1000, 5000, 10000];
 
-interface DocRowRaw {
-  sku_code: string;
-  product_name_la: string | null;
-  product_name_en: string | null;
-  main_barcode: string | null;
-  unit_of_measure: string | null;
-  store_name: string;
-  type_store: string;
-  size_store?: string;
-  unit_pick?: number;
-  unit_pick_edit?: number | null;
-  pack_qty?: number | null;
-  box_qty?: number | null;
-  avg_sale?: number;
-  rank_sale?: string;
-  rank_factor?: number;
-  item_type?: string;
-  buying_status?: string;
-  division?: string;
-  department?: string;
-  sub_department?: string;
-  class?: string;
-  min_cal?: number;
-  max_cal?: number;
-  min_final?: number;
-  max_final?: number;
-  // enriched by RPC (from data_master)
-  standard_price?: number | null;
-  list_price?: number | null;
-  jmart_price?: number | null;
-}
 
 const COLS: { key: keyof SARRow; label: string; w?: number; right?: boolean; editable?: boolean }[] = [
   { key: "store_name", label: "Store Name", w: 130 },
@@ -129,6 +98,36 @@ function ElapsedTimer({ startedAt }: { startedAt: number }) {
   }, [startedAt]);
   const s = ((Date.now() - startedAt) / 1000).toFixed(1);
   return <span className="text-[11px] font-mono tabular-nums text-primary font-semibold">⏱ {s}s</span>;
+}
+
+// ดึง get_sar_data_full แบบ paginate: หน้าแรกรู้ total → ยิงหน้าที่เหลือขนานทีละ 4
+const SAR_FULL_PAGE = 5000;
+async function fetchSarDataFullPaged(
+  params: Record<string, any>,
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<any[]> {
+  const first = await (supabase as any).rpc("get_sar_data_full", { ...params, p_limit: SAR_FULL_PAGE, p_offset: 0 });
+  if (first.error) throw first.error;
+  const total = Number(first.data?.total) || 0;
+  const all: any[] = Array.isArray(first.data?.rows) ? first.data.rows : [];
+  onProgress?.(all.length, total);
+  if (total <= SAR_FULL_PAGE) return all;
+
+  const offsets: number[] = [];
+  for (let o = SAR_FULL_PAGE; o < total; o += SAR_FULL_PAGE) offsets.push(o);
+  const CONCURRENCY = 4;
+  for (let i = 0; i < offsets.length; i += CONCURRENCY) {
+    const batch = offsets.slice(i, i + CONCURRENCY);
+    const res = await Promise.all(batch.map(off =>
+      (supabase as any).rpc("get_sar_data_full", { ...params, p_limit: SAR_FULL_PAGE, p_offset: off })
+    ));
+    for (const r of res) {
+      if (r.error) throw r.error;
+      if (Array.isArray(r.data?.rows)) all.push(...r.data.rows);
+    }
+    onProgress?.(all.length, total);
+  }
+  return all;
 }
 
 export default function SARPage() {
@@ -273,43 +272,8 @@ export default function SARPage() {
     filterOptsState.stores.map(s => ({ store_name: s.store_name, type_store: s.type_store })),
   [filterOptsState.stores]);
 
-  // helper: map DocRowRaw (enriched by RPC) → SARRow
-  const mapDocRowToSARRow = (r: DocRowRaw): SARRow => {
-    const up = Number(r.unit_pick_edit ?? r.unit_pick ?? 1) || 1;
-    return {
-      sku_code: r.sku_code,
-      main_barcode: r.main_barcode,
-      product_name_la: r.product_name_la,
-      product_name_en: r.product_name_en,
-      unit_of_measure: r.unit_of_measure,
-      store_name: r.store_name,
-      type_store: r.type_store || "",
-      division: r.division || "",
-      department: r.department || "",
-      sub_department: r.sub_department || "",
-      item_type: r.item_type || "",
-      buying_status: r.buying_status || "",
-      unit_pick: up,
-      pack_qty: r.pack_qty ?? null,
-      box_qty: r.box_qty ?? null,
-      cost: r.standard_price != null ? Number(r.standard_price) : null,
-      price2km: r.list_price != null ? Number(r.list_price) : null,
-      price_jm: r.jmart_price != null ? Number(r.jmart_price) : null,
-      pack_size: up === 1 ? "Unit" : `1x${up}`,
-      avg_sale: Number(r.avg_sale) || 0,
-      rank_sale: r.rank_sale || "D",
-      rank_factor: Number(r.rank_factor) || 7,
-      min_val: Number(r.min_final ?? r.min_cal ?? 0) || 0,
-      max_val: Number(r.max_final ?? r.max_cal ?? 0) || 0,
-      stock_dc: 0, stock_store: 0, on_order: 0,
-      sar_suggest1: 0, sar_suggest2: 0, tt_order: 0, suggest_order_edit: null,
-      final_order_unit: 0, final_order_uom: 0, doh_min: 0, doh_max: 0, doh_stock: 0, doh_tobe: 0,
-      calculated: false,
-    };
-  };
-
   // ----- Step 1: ดึงข้อมูล -----
-  // Flow: filter rawDoc (in-memory) → get_sar_enrich_data(filteredSkus) → map SARRow
+  // Flow: get_sar_data_full (minmax table, paginated) → map SARRow
   const fetchData = async () => {
     setLoading(true);
     setLoadStartedAt(Date.now());
@@ -366,10 +330,11 @@ export default function SARPage() {
         params.p_skus = Array.from(resolvedSkus);
       }
 
-      // ⚡ 1 round trip — RPC return jsonb array ทั้งหมด (ไม่ต้อง paginate/enrich/avg_sale แยก)
-      const { data: fullData, error: fullErr } = await (supabase as any).rpc("get_sar_data_full", params);
-      if (fullErr) throw fullErr;
-      const filtered: any[] = Array.isArray(fullData) ? fullData : [];
+      // ⚡ Paginate — รู้ total จากหน้าแรก แล้วยิงหน้าที่เหลือขนานทีละ 4 (กัน payload ใหญ่)
+      const filtered = await fetchSarDataFullPaged(params, (loaded, total) => {
+        setProgressLabel(`ดึงข้อมูล ${loaded.toLocaleString()}/${total.toLocaleString()} แถว...`);
+        setProgressPct(20 + Math.round((loaded / Math.max(1, total)) * 55));
+      });
 
       if (filtered.length === 0) {
         const msg = mode === "import"

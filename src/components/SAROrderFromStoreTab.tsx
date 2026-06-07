@@ -124,6 +124,30 @@ async function queryInChunks<T>(table: string, field: string, values: string[], 
   return batches.flat();
 }
 
+// ดึง get_sar_data_full แบบ paginate: หน้าแรกรู้ total → ยิงหน้าที่เหลือขนานทีละ 4
+const SAR_FULL_PAGE = 5000;
+async function fetchSarDataFullPaged(params: Record<string, any>): Promise<any[]> {
+  const first = await (supabase as any).rpc("get_sar_data_full", { ...params, p_limit: SAR_FULL_PAGE, p_offset: 0 });
+  if (first.error) throw first.error;
+  const total = Number(first.data?.total) || 0;
+  const all: any[] = Array.isArray(first.data?.rows) ? first.data.rows : [];
+  if (total <= SAR_FULL_PAGE) return all;
+  const offsets: number[] = [];
+  for (let o = SAR_FULL_PAGE; o < total; o += SAR_FULL_PAGE) offsets.push(o);
+  const CONCURRENCY = 4;
+  for (let i = 0; i < offsets.length; i += CONCURRENCY) {
+    const batch = offsets.slice(i, i + CONCURRENCY);
+    const res = await Promise.all(batch.map(off =>
+      (supabase as any).rpc("get_sar_data_full", { ...params, p_limit: SAR_FULL_PAGE, p_offset: off })
+    ));
+    for (const r of res) {
+      if (r.error) throw r.error;
+      if (Array.isArray(r.data?.rows)) all.push(...r.data.rows);
+    }
+  }
+  return all;
+}
+
 function fmtNum(v: any): string {
   if (v === null || v === undefined || v === "") return "-";
   if (typeof v !== "number") return String(v);
@@ -652,21 +676,19 @@ export default function SAROrderFromStoreTab() {
           })()
         : Promise.resolve([] as any[]);
 
-      const [fullRes, calcRes, dmExtraRows, poCostRows, shipToRows] = await Promise.all([
-        (supabase as any).rpc("get_sar_data_full", { p_skus: allSkus, p_stores: allStores }),
+      const [fullArr, calcRes, dmExtraRows, poCostRows, shipToRows] = await Promise.all([
+        fetchSarDataFullPaged({ p_skus: allSkus, p_stores: allStores }),
         (supabase as any).rpc("get_sar_calc_data", { p_sku_codes: allSkus, p_store_names: allStores }),
         queryInChunks<any>("data_master", "sku_code", allSkus, "sku_code,main_barcode,unit_of_measure,vendor_code,vendor_display_name,division_group,packing_size_qty"),
         queryInChunks<any>("po_cost", "item_id", allSkus, "item_id,po_cost_unit"),
         shipToFetch,
       ]);
-      if (fullRes.error) throw fullRes.error;
       if (calcRes.error) throw calcRes.error;
 
       setProgressPct(85); setProgressLabel("สร้าง rows...");
 
       // P1 — minmax table rows (key = sku\x00store)
       const mmMap = new Map<string, any>();
-      const fullArr: any[] = Array.isArray(fullRes.data) ? fullRes.data : [];
       for (const r of fullArr) { const k = `${r.sku_code}\x00${r.store_name}`; if (!mmMap.has(k)) mmMap.set(k, r); }
 
       // P2 — stock / on_order
