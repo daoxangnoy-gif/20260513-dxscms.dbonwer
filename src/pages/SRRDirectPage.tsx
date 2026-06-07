@@ -105,6 +105,7 @@ interface D2SRow {
   min_store: number;
   max_store: number;
   stock_store: number;
+  orig_stock_store: number;
   stock_dc: number;
   order_cycle: number;
   orig_order_cycle: number;
@@ -550,6 +551,7 @@ function buildD2SRows(rawRows: any[]): D2SRow[] {
       min_store: Number(r.min_store) || 0,
       max_store: Number(r.max_store) || 0,
       stock_store: Number(r.stock_store) || 0,
+      orig_stock_store: Number(r.stock_store) || 0,
       stock_dc: Number(r.stock_dc) || 0,
       order_cycle: oc,
       orig_order_cycle: oc,
@@ -1075,6 +1077,8 @@ export default function SRRDirectPage() {
   const [page, setPage] = useState(d2sStateRef.current?.page || 0);
   // Immutable original on_order_store — keyed by row.id, set once when data loads, never mutated
   const origOnOrderStoreRef = useRef<Map<string, number>>(new Map());
+  // Immutable original stock_store — keyed by row.id (สำหรับ Restore)
+  const origStockStoreRef = useRef<Map<string, number>>(new Map());
   const [pageSize, setPageSize] = useState(d2sStateRef.current?.pageSize || 30);
 
   // Tab 2: Custom Safety Days per Rank (persisted)
@@ -2236,6 +2240,10 @@ export default function SRRDirectPage() {
         const origMap = new Map<string, number>();
         (_excluded as any[]).forEach((r: any) => origMap.set(r.id, Number(r.on_order_store) || 0));
         origOnOrderStoreRef.current = origMap;
+        // Snapshot orig_stock_store for Restore
+        const origStockMap = new Map<string, number>();
+        (_excluded as any[]).forEach((r: any) => origStockMap.set(r.id, Number(r.stock_store) || 0));
+        origStockStoreRef.current = origStockMap;
         setShowData(_excluded as any);
         setSelectedRows(new Set());
         setActiveCell(null);
@@ -2560,6 +2568,7 @@ export default function SRRDirectPage() {
     merged = merged.map(r => ({
       ...r,
       orig_on_order_store: (r as any).orig_on_order_store ?? r.on_order_store,
+      orig_stock_store: (r as any).orig_stock_store ?? r.stock_store,
     }));
 
     const _excluded2 = await (await import("@/lib/filterTemplates")).applyExcludeFilters(merged as any[], "srr_direct");
@@ -2567,6 +2576,10 @@ export default function SRRDirectPage() {
     const origMap2 = new Map<string, number>();
     (_excluded2 as any[]).forEach((r: any) => origMap2.set(r.id, Number(r.on_order_store) || 0));
     origOnOrderStoreRef.current = origMap2;
+    // Snapshot orig_stock_store for Restore
+    const origStockMap2 = new Map<string, number>();
+    (_excluded2 as any[]).forEach((r: any) => origStockMap2.set(r.id, Number(r.stock_store) || 0));
+    origStockStoreRef.current = origStockMap2;
     setShowData(_excluded2 as any);
     setPage(0);
     setSelectedRows(new Set());
@@ -2600,6 +2613,36 @@ export default function SRRDirectPage() {
       data: doc.data.map((r) => {
         const orig = origOnOrderStoreRef.current.get(r.id) ?? r.orig_on_order_store ?? 0;
         return recalcD2SRow({ ...r, on_order_store: orig });
+      }),
+    })));
+  };
+
+  const updateStockStore = (rowId: string, value: number) => {
+    setShowData((rows) => rows.map((r) => (r.id !== rowId ? r : recalcD2SRow({ ...r, stock_store: value }))));
+    setVendorDocs((prev) => prev.map((doc) => {
+      if (!doc.data.some((r) => r.id === rowId)) return doc;
+      return { ...doc, data: doc.data.map((r) => r.id === rowId ? recalcD2SRow({ ...r, stock_store: value }) : r) };
+    }));
+  };
+
+  const clearAllStockStore = () => {
+    setShowData((rows) => rows.map((r) => recalcD2SRow({ ...r, stock_store: 0 })));
+    setVendorDocs((prev) => prev.map((doc) => ({
+      ...doc,
+      data: doc.data.map((r) => recalcD2SRow({ ...r, stock_store: 0 })),
+    })));
+  };
+
+  const restoreAllStockStore = () => {
+    setShowData((rows) => rows.map((r) => {
+      const orig = origStockStoreRef.current.get(r.id) ?? r.orig_stock_store ?? 0;
+      return recalcD2SRow({ ...r, stock_store: orig });
+    }));
+    setVendorDocs((prev) => prev.map((doc) => ({
+      ...doc,
+      data: doc.data.map((r) => {
+        const orig = origStockStoreRef.current.get(r.id) ?? r.orig_stock_store ?? 0;
+        return recalcD2SRow({ ...r, stock_store: orig });
       }),
     })));
   };
@@ -2838,6 +2881,7 @@ export default function SRRDirectPage() {
     const patched = base.map(r => ({
       ...r,
       orig_on_order_store: r.orig_on_order_store ?? r.on_order_store,
+      orig_stock_store: r.orig_stock_store ?? r.stock_store,
     }));
     return applyChipFilter(patched, tableSearchChips, TABLE_SEARCH_KEYS);
   }, [showData, tableSearchChips, TABLE_SEARCH_KEYS, showOnlyFinalGt0]);
@@ -3444,6 +3488,20 @@ export default function SRRDirectPage() {
                             className="inline-flex items-center justify-center w-4 h-4 rounded border border-sky-400 text-sky-500 hover:bg-sky-50"
                             onClick={(e) => { e.stopPropagation(); const orig = origOnOrderStoreRef.current.get(row.id) ?? row.orig_on_order_store ?? 0; updateOnOrderStore(row.id, orig); }}
                             title={`คืนค่า ON ORDER เดิม (${origOnOrderStoreRef.current.get(row.id) ?? row.orig_on_order_store ?? 0})`}
+                          ><RotateCcw className="w-2.5 h-2.5" /></button>
+                        </div>
+                      ) : showEdit && col.key === "stock_store" ? (
+                        <div className="flex items-center gap-0.5">
+                          <span className="text-xs flex-1">{displayVal}</span>
+                          <button
+                            className="inline-flex items-center justify-center w-4 h-4 rounded border border-red-400 text-red-500 hover:bg-red-50"
+                            onClick={(e) => { e.stopPropagation(); updateStockStore(row.id, 0); }}
+                            title="ล้างค่า Store Stock"
+                          ><X className="w-2.5 h-2.5" /></button>
+                          <button
+                            className="inline-flex items-center justify-center w-4 h-4 rounded border border-sky-400 text-sky-500 hover:bg-sky-50"
+                            onClick={(e) => { e.stopPropagation(); const orig = origStockStoreRef.current.get(row.id) ?? row.orig_stock_store ?? 0; updateStockStore(row.id, orig); }}
+                            title={`คืนค่า Store Stock เดิม (${origStockStoreRef.current.get(row.id) ?? row.orig_stock_store ?? 0})`}
                           ><RotateCcw className="w-2.5 h-2.5" /></button>
                         </div>
                       ) : showEdit && col.key === "order_uom_edit" ? (
@@ -4182,6 +4240,12 @@ export default function SRRDirectPage() {
                   </Button>
                   <Button size="sm" variant="outline" onClick={restoreAllOnOrderStore} className="text-xs gap-1">
                     <RefreshCw className="w-3.5 h-3.5" /> Restore All ON ORDER
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={clearAllStockStore} className="text-xs gap-1">
+                    <XCircle className="w-3.5 h-3.5" /> Clear All STORE STOCK
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={restoreAllStockStore} className="text-xs gap-1">
+                    <RefreshCw className="w-3.5 h-3.5" /> Restore All STORE STOCK
                   </Button>
                   {showImportSkipped.length > 0 && (
                     <ImportSkipBar
