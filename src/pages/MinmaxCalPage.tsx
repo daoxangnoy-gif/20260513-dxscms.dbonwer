@@ -1232,16 +1232,12 @@ export default function MinmaxCalPage() {
           if (delErr) throw delErr;
           delCnt = Number(data) || 0;
         } else if (typeStoreFilter.length > 0) {
-          // มี type filter → ลบทุกสาขาใน type (ไม่จำกัดแค่ที่อยู่ใน payload)
-          const scopeStores = filterOpts.stores
-            .filter(s => typeStoreFilter.includes(s.type_store))
-            .map(s => s.store_name);
-          if (scopeStores.length > 0) {
-            const { data, error: delErr } = await (supabase as any)
-              .rpc("delete_minmax_by_stores", { p_store_names: scopeStores });
-            if (delErr) throw delErr;
-            delCnt = Number(data) || 0;
-          }
+          // มี type filter → ลบทุกสาขาใน type ด้วย type_store ตรงๆ ใน DB
+          // (เดิมคำนวณ store list จาก filterOpts ซึ่งอาจไม่ครบ → ค้างสะสม)
+          const { data, error: delErr } = await (supabase as any)
+            .rpc("delete_minmax_by_type_stores", { p_type_stores: typeStoreFilter });
+          if (delErr) throw delErr;
+          delCnt = Number(data) || 0;
         } else {
           // มีแค่ storeFilter → ลบเฉพาะสาขาที่เลือก
           const { data, error: delErr } = await (supabase as any)
