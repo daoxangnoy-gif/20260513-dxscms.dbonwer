@@ -112,14 +112,25 @@ const HIGHLIGHT_COLS = new Set(["sar_suggest1", "sar_suggest2", "tt_order", "fin
 const NUM_COLS = new Set(["unit_pick", "pack_qty", "box_qty", "cost", "price2km", "price_jm", "avg_sale", "rank_factor", "min_val", "max_val", "stock_dc", "stock_store", "sar_suggest1", "sar_suggest2", "on_order", "tt_order", "qty_import", "suggest_order_edit", "final_order_unit", "final_order_uom", "doh_min", "doh_max", "doh_stock", "doh_tobe"]);
 
 // --------------- Helpers ---------------
+// paginate ภายในแต่ละ chunk เพื่อกัน PostgREST 1000-row cap
+// (500 SKU × หลาย packing > 1000 → เดิมถูกตัดทิ้ง ทำให้ vendor/metadata หาย)
 async function queryInChunks<T>(table: string, field: string, values: string[], sel: string, extra?: (q: any) => any): Promise<T[]> {
   if (!values.length) return [];
   const chunks: string[][] = [];
   for (let i = 0; i < values.length; i += 500) chunks.push(values.slice(i, i + 500));
-  const batches = await Promise.all(chunks.map(chunk => {
-    let q = (supabase.from(table as any) as any).select(sel).in(field, chunk);
-    if (extra) q = extra(q);
-    return q.then(({ data }: any) => (data || []) as T[]);
+  const batches = await Promise.all(chunks.map(async chunk => {
+    const out: T[] = [];
+    let off = 0;
+    while (true) {
+      let q = (supabase.from(table as any) as any).select(sel).in(field, chunk).range(off, off + 999);
+      if (extra) q = extra(q);
+      const { data } = await q;
+      const rows = (data || []) as T[];
+      out.push(...rows);
+      if (rows.length < 1000) break;
+      off += 1000;
+    }
+    return out;
   }));
   return batches.flat();
 }
@@ -679,7 +690,7 @@ export default function SAROrderFromStoreTab() {
       const [fullArr, calcRes, dmExtraRows, poCostRows, shipToRows] = await Promise.all([
         fetchSarDataFullPaged({ p_skus: allSkus, p_stores: allStores }),
         (supabase as any).rpc("get_sar_calc_data", { p_sku_codes: allSkus, p_store_names: allStores }),
-        queryInChunks<any>("data_master", "sku_code", allSkus, "sku_code,main_barcode,unit_of_measure,vendor_code,vendor_display_name,division_group,packing_size_qty"),
+        queryInChunks<any>("data_master", "sku_code", allSkus, "sku_code,main_barcode,unit_of_measure,vendor_code,vendor_display_name,division_group,division,department,sub_department,item_type,buying_status,product_name_en,product_name_la,standard_price,list_price,jmart_price,packing_size_qty"),
         queryInChunks<any>("po_cost", "item_id", allSkus, "item_id,po_cost_unit"),
         shipToFetch,
       ]);
@@ -700,17 +711,22 @@ export default function SAROrderFromStoreTab() {
       const onOrderMap = new Map<string, number>();
       for (const r of (calcData.on_order || []) as any[]) onOrderMap.set(`${r.sku_code}\x00${r.store_name}`, Number(r.qty) || 0);
 
-      // P3 — vendor + unit barcode/uom (packing=1) + division_group จาก data_master ก้อนเดียว
+      // P3 — vendor + unit barcode/uom (packing=1) + division_group + metadata fallback จาก data_master
       const skuToUnitBarcode = new Map<string, string>();
       const skuToUnitUom = new Map<string, string>();
       const skuToVendorCode = new Map<string, string>();
       const skuToVendorName = new Map<string, string>();
       const skuToDivGroup = new Map<string, string>();
+      // metadata fallback ใช้เมื่อ SKU×Store ไม่อยู่ใน minmax table → คง field ไม่ให้ว่าง (เหมือนของเดิม)
+      const skuToMeta = new Map<string, any>();      // packing=1 row (priority)
+      const skuToMetaAny = new Map<string, any>();   // any row (fallback)
       for (const r of dmExtraRows) {
         if (!r.sku_code) continue;
+        if (!skuToMetaAny.has(r.sku_code)) skuToMetaAny.set(r.sku_code, r);
         if (Number(r.packing_size_qty) === 1 && !skuToUnitBarcode.has(r.sku_code)) {
           skuToUnitBarcode.set(r.sku_code, r.main_barcode || "");
           skuToUnitUom.set(r.sku_code, r.unit_of_measure || "");
+          skuToMeta.set(r.sku_code, r);
         }
         if (r.vendor_code && !skuToVendorCode.has(r.sku_code)) {
           skuToVendorCode.set(r.sku_code, r.vendor_code);
@@ -742,19 +758,25 @@ export default function SAROrderFromStoreTab() {
         const [storeName, sku] = key.split("\x00");
         const lookupKey = `${sku}\x00${storeName}`;
         const mm = mmMap.get(lookupKey);
+        // fallback metadata จาก data_master เมื่อ SKU×Store ไม่อยู่ใน minmax table
+        const meta = skuToMeta.get(sku) ?? skuToMetaAny.get(sku);
         const up = Number(mm?.unit_pick ?? 1) || 1;
         const rank = mm?.rank_sale || "D";
         const sarRow: SARRow = {
-          sku_code: sku, main_barcode: mm?.main_barcode ?? mb ?? null,
-          product_name_la: mm?.product_name_la ?? pnLa ?? null, product_name_en: mm?.product_name_en ?? null,
-          unit_of_measure: mm?.unit_of_measure ?? null, store_name: storeName,
+          sku_code: sku, main_barcode: mm?.main_barcode ?? meta?.main_barcode ?? mb ?? null,
+          product_name_la: mm?.product_name_la ?? meta?.product_name_la ?? pnLa ?? null,
+          product_name_en: mm?.product_name_en ?? meta?.product_name_en ?? null,
+          unit_of_measure: mm?.unit_of_measure ?? meta?.unit_of_measure ?? null, store_name: storeName,
           type_store: mm?.type_store || "",
-          division: mm?.division ?? "", department: mm?.department ?? "", sub_department: mm?.sub_department ?? "",
-          item_type: mm?.item_type ?? "", buying_status: mm?.buying_status ?? "",
+          division: mm?.division || meta?.division || "",
+          department: mm?.department || meta?.department || "",
+          sub_department: mm?.sub_department || meta?.sub_department || "",
+          item_type: mm?.item_type || meta?.item_type || "",
+          buying_status: mm?.buying_status || meta?.buying_status || "",
           unit_pick: up, pack_qty: mm?.pack_qty ?? null, box_qty: mm?.box_qty ?? null,
-          cost: mm?.standard_price != null ? Number(mm.standard_price) : null,
-          price2km: mm?.list_price != null ? Number(mm.list_price) : null,
-          price_jm: mm?.jmart_price != null ? Number(mm.jmart_price) : null,
+          cost: mm?.standard_price != null ? Number(mm.standard_price) : (meta?.standard_price != null ? Number(meta.standard_price) : null),
+          price2km: mm?.list_price != null ? Number(mm.list_price) : (meta?.list_price != null ? Number(meta.list_price) : null),
+          price_jm: mm?.jmart_price != null ? Number(mm.jmart_price) : (meta?.jmart_price != null ? Number(meta.jmart_price) : null),
           pack_size: up === 1 ? "Unit" : `1x${up}`,
           avg_sale: Number(mm?.avg_sale) || 0, rank_sale: rank,
           rank_factor: rank === "A" ? 21 : rank === "B" ? 14 : rank === "C" ? 10 : 7,
@@ -767,8 +789,8 @@ export default function SAROrderFromStoreTab() {
         const vCode = skuToVendorCode.get(sku) || "";
         const vName = skuToVendorName.get(sku) || "";
         const vCurr = vendorCurrencyMap.get(vCode) || "";
-        const uBarcode = skuToUnitBarcode.get(sku) || mm?.main_barcode || mb || "";
-        const uUom = skuToUnitUom.get(sku) || mm?.unit_of_measure || "";
+        const uBarcode = skuToUnitBarcode.get(sku) || mm?.main_barcode || meta?.main_barcode || mb || "";
+        const uUom = skuToUnitUom.get(sku) || mm?.unit_of_measure || meta?.unit_of_measure || "";
         const shipTo = storeShipToMap.get(storeName) || "";
         const poCostUnit = skuToPoCostUnit.has(sku) ? skuToPoCostUnit.get(sku)! : null;
         rows.push({ ...sarRow, qty_import: qty, division_group: skuToDivGroup.get(sku) ?? "", stock_store_orig: sarRow.stock_store, vendor_code: vCode, vendor_name: vName, currency: vCurr, unit_barcode: uBarcode, unit_uom: uUom, ship_to: shipTo, po_cost_unit: poCostUnit });
