@@ -687,12 +687,17 @@ export default function SAROrderFromStoreTab() {
           })()
         : Promise.resolve([] as any[]);
 
+      // ⏱ จับเวลาแยกแต่ละ phase เพื่อหา bottleneck
+      const _t = (label: string, p: Promise<any>) => {
+        const s = performance.now();
+        return p.then(r => { console.log(`[OFS] ${label}: ${Math.round(performance.now() - s)}ms`); return r; });
+      };
       const [fullArr, calcRes, dmExtraRows, poCostRows, shipToRows] = await Promise.all([
-        fetchSarDataFullPaged({ p_skus: allSkus, p_stores: allStores }),
-        (supabase as any).rpc("get_sar_calc_data", { p_sku_codes: allSkus, p_store_names: allStores }),
-        queryInChunks<any>("data_master", "sku_code", allSkus, "sku_code,main_barcode,unit_of_measure,vendor_code,vendor_display_name,division_group,division,department,sub_department,item_type,buying_status,product_name_en,product_name_la,standard_price,list_price,jmart_price,packing_size_qty"),
-        queryInChunks<any>("po_cost", "item_id", allSkus, "item_id,po_cost_unit"),
-        shipToFetch,
+        _t("P1 get_sar_data_full", fetchSarDataFullPaged({ p_skus: allSkus, p_stores: allStores })),
+        _t("P2 get_sar_calc_data (stock/on_order)", (supabase as any).rpc("get_sar_calc_data", { p_sku_codes: allSkus, p_store_names: allStores })),
+        _t("P3 data_master meta", queryInChunks<any>("data_master", "sku_code", allSkus, "sku_code,main_barcode,unit_of_measure,vendor_code,vendor_display_name,division_group,division,department,sub_department,item_type,buying_status,product_name_en,product_name_la,standard_price,list_price,jmart_price,packing_size_qty")),
+        _t("P4 po_cost", queryInChunks<any>("po_cost", "item_id", allSkus, "item_id,po_cost_unit")),
+        _t("P5 ship_to", shipToFetch),
       ]);
       if (calcRes.error) throw calcRes.error;
 
