@@ -135,21 +135,21 @@ async function queryInChunks<T>(table: string, field: string, values: string[], 
   return batches.flat();
 }
 
-// ดึง get_sar_data_full แบบ paginate: หน้าแรกรู้ total → ยิงหน้าที่เหลือขนานทีละ 4
-const SAR_FULL_PAGE = 5000;
-async function fetchSarDataFullPaged(params: Record<string, any>): Promise<any[]> {
-  const first = await (supabase as any).rpc("get_sar_data_full", { ...params, p_limit: SAR_FULL_PAGE, p_offset: 0 });
-  if (first.error) throw first.error;
-  const total = Number(first.data?.total) || 0;
-  const all: any[] = Array.isArray(first.data?.rows) ? first.data.rows : [];
-  if (total <= SAR_FULL_PAGE) return all;
-  const offsets: number[] = [];
-  for (let o = SAR_FULL_PAGE; o < total; o += SAR_FULL_PAGE) offsets.push(o);
-  const CONCURRENCY = 4;
-  for (let i = 0; i < offsets.length; i += CONCURRENCY) {
-    const batch = offsets.slice(i, i + CONCURRENCY);
-    const res = await Promise.all(batch.map(off =>
-      (supabase as any).rpc("get_sar_data_full", { ...params, p_limit: SAR_FULL_PAGE, p_offset: off })
+// แตก allSkus เป็น chunk ละ 1,500 → ยิงขนาน 4 พร้อมกัน
+// แต่ละ chunk มี rows สูงสุด 1,500×stores (~6,000) ใส่ limit เดียวได้ ไม่ต้อง paginate
+const SAR_SKU_CHUNK = 1500;
+const SAR_CHUNK_LIMIT = 20000;
+const SAR_CHUNK_CONCURRENCY = 4;
+
+async function fetchSarDataFullChunked(allSkus: string[], stores: string[]): Promise<any[]> {
+  if (!allSkus.length) return [];
+  const chunks: string[][] = [];
+  for (let i = 0; i < allSkus.length; i += SAR_SKU_CHUNK) chunks.push(allSkus.slice(i, i + SAR_SKU_CHUNK));
+  const all: any[] = [];
+  for (let i = 0; i < chunks.length; i += SAR_CHUNK_CONCURRENCY) {
+    const batch = chunks.slice(i, i + SAR_CHUNK_CONCURRENCY);
+    const res = await Promise.all(batch.map(skuChunk =>
+      (supabase as any).rpc("get_sar_data_full", { p_skus: skuChunk, p_stores: stores, p_limit: SAR_CHUNK_LIMIT, p_offset: 0 })
     ));
     for (const r of res) {
       if (r.error) throw r.error;
@@ -693,7 +693,7 @@ export default function SAROrderFromStoreTab() {
         return p.then(r => { console.log(`[OFS] ${label}: ${Math.round(performance.now() - s)}ms`); return r; });
       };
       const [fullArr, calcRes, dmExtraRows, poCostRows, shipToRows] = await Promise.all([
-        _t("P1 get_sar_data_full", fetchSarDataFullPaged({ p_skus: allSkus, p_stores: allStores })),
+        _t("P1 get_sar_data_full (chunked)", fetchSarDataFullChunked(allSkus, allStores)),
         _t("P2 get_sar_calc_data (stock/on_order)", (supabase as any).rpc("get_sar_calc_data", { p_sku_codes: allSkus, p_store_names: allStores })),
         _t("P3 data_master meta", queryInChunks<any>("data_master", "sku_code", allSkus, "sku_code,main_barcode,unit_of_measure,vendor_code,vendor_display_name,division_group,division,department,sub_department,item_type,buying_status,product_name_en,product_name_la,standard_price,list_price,jmart_price,packing_size_qty")),
         _t("P4 po_cost", queryInChunks<any>("po_cost", "item_id", allSkus, "item_id,po_cost_unit")),
