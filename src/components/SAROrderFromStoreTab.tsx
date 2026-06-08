@@ -58,6 +58,7 @@ interface ProcessedRow extends SARRow {
   stock_store_orig?: number;
   vendor_code?: string;
   vendor_name?: string;
+  spc_name?: string;
   currency?: string;
   unit_barcode?: string;
   unit_uom?: string;
@@ -73,6 +74,7 @@ const COLS: { key: string; label: string; w: number; right?: boolean }[] = [
   { key: "department", label: "Department", w: 110 },
   { key: "sub_department", label: "Sub-Department", w: 130 },
   { key: "vendor_info", label: "Vendor", w: 230 },
+  { key: "spc_name", label: "Spc Name", w: 120 },
   { key: "sku_code", label: "SKU Code", w: 100 },
   { key: "main_barcode", label: "Barcode", w: 120 },
   { key: "product_name_la", label: "Product Name (LA)", w: 200 },
@@ -742,9 +744,10 @@ export default function SAROrderFromStoreTab() {
 
       // vendor currency (ขึ้นกับ vendor codes → รอ P3)
       const allVendorCodes = [...new Set(Array.from(skuToVendorCode.values()).filter(Boolean))];
-      const vendorMasterRows = allVendorCodes.length ? await queryInChunks<any>("vendor_master", "vendor_code", allVendorCodes, "vendor_code,currency") : [];
+      const vendorMasterRows = allVendorCodes.length ? await queryInChunks<any>("vendor_master", "vendor_code", allVendorCodes, "vendor_code,currency,spc_name") : [];
       const vendorCurrencyMap = new Map<string, string>();
-      for (const r of vendorMasterRows) { if (r.vendor_code) vendorCurrencyMap.set(r.vendor_code, r.currency || ""); }
+      const vendorSpcMap = new Map<string, string>();
+      for (const r of vendorMasterRows) { if (r.vendor_code) { vendorCurrencyMap.set(r.vendor_code, r.currency || ""); vendorSpcMap.set(r.vendor_code, r.spc_name || ""); } }
 
       // P4 — po_cost_unit
       const skuToPoCostUnit = new Map<string, number | null>();
@@ -794,11 +797,12 @@ export default function SAROrderFromStoreTab() {
         const vCode = skuToVendorCode.get(sku) || "";
         const vName = skuToVendorName.get(sku) || "";
         const vCurr = vendorCurrencyMap.get(vCode) || "";
+        const vSpc = vendorSpcMap.get(vCode) || "";
         const uBarcode = skuToUnitBarcode.get(sku) || mm?.main_barcode || meta?.main_barcode || mb || "";
         const uUom = skuToUnitUom.get(sku) || mm?.unit_of_measure || meta?.unit_of_measure || "";
         const shipTo = storeShipToMap.get(storeName) || "";
         const poCostUnit = skuToPoCostUnit.has(sku) ? skuToPoCostUnit.get(sku)! : null;
-        rows.push({ ...sarRow, qty_import: qty, division_group: skuToDivGroup.get(sku) ?? "", stock_store_orig: sarRow.stock_store, vendor_code: vCode, vendor_name: vName, currency: vCurr, unit_barcode: uBarcode, unit_uom: uUom, ship_to: shipTo, po_cost_unit: poCostUnit });
+        rows.push({ ...sarRow, qty_import: qty, division_group: skuToDivGroup.get(sku) ?? "", stock_store_orig: sarRow.stock_store, vendor_code: vCode, vendor_name: vName, spc_name: vSpc, currency: vCurr, unit_barcode: uBarcode, unit_uom: uUom, ship_to: shipTo, po_cost_unit: poCostUnit });
       }
 
       setHqRows(rows); setHqFetched(true); setProgressPct(100);
@@ -817,7 +821,7 @@ export default function SAROrderFromStoreTab() {
     setCalcElapsed(0);
     const start = Date.now();
     await new Promise(r => setTimeout(r, 10)); // ให้ UI update ก่อน
-    const next = hqRows.map(r => ({ ...computeRow(r), qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to, po_cost_unit: r.po_cost_unit }));
+    const next = hqRows.map(r => ({ ...computeRow(r), qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, spc_name: r.spc_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to, po_cost_unit: r.po_cost_unit }));
     const elapsed = Math.round((Date.now() - start) / 100) / 10;
     setCalcElapsed(elapsed);
     setHqRows(next); setHqCalculated(true);
@@ -829,7 +833,7 @@ export default function SAROrderFromStoreTab() {
     setHqRows(ofsCalCache.hqRows.map(r => {
       if (r.sku_code !== skuCode || r.store_name !== storeName) return r;
       const updated = computeRow({ ...r, suggest_order_edit: val });
-      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to, po_cost_unit: r.po_cost_unit };
+      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, spc_name: r.spc_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to, po_cost_unit: r.po_cost_unit };
     }));
   };
 
@@ -837,14 +841,14 @@ export default function SAROrderFromStoreTab() {
     setHqRows(ofsCalCache.hqRows.map(r => {
       if (r.sku_code !== skuCode || r.store_name !== storeName) return r;
       const updated = computeRow({ ...r, stock_store: val });
-      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to, po_cost_unit: r.po_cost_unit };
+      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, spc_name: r.spc_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to, po_cost_unit: r.po_cost_unit };
     }));
   };
 
   const clearAllStockStore = () => {
     setHqRows(ofsCalCache.hqRows.map(r => {
       const updated = computeRow({ ...r, stock_store: 0 });
-      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to, po_cost_unit: r.po_cost_unit };
+      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, spc_name: r.spc_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to, po_cost_unit: r.po_cost_unit };
     }));
   };
 
@@ -852,7 +856,7 @@ export default function SAROrderFromStoreTab() {
     setHqRows(ofsCalCache.hqRows.map(r => {
       const orig = r.stock_store_orig ?? 0;
       const updated = computeRow({ ...r, stock_store: orig });
-      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to, po_cost_unit: r.po_cost_unit };
+      return { ...updated, qty_import: r.qty_import, division_group: r.division_group, stock_store_orig: r.stock_store_orig, vendor_code: r.vendor_code, vendor_name: r.vendor_name, spc_name: r.spc_name, currency: r.currency, unit_barcode: r.unit_barcode, unit_uom: r.unit_uom, ship_to: r.ship_to, po_cost_unit: r.po_cost_unit };
     }));
   };
 
@@ -1007,7 +1011,10 @@ export default function SAROrderFromStoreTab() {
     if (!rows.length) { toast({ title: "ไม่มีข้อมูล", variant: "destructive" }); return; }
     const ws = XLSX.utils.json_to_sheet(rows.map(r => {
       const obj: Record<string, any> = {};
-      for (const col of COLS) obj[col.label] = (r as any)[col.key];
+      for (const col of COLS) {
+        if (col.key === "vendor_info") obj["Vendor"] = [r.currency, r.vendor_code, r.vendor_name].filter(Boolean).join(" - ");
+        else obj[col.label] = (r as any)[col.key];
+      }
       return obj;
     }));
     const wb = XLSX.utils.book_new();
