@@ -427,10 +427,6 @@ export default function SAROrderFromStoreTab() {
     const dmMap: Record<string, any> = {};
     for (const [code, sku] of codeToSku.entries()) { const dm = skuToDm.get(sku); if (dm) dmMap[code] = dm; }
 
-    const skuToCode: Record<string, string[]> = {};
-    rows.forEach(r => { const sku = dmMap[r.code]?.sku_code; if (sku) (skuToCode[sku] ??= []).push(r.code); });
-    const dupSkus = new Set(Object.entries(skuToCode).filter(([, arr]) => arr.length > 1).map(([s]) => s));
-
     const allSkus = [...new Set(Object.values(dmMap).map((r: any) => r.sku_code).filter(Boolean) as string[])];
     onStatus?.(`ตรวจสอบ Range Store ${allSkus.length.toLocaleString()} SKU...`);
     const storeCode = storeName.split("-")[0];
@@ -440,6 +436,7 @@ export default function SAROrderFromStoreTab() {
     onStatus?.(`ตรวจเงื่อนไข ${rows.length.toLocaleString()} รายการ...`);
     const skips: SkipRow[] = [];
     const valid: OfsImportLine[] = [];
+    const seenSkus = new Set<string>(); // SKU ซ้ำ → เก็บแถวแรก ที่เหลือข้ามเงียบ
     for (const r of rows) {
       const dm = dmMap[r.code];
       const pnLa = dm?.product_name_la ?? "";
@@ -447,11 +444,12 @@ export default function SAROrderFromStoreTab() {
       const bs = (dm.buying_status ?? "").trim();
       const skuCode = dm.sku_code ?? "";
       const rankSales = skuToRank.get(skuCode) ?? "";
-      if (bs === "Inactive" || bs === "Discontinue") { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: `Buying Status: ${bs}`, store_name: storeName, sku_code: skuCode, rank_sales: rankSales }); continue; }
+      if (bs === "Inactive") { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: `Buying Status: ${bs}`, store_name: storeName, sku_code: skuCode, rank_sales: rankSales }); continue; }
       if ((dm.item_type ?? "").trim() === "Non basic") { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: "Item type: Non basic", store_name: storeName, sku_code: skuCode, rank_sales: rankSales }); continue; }
       if (!(dm.product_owner ?? "").toLowerCase().includes("lanexang green property")) { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: `Product owner: ${dm.product_owner || "-"}`, store_name: storeName, sku_code: skuCode, rank_sales: rankSales }); continue; }
       if (!rangeSet.has(dm.sku_code)) { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: `ไม่อยู่ใน Range store (${storeName})`, store_name: storeName, sku_code: skuCode, rank_sales: rankSales }); continue; }
-      if (dupSkus.has(dm.sku_code)) { skips.push({ barcode: r.code, product_name_la: pnLa, qty: r.qty, reason: `SKU ซ้ำ (${dm.sku_code})`, store_name: storeName, sku_code: skuCode, rank_sales: rankSales }); continue; }
+      if (seenSkus.has(dm.sku_code)) continue; // SKU ซ้ำ → ข้ามเงียบ เก็บแถวแรกแถวเดียว
+      seenSkus.add(dm.sku_code);
       valid.push({ sku_code: dm.sku_code, main_barcode: dm.main_barcode ?? null, product_name_la: pnLa, qty: r.qty });
     }
 
