@@ -744,10 +744,10 @@ export default function SAROrderFromStoreTab() {
 
       // vendor currency (ขึ้นกับ vendor codes → รอ P3)
       const allVendorCodes = [...new Set(Array.from(skuToVendorCode.values()).filter(Boolean))];
-      const vendorMasterRows = allVendorCodes.length ? await queryInChunks<any>("vendor_master", "vendor_code", allVendorCodes, "vendor_code,currency,spc_name") : [];
+      const vendorMasterRows = allVendorCodes.length ? await queryInChunks<any>("vendor_master", "vendor_code", allVendorCodes, "vendor_code,supplier_currency,spc_name") : [];
       const vendorCurrencyMap = new Map<string, string>();
       const vendorSpcMap = new Map<string, string>();
-      for (const r of vendorMasterRows) { if (r.vendor_code) { vendorCurrencyMap.set(r.vendor_code, r.currency || ""); vendorSpcMap.set(r.vendor_code, r.spc_name || ""); } }
+      for (const r of vendorMasterRows) { if (r.vendor_code) { vendorCurrencyMap.set(r.vendor_code, r.supplier_currency || ""); vendorSpcMap.set(r.vendor_code, r.spc_name || ""); } }
 
       // P4 — po_cost_unit
       const skuToPoCostUnit = new Map<string, number | null>();
