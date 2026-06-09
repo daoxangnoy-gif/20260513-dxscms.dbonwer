@@ -114,6 +114,22 @@ export async function getOOSDetail(f: OOSFilters): Promise<OOSRow[]> {
   return (data || []) as OOSRow[];
 }
 
+// ตัวอย่างแถวแรกๆ แบบเร็ว (ไม่ sort) — โชว์ทันทีตอน Get
+export async function getOOSDetailPreview(f: OOSFilters, limit = 100): Promise<OOSRow[]> {
+  const { data, error } = await (supabase as any).rpc("get_oos_detail_preview", { ...toArgs(f), p_limit: limit });
+  if (error) throw error;
+  return (data || []) as OOSRow[];
+}
+
+// โหลดชุดเต็มทีละ chunk (ordered) — เลี่ยง payload ใหญ่ที่ทำให้ 520
+export async function getOOSDetailPage(f: OOSFilters, limit: number, offset: number): Promise<OOSRow[]> {
+  const { data, error } = await (supabase as any).rpc("get_oos_detail_page", {
+    ...toArgs(f), p_limit: limit, p_offset: offset,
+  });
+  if (error) throw error;
+  return (data || []) as OOSRow[];
+}
+
 // ===== RPC: Save snapshot (server-side INSERT...SELECT) =====
 export async function saveOOSSnapshot(
   week: string,

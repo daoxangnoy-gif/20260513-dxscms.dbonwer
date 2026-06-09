@@ -6,19 +6,22 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Checkbox } from "@/components/ui/checkbox";
 import { MultiSelectFilter } from "@/components/MultiSelectFilter";
 import { useToast } from "@/hooks/use-toast";
 import {
   PackageX, Loader2, Download, Database, BarChart3, Save, Calculator, X, ChevronLeft, ChevronRight,
-  TrendingUp, ArrowUp, ArrowDown, Minus, RefreshCw, Trash2,
+  TrendingUp, ArrowUp, ArrowDown, Minus, RefreshCw, Trash2, ChevronDown,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import {
   OOSRow, OOSFilters, OOSSummary, OOSSnapshotMeta, OOSFilterOptions, OOSTrendRow,
-  getOOSDetail, saveOOSSnapshot, getOOSFilterOptions, listOOSSnapshots,
+  getOOSDetailPreview, getOOSDetailPage, saveOOSSnapshot, getOOSFilterOptions, listOOSSnapshots,
   loadOOSSnapshotRows, computeOOSSummary, getWeekLabel, getOOSTrend, deleteOOSSnapshot,
 } from "@/lib/oosService";
+
+const GET_CHUNK = 50000; // ขนาด chunk ตอนโหลดชุดเต็ม (เลี่ยง payload ใหญ่)
 
 const TREND_COLORS = ["#2563eb", "#dc2626", "#16a34a", "#d97706", "#7c3aed", "#0891b2", "#db2777"];
 
@@ -54,7 +57,8 @@ export default function ReportOOSPage() {
   const [summary, setSummary] = useState<OOSSummary | null>(null);
 
   // ui state
-  const [getting, setGetting] = useState(false);
+  const [getting, setGetting] = useState(false);      // phase 1: ยังไม่มีแถวเลย
+  const [loadingMore, setLoadingMore] = useState(false); // phase 2: มีแถวแล้ว กำลังโหลดเพิ่ม
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
@@ -79,6 +83,7 @@ export default function ReportOOSPage() {
   // snapshots
   const [snapshots, setSnapshots] = useState<OOSSnapshotMeta[]>([]);
   const [selectedSnap, setSelectedSnap] = useState<string>(LIVE);
+  const [snapChecked, setSnapChecked] = useState<Set<string>>(new Set());
 
   // trend
   const [trend, setTrend] = useState<OOSTrendRow[]>([]);
@@ -126,22 +131,43 @@ export default function ReportOOSPage() {
     setGetting(true);
     setSummary(null);
     setLastLoadInfo("");
-    startTimer("กำลังดึงข้อมูลจากฐานข้อมูล...");
+    setSelectedSnap(LIVE);
+    setActiveTab("data");
+    startTimer("กำลังดึงตัวอย่าง 100 แถวแรก...");
     const t0 = Date.now();
+    const f = currentFilters();
     try {
-      const data = await getOOSDetail(currentFilters());
-      setRows(data);
+      // Phase 1: preview 100 แถว (เร็ว) → โชว์ทันที
+      const preview = await getOOSDetailPreview(f, 100);
+      setRows(preview);
       setPage(0);
-      setSelectedSnap(LIVE);
-      setActiveTab("data");
+      setGetting(false);          // ตารางขึ้นแล้ว
+      setLoadingMore(true);       // โหลดส่วนที่เหลือต่อ
+
+      // Phase 2: โหลดชุดเต็มทีละ chunk แล้ว append (progressive)
+      let acc: OOSRow[] = [];
+      let offset = 0;
+      while (true) {
+        setLoadStatus(`กำลังโหลดข้อมูลทั้งหมด... ${acc.length.toLocaleString()} แถว`);
+        const chunk = await getOOSDetailPage(f, GET_CHUNK, offset);
+        acc = offset === 0 ? chunk : acc.concat(chunk);
+        setRows([...acc]);
+        if (chunk.length < GET_CHUNK) break;
+        offset += GET_CHUNK;
+      }
       const secs = ((Date.now() - t0) / 1000).toFixed(1);
-      setLastLoadInfo(`ดึง ${data.length.toLocaleString()} แถว ใน ${secs} วินาที`);
-      toast({ title: "ดึงข้อมูลสำเร็จ", description: `${data.length.toLocaleString()} แถว · ${secs} วินาที` });
+      setLastLoadInfo(`ดึง ${acc.length.toLocaleString()} แถว ใน ${secs} วินาที`);
+      toast({ title: "ดึงข้อมูลครบแล้ว", description: `${acc.length.toLocaleString()} แถว · ${secs} วินาที` });
     } catch (e: any) {
-      toast({ title: "ดึงข้อมูลไม่สำเร็จ", description: e.message, variant: "destructive" });
+      toast({
+        title: "ดึงข้อมูลไม่สำเร็จ/ไม่ครบ",
+        description: `${e.message || e} — ถ้าข้อมูลใหญ่ ลองใส่ตัวกรอง หรือ Save เป็น snapshot แล้วเปิดดู`,
+        variant: "destructive",
+      });
     } finally {
       stopTimer();
       setGetting(false);
+      setLoadingMore(false);
     }
   };
 
@@ -194,18 +220,27 @@ export default function ReportOOSPage() {
     }
   };
 
-  const handleDeleteSnap = async () => {
-    if (selectedSnap === LIVE) return;
-    const snap = snapshots.find((s) => s.id === selectedSnap);
-    if (!snap) return;
-    if (!window.confirm(`ลบ snapshot "${snap.week_label} · ${snap.snapshot_date}" (${snap.total_rows.toLocaleString()} แถว)?\n\nลบแล้วกู้คืนไม่ได้`)) return;
+  const toggleSnapCheck = (id: string, checked: boolean) =>
+    setSnapChecked((prev) => {
+      const s = new Set(prev);
+      if (checked) s.add(id); else s.delete(id);
+      return s;
+    });
+
+  const handleDeleteSelected = async () => {
+    const ids = [...snapChecked];
+    if (ids.length === 0) return;
+    if (!window.confirm(`ลบ snapshot ที่เลือก ${ids.length} รายการ?\n\nลบแล้วกู้คืนไม่ได้`)) return;
     try {
-      await deleteOOSSnapshot(selectedSnap);
-      setSelectedSnap(LIVE);
-      setRows([]); setSummary(null); setPage(0);
+      await Promise.all(ids.map((id) => deleteOOSSnapshot(id)));
+      if (ids.includes(selectedSnap)) {
+        setSelectedSnap(LIVE);
+        setRows([]); setSummary(null); setPage(0);
+      }
+      setSnapChecked(new Set());
       await refreshSnapshots();
       setTrendLoaded(false); // ให้ Trend โหลดใหม่
-      toast({ title: "ลบ snapshot แล้ว", description: `${snap.week_label}` });
+      toast({ title: `ลบ ${ids.length} snapshot แล้ว` });
     } catch (e: any) {
       toast({ title: "ลบไม่สำเร็จ", description: e.message, variant: "destructive" });
     }
@@ -370,29 +405,62 @@ export default function ReportOOSPage() {
           <Badge variant="secondary" className="ml-1">{weekLabel}</Badge>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <Select value={selectedSnap} onValueChange={handleSelectSnap}>
-            <SelectTrigger className="h-8 w-[210px] text-xs">
-              <SelectValue placeholder="เลือก snapshot" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={LIVE} className="text-xs">● Live (ยังไม่ save)</SelectItem>
-              {snapshots.map((s) => (
-                <SelectItem key={s.id} value={s.id} className="text-xs">
-                  📅 {s.week_label} · {s.snapshot_date} ({s.total_rows.toLocaleString()})
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {selectedSnap !== LIVE && (
-            <Button size="sm" variant="ghost" onClick={handleDeleteSnap} className="text-xs h-8 px-2 text-destructive hover:text-destructive" title="ลบ snapshot นี้">
-              <Trash2 className="w-3.5 h-3.5" />
-            </Button>
-          )}
-          <Button size="sm" onClick={handleGet} disabled={getting} className="text-xs">
-            {getting ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Database className="w-3.5 h-3.5 mr-1" />}
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline" size="sm" className="h-8 w-[240px] text-xs justify-between font-normal">
+                <span className="truncate">
+                  {selectedSnap === LIVE
+                    ? "● Live (ยังไม่ save)"
+                    : (() => { const s = snapshots.find((x) => x.id === selectedSnap); return s ? `📅 ${s.week_label} · ${s.snapshot_date}` : "เลือก snapshot"; })()}
+                </span>
+                <ChevronDown className="w-3.5 h-3.5 opacity-50 shrink-0" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-[340px] p-2" align="end">
+              <div className="flex items-center justify-between mb-1.5 px-1">
+                <span className="text-xs font-semibold">Snapshot ({snapshots.length})</span>
+                <button className="text-[10px] text-primary hover:underline" onClick={refreshSnapshots}>รีเฟรช</button>
+              </div>
+              <button
+                className={`w-full text-left text-xs px-2 py-1.5 rounded hover:bg-accent ${selectedSnap === LIVE ? "bg-accent font-medium" : ""}`}
+                onClick={() => handleSelectSnap(LIVE)}
+              >
+                ● Live (ยังไม่ save)
+              </button>
+              <div className="max-h-64 overflow-auto space-y-0.5 mt-1 border-t pt-1">
+                {snapshots.length === 0 && (
+                  <div className="text-[10px] text-muted-foreground py-3 px-2 text-center">ยังไม่มี snapshot — กด Save ในแท็บ Report</div>
+                )}
+                {snapshots.map((s) => (
+                  <div key={s.id} className="flex items-center gap-2 px-1 rounded hover:bg-accent/60">
+                    <Checkbox checked={snapChecked.has(s.id)} onCheckedChange={(c) => toggleSnapCheck(s.id, !!c)} />
+                    <button
+                      className={`flex-1 text-left text-xs py-1.5 truncate ${selectedSnap === s.id ? "font-semibold text-primary" : ""}`}
+                      onClick={() => handleSelectSnap(s.id)}
+                      title={`${s.week_label} · ${s.snapshot_date} · ${s.total_rows.toLocaleString()} แถว`}
+                    >
+                      {selectedSnap === s.id ? "✓ " : ""}📅 {s.week_label} · {s.snapshot_date}
+                      <span className="text-muted-foreground"> ({s.total_rows.toLocaleString()})</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
+          <Button
+            size="sm" variant="ghost"
+            onClick={handleDeleteSelected}
+            disabled={snapChecked.size === 0}
+            className="text-xs h-8 px-2 text-destructive hover:text-destructive disabled:opacity-40"
+            title="ลบ snapshot ที่เลือก"
+          >
+            <Trash2 className="w-3.5 h-3.5 mr-1" /> ลบที่เลือก{snapChecked.size > 0 ? ` (${snapChecked.size})` : ""}
+          </Button>
+          <Button size="sm" onClick={handleGet} disabled={getting || loadingMore} className="text-xs">
+            {getting || loadingMore ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Database className="w-3.5 h-3.5 mr-1" />}
             Get
           </Button>
-          <Button size="sm" variant="secondary" onClick={handleCal} disabled={rows.length === 0} className="text-xs">
+          <Button size="sm" variant="secondary" onClick={handleCal} disabled={rows.length === 0 || loadingMore} className="text-xs" title={loadingMore ? "รอโหลดข้อมูลครบก่อน" : ""}>
             <Calculator className="w-3.5 h-3.5 mr-1" /> Cal
           </Button>
           <Button size="sm" variant="secondary" onClick={handleSave} disabled={!summary || saving} className="text-xs">
@@ -428,13 +496,14 @@ export default function ReportOOSPage() {
       </div>
 
       {/* แถบสถานะดึงข้อมูล + ตัวนับวินาที real-time */}
-      {(getting || lastLoadInfo) && (
-        <div className={`flex items-center gap-2 px-3 py-1.5 text-xs border-b ${getting ? "bg-primary/5 text-primary" : "bg-green-50 text-green-700"}`}>
-          {getting ? (
+      {(getting || loadingMore || lastLoadInfo) && (
+        <div className={`flex items-center gap-2 px-3 py-1.5 text-xs border-b ${getting || loadingMore ? "bg-primary/5 text-primary" : "bg-green-50 text-green-700"}`}>
+          {getting || loadingMore ? (
             <>
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
               <span>{loadStatus}</span>
               <span className="font-mono font-semibold tabular-nums ml-1">{elapsed.toFixed(1)} วินาที</span>
+              {loadingMore && <span className="text-[10px] opacity-70">(เลื่อนดูได้เลย กำลังโหลดเพิ่ม)</span>}
             </>
           ) : (
             <>
@@ -475,6 +544,7 @@ export default function ReportOOSPage() {
                 <span className="text-xs text-muted-foreground">
                   แสดง {filteredRows.length === 0 ? 0 : page * PAGE_SIZE + 1}–
                   {Math.min((page + 1) * PAGE_SIZE, filteredRows.length)} จาก {filteredRows.length.toLocaleString()} แถว
+                  {loadingMore && <span className="text-primary ml-1">· กำลังโหลดเพิ่ม…</span>}
                 </span>
               </div>
               <div className="overflow-auto border rounded">
