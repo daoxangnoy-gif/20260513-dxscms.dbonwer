@@ -11,13 +11,13 @@ import { MultiSelectFilter } from "@/components/MultiSelectFilter";
 import { useToast } from "@/hooks/use-toast";
 import {
   PackageX, Loader2, Download, Database, BarChart3, Save, Calculator, X, ChevronLeft, ChevronRight,
-  TrendingUp, ArrowUp, ArrowDown, Minus, RefreshCw,
+  TrendingUp, ArrowUp, ArrowDown, Minus, RefreshCw, Trash2,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import {
   OOSRow, OOSFilters, OOSSummary, OOSSnapshotMeta, OOSFilterOptions, OOSTrendRow,
   getOOSDetail, saveOOSSnapshot, getOOSFilterOptions, listOOSSnapshots,
-  loadOOSSnapshotRows, computeOOSSummary, getWeekLabel, getOOSTrend,
+  loadOOSSnapshotRows, computeOOSSummary, getWeekLabel, getOOSTrend, deleteOOSSnapshot,
 } from "@/lib/oosService";
 
 const TREND_COLORS = ["#2563eb", "#dc2626", "#16a34a", "#d97706", "#7c3aed", "#0891b2", "#db2777"];
@@ -194,6 +194,23 @@ export default function ReportOOSPage() {
     }
   };
 
+  const handleDeleteSnap = async () => {
+    if (selectedSnap === LIVE) return;
+    const snap = snapshots.find((s) => s.id === selectedSnap);
+    if (!snap) return;
+    if (!window.confirm(`ลบ snapshot "${snap.week_label} · ${snap.snapshot_date}" (${snap.total_rows.toLocaleString()} แถว)?\n\nลบแล้วกู้คืนไม่ได้`)) return;
+    try {
+      await deleteOOSSnapshot(selectedSnap);
+      setSelectedSnap(LIVE);
+      setRows([]); setSummary(null); setPage(0);
+      await refreshSnapshots();
+      setTrendLoaded(false); // ให้ Trend โหลดใหม่
+      toast({ title: "ลบ snapshot แล้ว", description: `${snap.week_label}` });
+    } catch (e: any) {
+      toast({ title: "ลบไม่สำเร็จ", description: e.message, variant: "destructive" });
+    }
+  };
+
   // ===== Trend =====
   const loadTrend = async () => {
     setTrendLoading(true);
@@ -235,8 +252,9 @@ export default function ReportOOSPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
-  // ===== trend pivot (type_store x week -> %OOS) =====
+  // ===== trend pivot (type_store x week -> %OOS, นิยาม B) =====
   const trendView = useMemo(() => {
+    const GRAND = "∑ ALL"; // แถวรวมทั้งหมดจาก RPC (distinct ข้ามทุกกลุ่ม)
     // weeks เรียงตามวันที่
     const weekMap = new Map<string, string>(); // week_label -> snapshot_date
     for (const r of trend) {
@@ -247,39 +265,30 @@ export default function ReportOOSPage() {
       .sort((a, b) => a[1].localeCompare(b[1]))
       .map(([w]) => w);
 
-    const types = [...new Set(trend.map((r) => r.type_store))].sort();
+    const types = [...new Set(trend.map((r) => r.type_store).filter((t) => t !== GRAND))].sort();
 
-    // cell[type][week] = { pct, range, oos }
-    const cell = new Map<string, { pct: number; range: number; oos: number }>();
-    const grandByWeek = new Map<string, { range: number; oos: number }>();
+    const cell = new Map<string, number>();       // "type|week" -> pct
+    const grandCell = new Map<string, number>();   // "week" -> pct
     for (const r of trend) {
-      cell.set(`${r.type_store}|${r.week_label}`, {
-        pct: r.n_range > 0 ? r.n_oos / r.n_range : 0,
-        range: r.n_range,
-        oos: r.n_oos,
-      });
-      const g = grandByWeek.get(r.week_label) || { range: 0, oos: 0 };
-      g.range += r.n_range; g.oos += r.n_oos;
-      grandByWeek.set(r.week_label, g);
+      const p = r.n_range > 0 ? r.n_oos / r.n_range : 0;
+      if (r.type_store === GRAND) grandCell.set(r.week_label, p);
+      else cell.set(`${r.type_store}|${r.week_label}`, p);
     }
 
-    // chart data: 1 จุดต่อ week, มี field ต่อ type + Total (เป็น % ตัวเลข)
+    // chart data: 1 จุดต่อ week, field ต่อ type + Total (% ตัวเลข)
     const chart = weeks.map((w) => {
       const row: any = { week: w };
       for (const t of types) {
         const c = cell.get(`${t}|${w}`);
-        row[t] = c ? +(c.pct * 100).toFixed(2) : null;
+        row[t] = c == null ? null : +(c * 100).toFixed(2);
       }
-      const g = grandByWeek.get(w);
-      row["Total"] = g && g.range > 0 ? +((g.oos / g.range) * 100).toFixed(2) : null;
+      const g = grandCell.get(w);
+      row["Total"] = g == null ? null : +(g * 100).toFixed(2);
       return row;
     });
 
-    const getPct = (type: string, w: string) => cell.get(`${type}|${w}`)?.pct ?? null;
-    const getTotalPct = (w: string) => {
-      const g = grandByWeek.get(w);
-      return g && g.range > 0 ? g.oos / g.range : null;
-    };
+    const getPct = (type: string, w: string) => cell.get(`${type}|${w}`) ?? null;
+    const getTotalPct = (w: string) => grandCell.get(w) ?? null;
     return { weeks, types, chart, getPct, getTotalPct };
   }, [trend]);
 
@@ -374,6 +383,11 @@ export default function ReportOOSPage() {
               ))}
             </SelectContent>
           </Select>
+          {selectedSnap !== LIVE && (
+            <Button size="sm" variant="ghost" onClick={handleDeleteSnap} className="text-xs h-8 px-2 text-destructive hover:text-destructive" title="ลบ snapshot นี้">
+              <Trash2 className="w-3.5 h-3.5" />
+            </Button>
+          )}
           <Button size="sm" onClick={handleGet} disabled={getting} className="text-xs">
             {getting ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Database className="w-3.5 h-3.5 mr-1" />}
             Get

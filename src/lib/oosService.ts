@@ -153,6 +153,12 @@ export async function listOOSSnapshots(): Promise<OOSSnapshotMeta[]> {
   return (data || []) as OOSSnapshotMeta[];
 }
 
+// ลบ snapshot (cascade ลบ rows อัตโนมัติจาก FK ON DELETE CASCADE)
+export async function deleteOOSSnapshot(snapshotId: string): Promise<void> {
+  const { error } = await (supabase as any).from("oos_snapshots").delete().eq("id", snapshotId);
+  if (error) throw error;
+}
+
 // โหลดแถวของ snapshot แบบแบ่งหน้าจนครบ (ตารางมี index ที่ snapshot_id → เร็ว)
 export async function loadOOSSnapshotRows(snapshotId: string): Promise<OOSRow[]> {
   const all: OOSRow[] = [];
@@ -223,20 +229,24 @@ export function computeOOSSummary(rows: OOSRow[]): OOSSummary {
         a.type_store.localeCompare(b.type_store) || a.store_name.localeCompare(b.store_name)
     );
 
+  // นิยาม B: Store OOS (distinct) = SKU ที่ขาดสต็อก "ทุกสาขา"
+  //   = SKU ที่ range แต่ไม่มีของในสาขาไหนเลย = range − have (have = มีของ ≥1 สาขา)
+  //   → have + oos = range พอดี (3 คอลัมน์ reconcile กัน)
   const totals: OOSTypeTotal[] = [...typeSku.entries()]
     .map(([type_store, v]) => ({
       type_store,
       have_stock: v.have.size,
-      oos: v.oos.size,
+      oos: v.range.size - v.have.size,
       range: v.range.size,
     }))
     .sort((a, b) => a.type_store.localeCompare(b.type_store));
 
+  const grandOos = grandSku.range.size - grandSku.have.size;
   const grand = {
     have_stock: grandSku.have.size,
-    oos: grandSku.oos.size,
+    oos: grandOos,
     range: grandSku.range.size,
-    pct_oos: grandSku.range.size > 0 ? grandSku.oos.size / grandSku.range.size : 0,
+    pct_oos: grandSku.range.size > 0 ? grandOos / grandSku.range.size : 0,
   };
 
   return { stores, totals, grand };
