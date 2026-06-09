@@ -605,6 +605,37 @@ function SRRDCItemPage() {
       orig_stock_dc: r.orig_stock_dc ?? r.stock_dc ?? 0,
     }));
 
+  // เปิด Doc Final มาแสดงในตาราง (เหมือนเปิด Doc ปกติ) — ต้อง fetch data column เพิ่มเพราะ list โหลดแค่ metadata
+  const openFinalDoc = async (d: any) => {
+    setFinalDocsLoading(true);
+    try {
+      const { data, error } = await (supabase as any)
+        .from("srr_final_documents")
+        .select("data")
+        .eq("id", d.id)
+        .single();
+      if (error || !data) {
+        toast({ title: "เปิด Doc Final ไม่สำเร็จ", description: error?.message || "ไม่พบข้อมูล", variant: "destructive" });
+        return;
+      }
+      const rows = patchSnapshotRows((data.data || []) as SRRRow[]);
+      setTab2Mode((d.source || "filter") as "filter" | "vendor" | "import");
+      setSelectedDocSpc(d.spc_name ? [d.spc_name] : []);
+      setVendorFilter(d.vendor_code ? [d.vendor_code] : []);
+      setOrderDayFilter([]); setItemTypeFilter(["Basic"]); setBuyingStatusFilter([]); setPoGroupFilter([]); setShowOnlyTTMinGt0(true);
+      setShowData(rows);
+      setPage(0);
+      setSelectedRows(new Set());
+      setActiveCell(null);
+      setActiveTab("show-edit");
+      setFinalDocsDialogOpen(false);
+    } catch (err: any) {
+      toast({ title: "เปิด Doc Final ไม่สำเร็จ", description: err?.message || "Unknown error", variant: "destructive" });
+    } finally {
+      setFinalDocsLoading(false);
+    }
+  };
+
   // Load snapshots from DB on mount + load available dates
   useEffect(() => {
     const loadFromDB = async () => {
@@ -4048,7 +4079,7 @@ function SRRDCItemPage() {
                 </thead>
                 <tbody>
                   {finalDocs.map((d: any) => (
-                    <tr key={d.id} className="border-b hover:bg-muted/30 transition-colors">
+                    <tr key={d.id} onClick={() => openFinalDoc(d)} title="คลิกเพื่อเปิดมาแสดง" className="border-b hover:bg-muted/30 transition-colors cursor-pointer">
                       <td className="p-2 text-muted-foreground whitespace-nowrap">
                         <div className="flex items-center gap-1">
                           <Clock className="w-3 h-3 opacity-50" />
