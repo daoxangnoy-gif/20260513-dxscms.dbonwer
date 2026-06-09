@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Progress } from "@/components/ui/progress";
@@ -45,6 +45,8 @@ import {
   BarChart3,
   Info,
   RotateCcw,
+  CheckCircle2,
+  Clock,
 } from "lucide-react";
 import { SRRReportTab } from "@/components/SRRReportTab";
 import { SRRReport2Tab } from "@/components/SRRReport2Tab";
@@ -843,6 +845,9 @@ export default function SRRDirectPage() {
   const [calcStartedAt, setCalcStartedAt] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<string>(d2sStateRef.current?.activeTab || "read-cal");
   const [docsDialogOpen, setDocsDialogOpen] = useState(false);
+  const [finalDocsDialogOpen, setFinalDocsDialogOpen] = useState(false);
+  const [finalDocs, setFinalDocs] = useState<any[]>([]);
+  const [finalDocsLoading, setFinalDocsLoading] = useState(false);
   const [calConfirmOpen, setCalConfirmOpen] = useState(false);
   const cancelCalcRef = useRef(false);
   const [dataReady, setDataReady] = useState(false);
@@ -1373,6 +1378,52 @@ export default function SRRDirectPage() {
   // Active mode for the Filter Date picker — Tab 2 uses tab2Mode, otherwise importMode (Tab 1/3)
   const activeDateMode: "filter" | "vendor" | "import" =
     activeTab === "show-edit" ? tab2Mode : (importMode as "filter" | "vendor" | "import");
+
+  // ===== Doc Final (D2S) — เก็บ snapshot ของ Doc ที่ผ่าน Review (บันทึกเฉพาะตอนกด Save/Export) =====
+  const loadFinalDocs = async () => {
+    setFinalDocsLoading(true);
+    try {
+      const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 60);
+      const { data, error } = await (supabase as any)
+        .from("srr_d2s_final_documents")
+        .select("id, date_key, spc_name, vendor_code, vendor_display, item_count, suggest_count, edited_columns, source, saved_by, saved_at")
+        .gte("saved_at", cutoff.toISOString())
+        .order("saved_at", { ascending: false });
+      if (!error && data) setFinalDocs(data);
+    } catch { /* ignore */ } finally { setFinalDocsLoading(false); }
+  };
+  useEffect(() => { loadFinalDocs(); }, []);
+
+  // เปิด Doc Final มาแสดงในตาราง (เหมือนเปิด Doc ปกติ) — ต้อง fetch data column เพิ่มเพราะ list โหลดแค่ metadata
+  const openFinalDoc = async (d: any) => {
+    setFinalDocsLoading(true);
+    try {
+      const { data, error } = await (supabase as any)
+        .from("srr_d2s_final_documents")
+        .select("data")
+        .eq("id", d.id)
+        .single();
+      if (error || !data) {
+        toast({ title: "เปิด Doc Final ไม่สำเร็จ", description: error?.message || "ไม่พบข้อมูล", variant: "destructive" });
+        return;
+      }
+      const rows = (data.data || []) as D2SRow[];
+      setTab2Mode((d.source || "filter") as "filter" | "vendor" | "import");
+      setSelectedDocSpc(d.spc_name ? [d.spc_name] : []);
+      setVendorFilter(d.vendor_code ? [d.vendor_code] : []);
+      setOrderDayFilter([]); setItemTypeFilter(["Basic"]); setTypeStoreFilter([]); setStoreFilter([]); setBuyingStatusFilter([]); setPoGroupFilter([]); setShowOnlyMinGt0(true);
+      setShowData(rows);
+      setPage(0);
+      setSelectedRows(new Set());
+      setActiveCell(null);
+      setActiveTab("show-edit");
+      setFinalDocsDialogOpen(false);
+    } catch (err: any) {
+      toast({ title: "เปิด Doc Final ไม่สำเร็จ", description: err?.message || "Unknown error", variant: "destructive" });
+    } finally {
+      setFinalDocsLoading(false);
+    }
+  };
 
   // Replace docs of a specific mode without touching other modes' docs
   const replaceDocsForMode = (mode: "filter" | "vendor" | "import", incoming: VendorDocument[]) => {
@@ -3254,6 +3305,43 @@ export default function SRRDirectPage() {
         }
         setCost0RefreshKey(k => k + 1);
       }
+
+      // Save Doc Final (D2S) — เก็บ snapshot ของ Doc ที่ผ่าน Review (บันทึกเฉพาะตอนกด Save/Export)
+      if (user?.id) {
+        try {
+          const dateKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+          const src = activeDateMode || "filter";
+          const finalInserts = vendors.map((vc) => {
+            const vRows = showData.filter((r) => r.vendor_code === vc);
+            const vDoc = vendorDocs.find((d) => d.vendor_code === vc);
+            return {
+              date_key: dateKey,
+              spc_name: vDoc?.spc_name || vRows[0]?.spc_name || "",
+              vendor_code: vc,
+              vendor_display: vDoc?.vendor_display || vRows[0]?.vendor_display || vc,
+              data: vRows as any,
+              item_count: vRows.length,
+              suggest_count: vRows.filter((r) => r.final_order_qty > 0).length,
+              edited_columns: vDoc?.edited_columns || [],
+              source: src,
+              saved_by: user.id,
+            };
+          });
+          if (finalInserts.length > 0) {
+            const { error: finErr } = await (supabase as any).from("srr_d2s_final_documents").insert(finalInserts);
+            if (finErr) {
+              console.error("srr_d2s_final_documents insert error:", finErr);
+              toast({ title: "บันทึก Doc Final ไม่สำเร็จ", description: finErr.message || "ตรวจสอบว่า table srr_d2s_final_documents ถูกสร้างแล้ว", variant: "destructive" });
+            } else {
+              loadFinalDocs();
+            }
+          }
+        } catch (finErr: any) {
+          console.error("Failed to save Doc Final:", finErr);
+          toast({ title: "บันทึก Doc Final ไม่สำเร็จ", description: finErr?.message || "Unknown error", variant: "destructive" });
+        }
+      }
+
       setExportOpen(false);
       const cost0Total = cost0DocsCreated.reduce((s, d) => s + d.rows.length, 0);
       toast({
@@ -3967,7 +4055,17 @@ export default function SRRDirectPage() {
           )}
 
           {/* DOC zone — pushed right */}
-          <div className="ml-auto flex items-center shrink-0 pl-1">
+          <div className="ml-auto flex items-center gap-1.5 shrink-0 pl-1">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setFinalDocsDialogOpen(true)}
+              className="h-6 text-[11px] px-2 gap-1 border-amber-400 text-amber-700 hover:bg-amber-50"
+              title="Doc Final — เอกสารที่ผ่านการ Review แล้ว (บันทึกเมื่อกด Save)"
+            >
+              <CheckCircle2 className="w-3 h-3" />
+              Doc Final {finalDocs.length > 0 ? `(${finalDocs.length})` : ""}
+            </Button>
             <Button
               size="sm"
               variant="default"
@@ -4554,6 +4652,93 @@ export default function SRRDirectPage() {
       </Tabs>
 
       {/* Documents popup — opened via "Doc" button */}
+      {/* ===== Doc Final Dialog (D2S) ===== */}
+      <Dialog open={finalDocsDialogOpen} onOpenChange={setFinalDocsDialogOpen}>
+        <DialogContent className="max-w-4xl max-h-[80vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-amber-500" />
+              Doc Final — เอกสารที่ผ่านการ Review แล้ว
+            </DialogTitle>
+            <DialogDescription className="text-xs">บันทึกอัตโนมัติทุกครั้งที่กด Save · เก็บ 60 วัน · คลิกแถวเพื่อเปิดมาแสดง</DialogDescription>
+          </DialogHeader>
+
+          {finalDocsLoading ? (
+            <div className="flex items-center justify-center py-10 text-muted-foreground gap-2">
+              <Loader2 className="w-4 h-4 animate-spin" /> กำลังโหลด...
+            </div>
+          ) : finalDocs.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-10 text-muted-foreground gap-2">
+              <CheckCircle2 className="w-10 h-10 opacity-20" />
+              <p className="text-sm">ยังไม่มี Doc Final · กด Save เพื่อบันทึกครั้งแรก</p>
+            </div>
+          ) : (
+            <div className="overflow-auto flex-1">
+              <table className="w-full text-xs border-collapse">
+                <thead className="bg-muted/50 sticky top-0">
+                  <tr>
+                    <th className="text-left p-2 border-b font-medium">วันที่ Save</th>
+                    <th className="text-left p-2 border-b font-medium">Vendor</th>
+                    <th className="text-left p-2 border-b font-medium">SPC</th>
+                    <th className="text-right p-2 border-b font-medium">Items</th>
+                    <th className="text-right p-2 border-b font-medium">Suggest</th>
+                    <th className="text-left p-2 border-b font-medium">คอลัมน์ที่แก้ไข</th>
+                    <th className="text-left p-2 border-b font-medium">Source</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {finalDocs.map((d: any) => (
+                    <tr key={d.id} onClick={() => openFinalDoc(d)} title="คลิกเพื่อเปิดมาแสดง" className="border-b hover:bg-muted/30 transition-colors cursor-pointer">
+                      <td className="p-2 text-muted-foreground whitespace-nowrap">
+                        <div className="flex items-center gap-1">
+                          <Clock className="w-3 h-3 opacity-50" />
+                          {new Date(d.saved_at).toLocaleString("th-TH", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                        </div>
+                      </td>
+                      <td className="p-2 font-mono">
+                        <div className="font-semibold">{d.vendor_code}</div>
+                        <div className="text-muted-foreground truncate max-w-[180px]">{d.vendor_display}</div>
+                      </td>
+                      <td className="p-2">{d.spc_name || "—"}</td>
+                      <td className="p-2 text-right tabular-nums">{(d.item_count || 0).toLocaleString()}</td>
+                      <td className="p-2 text-right tabular-nums text-green-600 font-semibold">{(d.suggest_count || 0).toLocaleString()}</td>
+                      <td className="p-2 max-w-[200px]">
+                        {(d.edited_columns || []).length === 0 ? (
+                          <span className="text-muted-foreground">—</span>
+                        ) : (
+                          <div className="flex flex-wrap gap-1">
+                            {(d.edited_columns as string[]).slice(0, 4).map((c: string) => (
+                              <span key={c} className="bg-amber-100 text-amber-700 rounded px-1 py-0.5 text-[10px]">{c}</span>
+                            ))}
+                            {(d.edited_columns as string[]).length > 4 && (
+                              <span className="text-muted-foreground text-[10px]">+{(d.edited_columns as string[]).length - 4}</span>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                      <td className="p-2">
+                        <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                          d.source === "filter" ? "bg-blue-100 text-blue-700" :
+                          d.source === "vendor" ? "bg-purple-100 text-purple-700" :
+                          "bg-gray-100 text-gray-700"
+                        }`}>{d.source || "filter"}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <DialogFooter className="pt-2">
+            <Button variant="outline" size="sm" onClick={() => { loadFinalDocs(); }}>
+              <RefreshCw className="w-3.5 h-3.5 mr-1" /> Refresh
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setFinalDocsDialogOpen(false)}>ปิด</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <DocsPopupDialog
         open={docsDialogOpen}
         onOpenChange={setDocsDialogOpen}
