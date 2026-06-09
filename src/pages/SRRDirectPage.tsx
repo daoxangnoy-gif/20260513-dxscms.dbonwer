@@ -4235,18 +4235,27 @@ export default function SRRDirectPage() {
                   >
                     <Upload className="w-3.5 h-3.5" /> Import
                   </Button>
-                  <Button size="sm" variant="outline" onClick={clearAllOnOrderStore} className="text-xs gap-1">
-                    <XCircle className="w-3.5 h-3.5" /> Clear All ON ORDER
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={restoreAllOnOrderStore} className="text-xs gap-1">
-                    <RefreshCw className="w-3.5 h-3.5" /> Restore All ON ORDER
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={clearAllStockStore} className="text-xs gap-1">
-                    <XCircle className="w-3.5 h-3.5" /> Clear All STORE STOCK
-                  </Button>
-                  <Button size="sm" variant="outline" onClick={restoreAllStockStore} className="text-xs gap-1">
-                    <RefreshCw className="w-3.5 h-3.5" /> Restore All STORE STOCK
-                  </Button>
+                  {/* Bulk Clear/Restore dropdowns (เหมือน SRR DC) */}
+                  {[
+                    { label: "ON ORDER", clear: clearAllOnOrderStore, restore: restoreAllOnOrderStore },
+                    { label: "STORE STOCK", clear: clearAllStockStore, restore: restoreAllStockStore },
+                  ].map(({ label, clear, restore }) => (
+                    <DropdownMenu key={label}>
+                      <DropdownMenuTrigger asChild>
+                        <Button size="sm" variant="outline" className="text-xs gap-1 h-7 px-2">
+                          {label} <ChevronDown className="w-3 h-3" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" className="min-w-[160px]">
+                        <DropdownMenuItem className="text-destructive gap-2 text-xs" onClick={clear}>
+                          <XCircle className="w-3.5 h-3.5" /> Clear All
+                        </DropdownMenuItem>
+                        <DropdownMenuItem className="text-primary gap-2 text-xs" onClick={restore}>
+                          <RefreshCw className="w-3.5 h-3.5" /> Restore All
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  ))}
                   {showImportSkipped.length > 0 && (
                     <ImportSkipBar
                       count={showImportSkipped.length}
