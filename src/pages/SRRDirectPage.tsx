@@ -935,10 +935,7 @@ export default function SRRDirectPage() {
     const seen = new Map<string, { name: string; cur: string; pa: string }>();
     for (const v of pool) if (v.vendor_code && !seen.has(v.vendor_code)) seen.set(v.vendor_code, { name: v.vendor_name, cur: v.supplier_currency, pa: v.purchase_agreement_vat });
     return [...seen.entries()]
-      .map(([k, info]) => {
-        const parts = [info.cur, info.pa, k, info.name].filter(Boolean);
-        return { value: k, display: parts.join(" - ") };
-      })
+      .map(([k, info]) => ({ value: k, display: `${k} - ${info.name}` }))
       .sort((a, b) => a.value.localeCompare(b.value));
   }, [vendorMasterAll, selectedSpcForCal, orderDayCal]);
   const preOrderDayOptions = useMemo(() => {
