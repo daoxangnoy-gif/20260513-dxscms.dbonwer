@@ -1910,7 +1910,7 @@ export default function SRRSendDocsPage() {
               <Input
                 value={depositSearch}
                 onChange={(e) => setDepositSearch(e.target.value)}
-                placeholder="ค้นหา Doc / ผู้ฝาก / ผู้รับ / เลข PO / Partner"
+                placeholder="ค้นหา Doc / ผู้ฝาก / ผู้รับ / เลข PO / Partner / จุดต้น-ปลายทาง-ปัจจุบัน"
                 className="h-9"
               />
             </div>
@@ -1942,8 +1942,13 @@ export default function SRRSendDocsPage() {
                     const codes = s.origin_codes || [];
                     if (codes.some(c => (c || "").toLowerCase().includes(q))) return true;
                     if (codes.some(c => (poInfoMap[c]?.partner || "").toLowerCase().includes(q))) return true;
+                    // จุดต้นทาง / จุดปลายทาง
+                    if ((s.origin_location || "").toLowerCase().includes(q)) return true;
+                    if ((s.destination_location || "").toLowerCase().includes(q)) return true;
                     const mvs = movements.filter(m => m.shipment_id === s.id);
                     if (mvs.some(m => (m.depositor_name || "").toLowerCase().includes(q) || (m.receiver_name || "").toLowerCase().includes(q))) return true;
+                    // ทุกจุดในเส้นทาง (รวมจุดปัจจุบัน)
+                    if (mvs.some(m => (m.location_name || "").toLowerCase().includes(q))) return true;
                     return false;
                   })).map(s => s.id);
                   const allChecked = visibleIds.length > 0 && visibleIds.every(id => selectedIds.has(id));
@@ -1990,9 +1995,14 @@ export default function SRRSendDocsPage() {
                     const codes = s.origin_codes || [];
                     if (codes.some(c => (c || "").toLowerCase().includes(q))) return true;
                     if (codes.some(c => (poInfoMap[c]?.partner || "").toLowerCase().includes(q))) return true;
+                    // จุดต้นทาง / จุดปลายทาง
+                    if ((s.origin_location || "").toLowerCase().includes(q)) return true;
+                    if ((s.destination_location || "").toLowerCase().includes(q)) return true;
                     // also movements depositor/receiver
                     const mvs = movements.filter(m => m.shipment_id === s.id);
                     if (mvs.some(m => (m.depositor_name || "").toLowerCase().includes(q) || (m.receiver_name || "").toLowerCase().includes(q))) return true;
+                    // ทุกจุดในเส้นทาง (รวมจุดปัจจุบัน)
+                    if (mvs.some(m => (m.location_name || "").toLowerCase().includes(q))) return true;
                     return false;
                   });
                   if (loading) return <tr><td colSpan={11} className="text-center p-6 text-muted-foreground">กำลังโหลด...</td></tr>;
