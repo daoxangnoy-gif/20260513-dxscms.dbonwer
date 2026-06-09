@@ -950,6 +950,15 @@ export default function SAROrderFromStoreTab() {
       if (error) throw error;
       _resultDocsCache = data || [];
       setResultDocs(_resultDocsCache);
+      // โหลดชื่อผู้คำนวณ (merge เข้า map เดิม)
+      const userIds = [...new Set((data || []).map((d: any) => d.user_id).filter(Boolean))] as string[];
+      if (userIds.length) {
+        const { data: profiles } = await (supabase as any).from("profiles").select("user_id,full_name,email").in("user_id", userIds);
+        const map: Record<string, string> = { ..._userProfileMapCache };
+        for (const p of (profiles || []) as any[]) map[p.user_id] = p.full_name || p.email || "";
+        _userProfileMapCache = map;
+        setUserProfileMap(map);
+      }
     } catch (e: any) { toast({ title: "Load error", description: e.message, variant: "destructive" }); }
     finally { setResultDocsLoading(false); }
   }, [toast]);
@@ -2182,9 +2191,12 @@ export default function SAROrderFromStoreTab() {
                                           </td>
                                           <td data-side="po" className={cn("px-2 py-1.5 font-mono cursor-pointer select-none", po && (poSelected ? "bg-blue-100" : "hover:bg-blue-50"))}>
                                             {po
-                                              ? <div className="flex items-center gap-1">
-                                                  <span className="truncate max-w-[160px]" title={po.doc_name}>{po.doc_name}</span>
-                                                  {(docExportCounts.get(po.id) ?? 0) > 0 && <span className="shrink-0 text-[9px] bg-blue-100 text-blue-700 border border-blue-300 px-1 rounded">{docExportCounts.get(po.id)}x</span>}
+                                              ? <div>
+                                                  <div className="flex items-center gap-1">
+                                                    <span className="truncate max-w-[160px]" title={po.doc_name}>{po.doc_name}</span>
+                                                    {(docExportCounts.get(po.id) ?? 0) > 0 && <span className="shrink-0 text-[9px] bg-blue-100 text-blue-700 border border-blue-300 px-1 rounded">{docExportCounts.get(po.id)}x</span>}
+                                                  </div>
+                                                  {po.user_id && userProfileMap[po.user_id] && <div className="text-[9px] text-muted-foreground font-sans truncate max-w-[180px]" title={userProfileMap[po.user_id]}>👤 {userProfileMap[po.user_id]}</div>}
                                                 </div>
                                               : <span className="text-muted-foreground/50 italic text-[11px]">—</span>
                                             }
@@ -2208,7 +2220,10 @@ export default function SAROrderFromStoreTab() {
                                           </td>
                                           <td data-side="ro" className={cn("px-2 py-1.5 font-mono cursor-pointer select-none", ro && (roSelected ? "bg-emerald-100" : "hover:bg-emerald-50"))}>
                                             {ro
-                                              ? <span className="truncate block max-w-[160px]" title={ro.doc_name}>{ro.doc_name}</span>
+                                              ? <div>
+                                                  <span className="truncate block max-w-[160px]" title={ro.doc_name}>{ro.doc_name}</span>
+                                                  {ro.user_id && userProfileMap[ro.user_id] && <div className="text-[9px] text-muted-foreground font-sans truncate max-w-[180px]" title={userProfileMap[ro.user_id]}>👤 {userProfileMap[ro.user_id]}</div>}
+                                                </div>
                                               : <span className="text-muted-foreground/50 italic text-[11px]">—</span>
                                             }
                                           </td>
