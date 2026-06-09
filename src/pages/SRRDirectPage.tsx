@@ -646,7 +646,6 @@ const DEFAULT_D2S_VISIBLE = new Set<string>([
   "min_store",
   "stock_store",
   "stock_dc",
-  "srr_suggest",
   "on_order_store",
   "final_order_uom",
   "final_order_uom_div",
@@ -2903,13 +2902,14 @@ export default function SRRDirectPage() {
   const filteredShowData = useMemo(() => {
     let base = showOnlyFinalGt0 ? showData.filter((r) => r.final_order_qty > 0) : showData;
     if (showOnlyMinGt0) base = base.filter((r) => (Number(r.min_store) || 0) > 0);
+    if (itemTypeFilter.length > 0) base = base.filter((r) => itemTypeFilter.includes(r.item_type));
     const patched = base.map(r => ({
       ...r,
       orig_on_order_store: r.orig_on_order_store ?? r.on_order_store,
       orig_stock_store: r.orig_stock_store ?? r.stock_store,
     }));
     return applyChipFilter(patched, tableSearchChips, TABLE_SEARCH_KEYS);
-  }, [showData, tableSearchChips, TABLE_SEARCH_KEYS, showOnlyFinalGt0, showOnlyMinGt0]);
+  }, [showData, tableSearchChips, TABLE_SEARCH_KEYS, showOnlyFinalGt0, showOnlyMinGt0, itemTypeFilter]);
   const pagedData = filteredShowData.slice(page * pageSize, (page + 1) * pageSize);
   const totalPages = Math.ceil(filteredShowData.length / pageSize);
 
@@ -4594,7 +4594,7 @@ export default function SRRDirectPage() {
           setSelectedDocSpc([doc.spc_name]);
           setVendorFilter([doc.vendor_code]);
           setStoreFilter([doc.store_name]);
-          setOrderDayFilter([]); setItemTypeFilter([]); setTypeStoreFilter([]); setBuyingStatusFilter([]); setPoGroupFilter([]);
+          setOrderDayFilter([]); setItemTypeFilter(["Basic"]); setTypeStoreFilter([]); setBuyingStatusFilter([]); setPoGroupFilter([]); setShowOnlyMinGt0(true);
           let rowData = doc.data;
           if (rowData.length === 0 && doc.item_count > 0) {
             const dataMap = await fetchSnapshotDataByIds([doc.id], "srr_d2s_snapshots");
@@ -4616,7 +4616,7 @@ export default function SRRDirectPage() {
           setSelectedDocSpc([...new Set(docs.map((x) => x.spc_name))]);
           setVendorFilter([...new Set(docs.map((x) => x.vendor_code))]);
           setStoreFilter([...new Set(docs.map((x) => x.store_name).filter(Boolean))]);
-          setOrderDayFilter([]); setItemTypeFilter([]); setTypeStoreFilter([]); setBuyingStatusFilter([]); setPoGroupFilter([]);
+          setOrderDayFilter([]); setItemTypeFilter(["Basic"]); setTypeStoreFilter([]); setBuyingStatusFilter([]); setPoGroupFilter([]); setShowOnlyMinGt0(true);
           const unloadedDocs = docs.filter((x) => x.data.length === 0 && x.item_count > 0);
           let loadedMap = new Map<string, any[]>();
           if (unloadedDocs.length > 0) {
