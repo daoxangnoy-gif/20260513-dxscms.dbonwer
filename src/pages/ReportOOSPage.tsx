@@ -127,7 +127,14 @@ export default function ReportOOSPage() {
 
   // ===== actions =====
   const handleGet = async () => {
-    if (!hasFilters && !window.confirm("ยังไม่ได้เลือกตัวกรอง — จะดึงข้อมูลทั้งหมด (อาจมากกว่า 140,000 แถว และใช้เวลาหลายวินาที)\n\nดำเนินการต่อไหม?")) return;
+    if (!hasFilters) {
+      toast({
+        title: "กรุณาเลือกตัวกรองอย่างน้อย 1 อย่าง",
+        description: "เพื่อไม่ให้ดึงข้อมูลทั้งหมด (หนักมาก ~140k แถว) — ถ้าต้องการดูทั้งหมด ให้ Save เป็น snapshot แล้วเปิดจาก dropdown",
+        variant: "destructive",
+      });
+      return;
+    }
     setGetting(true);
     setSummary(null);
     setLastLoadInfo("");
@@ -179,17 +186,25 @@ export default function ReportOOSPage() {
   };
 
   const handleSave = async () => {
-    if (!summary) return;
+    // Save ทำงาน server-side (regenerate จาก filter) ไม่ต้องโหลดมา client ก่อน → Save ทั้งหมดได้
+    const scope = hasFilters ? "ตามตัวกรองที่เลือก" : "ทั้งหมด (~140k แถว — ใช้เวลาสักครู่)";
     const existing = snapshots.find((s) => s.week_label === weekLabel);
-    if (existing && !window.confirm(`${weekLabel} มี snapshot อยู่แล้ว — บันทึกทับของเดิมไหม?`)) return;
+    const msg = existing
+      ? `${weekLabel} มี snapshot อยู่แล้ว — บันทึกทับของเดิม (${scope}) ไหม?`
+      : `บันทึก snapshot ${weekLabel} (${scope})?`;
+    if (!window.confirm(msg)) return;
     setSaving(true);
+    startTimer("กำลังบันทึก snapshot (ประมวลผลฝั่ง server)...");
     try {
       const res = await saveOOSSnapshot(weekLabel, currentFilters());
+      setLastLoadInfo(`บันทึก ${weekLabel} · ${res.total_rows.toLocaleString()} แถว`);
       toast({ title: "บันทึกสำเร็จ", description: `${weekLabel} · ${res.total_rows.toLocaleString()} แถว` });
       await refreshSnapshots();
+      setTrendLoaded(false); // ให้ Trend โหลดใหม่
     } catch (e: any) {
       toast({ title: "บันทึกไม่สำเร็จ", description: e.message, variant: "destructive" });
     } finally {
+      stopTimer();
       setSaving(false);
     }
   };
@@ -463,7 +478,7 @@ export default function ReportOOSPage() {
           <Button size="sm" variant="secondary" onClick={handleCal} disabled={rows.length === 0 || loadingMore} className="text-xs" title={loadingMore ? "รอโหลดข้อมูลครบก่อน" : ""}>
             <Calculator className="w-3.5 h-3.5 mr-1" /> Cal
           </Button>
-          <Button size="sm" variant="secondary" onClick={handleSave} disabled={!summary || saving} className="text-xs">
+          <Button size="sm" variant="secondary" onClick={handleSave} disabled={saving || getting || loadingMore} className="text-xs" title="บันทึก snapshot (ทำงานฝั่ง server — Save ทั้งหมดได้โดยไม่ต้อง Get)">
             {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Save className="w-3.5 h-3.5 mr-1" />}
             Save
           </Button>
@@ -492,13 +507,15 @@ export default function ReportOOSPage() {
           <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={clearFilters}>
             <X className="w-3.5 h-3.5 mr-1" /> ล้างตัวกรอง
           </Button>
-        ) : null}
+        ) : (
+          <span className="text-[11px] text-amber-600 ml-1">⚠ เลือกตัวกรองอย่างน้อย 1 อย่างก่อนกด Get (ถ้าต้องการดูทั้งหมด ให้ Save แล้วเปิดจาก snapshot)</span>
+        )}
       </div>
 
       {/* แถบสถานะดึงข้อมูล + ตัวนับวินาที real-time */}
-      {(getting || loadingMore || lastLoadInfo) && (
-        <div className={`flex items-center gap-2 px-3 py-1.5 text-xs border-b ${getting || loadingMore ? "bg-primary/5 text-primary" : "bg-green-50 text-green-700"}`}>
-          {getting || loadingMore ? (
+      {(getting || loadingMore || saving || lastLoadInfo) && (
+        <div className={`flex items-center gap-2 px-3 py-1.5 text-xs border-b ${getting || loadingMore || saving ? "bg-primary/5 text-primary" : "bg-green-50 text-green-700"}`}>
+          {getting || loadingMore || saving ? (
             <>
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
               <span>{loadStatus}</span>
@@ -532,7 +549,8 @@ export default function ReportOOSPage() {
           ) : rows.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
               <Database className="w-12 h-12 mb-3 opacity-30" />
-              <p className="text-sm">เลือกตัวกรอง (ถ้าต้องการ) แล้วกด "Get"</p>
+              <p className="text-sm">เลือกตัวกรองอย่างน้อย 1 อย่าง แล้วกด "Get"</p>
+              <p className="text-xs mt-1 opacity-70">อยากดูทั้งหมด: Save เป็น snapshot แล้วเปิดจาก dropdown</p>
             </div>
           ) : (
             <>
