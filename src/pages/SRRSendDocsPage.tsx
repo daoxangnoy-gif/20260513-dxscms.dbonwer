@@ -2430,7 +2430,8 @@ export default function SRRSendDocsPage() {
           <ScannerPanel codes={originCodes} setCodes={setOriginCodes} onCheckConflict={(code) => {
             for (const s of items) {
               if (s.id === editingId) continue;
-              if (s.status === "finalized") continue;
+              // ข้ามเอกสารที่จบล็อตแล้ว (matched/mismatch) หรือ finalized — ถือว่าจบกระบวนการแล้ว ไม่ต้องเตือนซ้ำ
+              if (s.status === "finalized" || s.status === "matched" || s.status === "mismatch") continue;
               if ((s.origin_codes || []).includes(code)) {
                 const mvs = movements.filter(m => m.shipment_id === s.id)
                   .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
