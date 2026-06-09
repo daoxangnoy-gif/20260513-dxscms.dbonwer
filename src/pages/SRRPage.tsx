@@ -2525,10 +2525,17 @@ function SRRDCItemPage() {
           });
           if (finalInserts.length > 0) {
             const { error: finErr } = await (supabase as any).from("srr_final_documents").insert(finalInserts);
-            if (finErr) console.error("srr_final_documents insert error:", finErr);
-            else loadFinalDocs();
+            if (finErr) {
+              console.error("srr_final_documents insert error:", finErr);
+              toast({ title: "บันทึก Doc Final ไม่สำเร็จ", description: finErr.message || "ตรวจสอบว่า table srr_final_documents ถูกสร้างแล้ว", variant: "destructive" });
+            } else {
+              loadFinalDocs();
+            }
           }
-        } catch (finErr) { console.error("Failed to save Doc Final:", finErr); }
+        } catch (finErr: any) {
+          console.error("Failed to save Doc Final:", finErr);
+          toast({ title: "บันทึก Doc Final ไม่สำเร็จ", description: finErr?.message || "Unknown error", variant: "destructive" });
+        }
       }
 
       toast({ title: "บันทึก PO สำเร็จ", description: `${newPOs.length} เอกสาร (แยกตาม vendor + po_group)` });
