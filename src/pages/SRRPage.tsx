@@ -48,7 +48,7 @@ import type { SRRRow, VendorInfo, VendorDocument, SavedPO, ColumnView } from "@/
 export type { HierarchyFilter } from "@/lib/srrTypes";
 import {
   fetchAllRows, fetchSRRDataRPC, SRR_RPC_CACHE,
-  HIGHLIGHT_COLS, TRUNCATE_COLS, SRR_COLUMNS, ALL_COL_KEYS, EDITABLE_COLS,
+  HIGHLIGHT_COLS, TRUNCATE_COLS, SRR_COLUMNS, ALL_COL_KEYS, DEFAULT_SRR_VISIBLE, EDITABLE_COLS,
   formatCellValue, getDefaultWidth, getBatchKey, fmtTreeStamp,
   getDefaultSafety, recalcRow, buildSRRRows,
   VIEWS_KEY, loadSavedViews, saveSavedViews, PO_KEY,
@@ -458,13 +458,14 @@ function SRRDCItemPage() {
   const [selectedDocIds, setSelectedDocIds] = useState<Set<string>>(new Set());
 
   // Tab 2: filters (Item Type moved here) — persisted via stateRef
-  const [itemTypeFilter, setItemTypeFilter] = useState<string[]>(srrStateRef.current?.itemTypeFilter || []);
+  const [itemTypeFilter, setItemTypeFilter] = useState<string[]>(srrStateRef.current?.itemTypeFilter ?? ["Basic"]);
   const [selectedDocSpc, setSelectedDocSpc] = useState<string[]>(srrStateRef.current?.selectedDocSpc || []);
   const [orderDayFilter, setOrderDayFilter] = useState<string[]>(srrStateRef.current?.orderDayFilter || []);
   const [vendorFilter, setVendorFilter] = useState<string[]>(srrStateRef.current?.vendorFilter || []);
   const [buyingStatusFilter, setBuyingStatusFilter] = useState<string[]>(srrStateRef.current?.buyingStatusFilter || []);
   const [poGroupFilter, setPoGroupFilter] = useState<string[]>(srrStateRef.current?.poGroupFilter || []);
   const [showOnlyFinalGt0, setShowOnlyFinalGt0] = useState<boolean>(srrStateRef.current?.showOnlyFinalGt0 || false);
+  const [showOnlyTTMinGt0, setShowOnlyTTMinGt0] = useState<boolean>(srrStateRef.current?.showOnlyTTMinGt0 ?? true);
   // Tab 2: Mode toggle (independent from Tab 1's importMode) — controls which doc set Tab 2 sees
   const [tab2Mode, setTab2Mode] = useState<"filter" | "vendor" | "import">(() => {
     const fromRef = srrStateRef.current?.tab2Mode as "filter" | "vendor" | "import" | undefined;
@@ -528,7 +529,7 @@ function SRRDCItemPage() {
   const tableContainerRef = useRef<HTMLDivElement>(null);
 
   // Column visibility
-  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(ALL_COL_KEYS));
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(DEFAULT_SRR_VISIBLE));
   const [savedViews, setSavedViews] = useState<ColumnView[]>(loadSavedViews());
   const [publicViews, setPublicViews] = useState<SrrPublicView[]>([]);
   const [newViewName, setNewViewName] = useState("");
@@ -566,7 +567,7 @@ function SRRDCItemPage() {
       srrStateRef.current = {
         vendorDocs, activeTab, page, pageSize,
         itemTypeFilter, selectedDocSpc, orderDayFilter, vendorFilter, buyingStatusFilter,
-        poGroupFilter, showOnlyFinalGt0, tab2Mode,
+        poGroupFilter, showOnlyFinalGt0, showOnlyTTMinGt0, tab2Mode,
         showData, safetyByRank,
         // --- mode isolation persistence ---
         importMode,
@@ -2175,7 +2176,9 @@ function SRRDCItemPage() {
   // --- Paged data ---
   // Apply chip search to showData
   const filteredShowData = useMemo(() => {
-    const base = showOnlyFinalGt0 ? showData.filter(r => r.final_suggest_qty > 0) : showData;
+    let base = showOnlyFinalGt0 ? showData.filter(r => r.final_suggest_qty > 0) : showData;
+    if (showOnlyTTMinGt0) base = base.filter(r => (Number(r.tt_min) || 0) > 0);
+    if (itemTypeFilter.length > 0) base = base.filter(r => itemTypeFilter.includes(r.item_type));
     const patched = base.map(r => {
       const origOnOrder = r.orig_on_order ?? r.on_order;
       const newSafety = safetyByRank[r.rank_sales?.toUpperCase()] ?? safetyByRank["D"] ?? 7;
@@ -2184,7 +2187,7 @@ function SRRDCItemPage() {
       return recalcRow({ ...r, orig_on_order: origOnOrder, safety: newSafety });
     });
     return applyChipFilter(patched, tableSearchChips, TABLE_SEARCH_KEYS);
-  }, [showData, tableSearchChips, TABLE_SEARCH_KEYS, showOnlyFinalGt0, safetyByRank]);
+  }, [showData, tableSearchChips, TABLE_SEARCH_KEYS, showOnlyFinalGt0, showOnlyTTMinGt0, itemTypeFilter, safetyByRank]);
   const pagedData = filteredShowData.slice(page * pageSize, (page + 1) * pageSize);
   const totalPages = Math.ceil(filteredShowData.length / pageSize);
 
@@ -3609,6 +3612,14 @@ function SRRDCItemPage() {
                 />
                 <span>Show FinalOrder &gt; 0</span>
               </label>
+              <label className="flex items-center gap-1.5 text-xs cursor-pointer ml-2 select-none">
+                <Checkbox
+                  checked={showOnlyTTMinGt0}
+                  onCheckedChange={(c) => { setShowOnlyTTMinGt0(!!c); setPage(0); }}
+                  className="h-3.5 w-3.5"
+                />
+                <span>Show TT Min &gt; 0</span>
+              </label>
             </div>
           )}
 
@@ -3729,7 +3740,7 @@ function SRRDCItemPage() {
           setTab2Mode(src);
           setSelectedDocSpc([doc.spc_name]);
           setVendorFilter([doc.vendor_code]);
-          setOrderDayFilter([]); setItemTypeFilter([]); setBuyingStatusFilter([]); setPoGroupFilter([]);
+          setOrderDayFilter([]); setItemTypeFilter(["Basic"]); setBuyingStatusFilter([]); setPoGroupFilter([]); setShowOnlyTTMinGt0(true);
           let rowData = doc.data;
           if (rowData.length === 0 && doc.item_count > 0) {
             const dataMap = await fetchSnapshotDataByIds([doc.id]);
@@ -3750,7 +3761,7 @@ function SRRDCItemPage() {
           setTab2Mode(src);
           setSelectedDocSpc([...new Set(docs.map((x) => x.spc_name))]);
           setVendorFilter([...new Set(docs.map((x) => x.vendor_code))]);
-          setOrderDayFilter([]); setItemTypeFilter([]); setBuyingStatusFilter([]); setPoGroupFilter([]);
+          setOrderDayFilter([]); setItemTypeFilter(["Basic"]); setBuyingStatusFilter([]); setPoGroupFilter([]); setShowOnlyTTMinGt0(true);
           const unloadedDocs = docs.filter(x => x.data.length === 0 && x.item_count > 0);
           let loadedMap = new Map<string, any[]>();
           if (unloadedDocs.length > 0) {

@@ -141,6 +141,30 @@ export const SRR_COLUMNS: { key: keyof SRRRow | "pack_size"; label: string; grou
 ];
 
 export const ALL_COL_KEYS = SRR_COLUMNS.map(c => c.key);
+// Default columns ที่แสดงตอนเปิดหน้า SRR DC (ที่เหลือซ่อนไว้ ผู้ใช้ติกเพิ่มเองได้)
+export const DEFAULT_SRR_VISIBLE = new Set<string>([
+  "vendor_display",
+  "po_group",
+  "division",
+  "sku_code",
+  "product_name_la",
+  "rank_sales",
+  "tt_min",
+  "tt_max",
+  "stock_dc",
+  "tt_stock",
+  "tt_stock_store",
+  "avg_sales_tt",
+  "po_cost_unit",
+  "dc_min",
+  "on_order",
+  "final_suggest_qty",
+  "final_suggest_uom",
+  "pack_size",
+  "order_uom_edit",
+  "doh_asis",
+  "doh_tobe",
+]);
 export const EDITABLE_COLS = new Set(["order_uom_edit", "safety"]);
 
 export function formatCellValue(val: any, key: string): string {
