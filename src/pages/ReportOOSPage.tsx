@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo, Fragment } from "react";
+import { useState, useEffect, useMemo, useRef, Fragment } from "react";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, Legend, ResponsiveContainer } from "recharts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -10,13 +11,16 @@ import { MultiSelectFilter } from "@/components/MultiSelectFilter";
 import { useToast } from "@/hooks/use-toast";
 import {
   PackageX, Loader2, Download, Database, BarChart3, Save, Calculator, X, ChevronLeft, ChevronRight,
+  TrendingUp, ArrowUp, ArrowDown, Minus, RefreshCw,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import {
-  OOSRow, OOSFilters, OOSSummary, OOSSnapshotMeta, OOSFilterOptions,
+  OOSRow, OOSFilters, OOSSummary, OOSSnapshotMeta, OOSFilterOptions, OOSTrendRow,
   getOOSDetail, saveOOSSnapshot, getOOSFilterOptions, listOOSSnapshots,
-  loadOOSSnapshotRows, computeOOSSummary, getWeekLabel,
+  loadOOSSnapshotRows, computeOOSSummary, getWeekLabel, getOOSTrend,
 } from "@/lib/oosService";
+
+const TREND_COLORS = ["#2563eb", "#dc2626", "#16a34a", "#d97706", "#7c3aed", "#0891b2", "#db2777"];
 
 const PAGE_SIZE = 50;
 const LIVE = "__live__";
@@ -55,9 +59,31 @@ export default function ReportOOSPage() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
 
+  // สถานะการดึงข้อมูล + ตัวนับวินาที real-time
+  const [loadStatus, setLoadStatus] = useState("");
+  const [elapsed, setElapsed] = useState(0);
+  const [lastLoadInfo, setLastLoadInfo] = useState("");
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startTimer = (status: string) => {
+    setLoadStatus(status);
+    setElapsed(0);
+    if (timerRef.current) clearInterval(timerRef.current);
+    const t0 = Date.now();
+    timerRef.current = setInterval(() => setElapsed((Date.now() - t0) / 1000), 100);
+  };
+  const stopTimer = () => {
+    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
+  };
+  useEffect(() => () => { if (timerRef.current) clearInterval(timerRef.current); }, []);
+
   // snapshots
   const [snapshots, setSnapshots] = useState<OOSSnapshotMeta[]>([]);
   const [selectedSnap, setSelectedSnap] = useState<string>(LIVE);
+
+  // trend
+  const [trend, setTrend] = useState<OOSTrendRow[]>([]);
+  const [trendLoading, setTrendLoading] = useState(false);
+  const [trendLoaded, setTrendLoaded] = useState(false);
 
   useEffect(() => {
     getOOSFilterOptions().then(setOpts).catch((e) =>
@@ -96,18 +122,25 @@ export default function ReportOOSPage() {
 
   // ===== actions =====
   const handleGet = async () => {
+    if (!hasFilters && !window.confirm("ยังไม่ได้เลือกตัวกรอง — จะดึงข้อมูลทั้งหมด (อาจมากกว่า 140,000 แถว และใช้เวลาหลายวินาที)\n\nดำเนินการต่อไหม?")) return;
     setGetting(true);
     setSummary(null);
+    setLastLoadInfo("");
+    startTimer("กำลังดึงข้อมูลจากฐานข้อมูล...");
+    const t0 = Date.now();
     try {
       const data = await getOOSDetail(currentFilters());
       setRows(data);
       setPage(0);
       setSelectedSnap(LIVE);
       setActiveTab("data");
-      toast({ title: "ดึงข้อมูลสำเร็จ", description: `${data.length.toLocaleString()} แถว` });
+      const secs = ((Date.now() - t0) / 1000).toFixed(1);
+      setLastLoadInfo(`ดึง ${data.length.toLocaleString()} แถว ใน ${secs} วินาที`);
+      toast({ title: "ดึงข้อมูลสำเร็จ", description: `${data.length.toLocaleString()} แถว · ${secs} วินาที` });
     } catch (e: any) {
       toast({ title: "ดึงข้อมูลไม่สำเร็จ", description: e.message, variant: "destructive" });
     } finally {
+      stopTimer();
       setGetting(false);
     }
   };
@@ -142,16 +175,36 @@ export default function ReportOOSPage() {
       return;
     }
     setGetting(true);
+    setLastLoadInfo("");
+    startTimer("กำลังโหลด snapshot...");
+    const t0 = Date.now();
     try {
       const data = await loadOOSSnapshotRows(val);
       setRows(data);
       setSummary(computeOOSSummary(data));
       setPage(0);
-      toast({ title: "โหลด snapshot สำเร็จ", description: `${data.length.toLocaleString()} แถว` });
+      const secs = ((Date.now() - t0) / 1000).toFixed(1);
+      setLastLoadInfo(`โหลด ${data.length.toLocaleString()} แถว ใน ${secs} วินาที`);
+      toast({ title: "โหลด snapshot สำเร็จ", description: `${data.length.toLocaleString()} แถว · ${secs} วินาที` });
     } catch (e: any) {
       toast({ title: "โหลด snapshot ไม่สำเร็จ", description: e.message, variant: "destructive" });
     } finally {
+      stopTimer();
       setGetting(false);
+    }
+  };
+
+  // ===== Trend =====
+  const loadTrend = async () => {
+    setTrendLoading(true);
+    try {
+      const data = await getOOSTrend();
+      setTrend(data);
+      setTrendLoaded(true);
+    } catch (e: any) {
+      toast({ title: "โหลด Trend ไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setTrendLoading(false);
     }
   };
 
@@ -175,6 +228,60 @@ export default function ReportOOSPage() {
     [filteredRows, page]
   );
   useEffect(() => { setPage(0); }, [search]);
+
+  // โหลด trend อัตโนมัติครั้งแรกที่เปิดแท็บ Trend
+  useEffect(() => {
+    if (activeTab === "trend" && !trendLoaded && !trendLoading) loadTrend();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
+
+  // ===== trend pivot (type_store x week -> %OOS) =====
+  const trendView = useMemo(() => {
+    // weeks เรียงตามวันที่
+    const weekMap = new Map<string, string>(); // week_label -> snapshot_date
+    for (const r of trend) {
+      const cur = weekMap.get(r.week_label);
+      if (!cur || r.snapshot_date > cur) weekMap.set(r.week_label, r.snapshot_date);
+    }
+    const weeks = [...weekMap.entries()]
+      .sort((a, b) => a[1].localeCompare(b[1]))
+      .map(([w]) => w);
+
+    const types = [...new Set(trend.map((r) => r.type_store))].sort();
+
+    // cell[type][week] = { pct, range, oos }
+    const cell = new Map<string, { pct: number; range: number; oos: number }>();
+    const grandByWeek = new Map<string, { range: number; oos: number }>();
+    for (const r of trend) {
+      cell.set(`${r.type_store}|${r.week_label}`, {
+        pct: r.n_range > 0 ? r.n_oos / r.n_range : 0,
+        range: r.n_range,
+        oos: r.n_oos,
+      });
+      const g = grandByWeek.get(r.week_label) || { range: 0, oos: 0 };
+      g.range += r.n_range; g.oos += r.n_oos;
+      grandByWeek.set(r.week_label, g);
+    }
+
+    // chart data: 1 จุดต่อ week, มี field ต่อ type + Total (เป็น % ตัวเลข)
+    const chart = weeks.map((w) => {
+      const row: any = { week: w };
+      for (const t of types) {
+        const c = cell.get(`${t}|${w}`);
+        row[t] = c ? +(c.pct * 100).toFixed(2) : null;
+      }
+      const g = grandByWeek.get(w);
+      row["Total"] = g && g.range > 0 ? +((g.oos / g.range) * 100).toFixed(2) : null;
+      return row;
+    });
+
+    const getPct = (type: string, w: string) => cell.get(`${type}|${w}`)?.pct ?? null;
+    const getTotalPct = (w: string) => {
+      const g = grandByWeek.get(w);
+      return g && g.range > 0 ? g.oos / g.range : null;
+    };
+    return { weeks, types, chart, getPct, getTotalPct };
+  }, [trend]);
 
   // ===== export =====
   const handleExport = () => {
@@ -306,11 +413,30 @@ export default function ReportOOSPage() {
         ) : null}
       </div>
 
+      {/* แถบสถานะดึงข้อมูล + ตัวนับวินาที real-time */}
+      {(getting || lastLoadInfo) && (
+        <div className={`flex items-center gap-2 px-3 py-1.5 text-xs border-b ${getting ? "bg-primary/5 text-primary" : "bg-green-50 text-green-700"}`}>
+          {getting ? (
+            <>
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              <span>{loadStatus}</span>
+              <span className="font-mono font-semibold tabular-nums ml-1">{elapsed.toFixed(1)} วินาที</span>
+            </>
+          ) : (
+            <>
+              <span className="text-green-600">✓</span>
+              <span>{lastLoadInfo}</span>
+            </>
+          )}
+        </div>
+      )}
+
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
         <div className="px-3 pt-2 border-b border-border">
           <TabsList className="h-9">
             <TabsTrigger value="data" className="text-xs gap-1.5"><Database className="w-3.5 h-3.5" /> Data</TabsTrigger>
             <TabsTrigger value="report" className="text-xs gap-1.5"><BarChart3 className="w-3.5 h-3.5" /> Report</TabsTrigger>
+            <TabsTrigger value="trend" className="text-xs gap-1.5"><TrendingUp className="w-3.5 h-3.5" /> Trend</TabsTrigger>
           </TabsList>
         </div>
 
@@ -463,6 +589,99 @@ export default function ReportOOSPage() {
                   </TableBody>
                 </Table>
               </div>
+            </>
+          )}
+        </TabsContent>
+
+        {/* ===== TREND TAB ===== */}
+        <TabsContent value="trend" className="flex-1 overflow-auto p-3 mt-0">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs text-muted-foreground">เทียบ % OOS ระหว่างสัปดาห์ที่บันทึกไว้ (จาก snapshot)</p>
+            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={loadTrend} disabled={trendLoading}>
+              {trendLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <RefreshCw className="w-3.5 h-3.5 mr-1" />}
+              Refresh
+            </Button>
+          </div>
+
+          {trendLoading ? (
+            <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
+              <Loader2 className="w-8 h-8 animate-spin mb-2" /><p className="text-xs">กำลังโหลด Trend...</p>
+            </div>
+          ) : trendView.weeks.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
+              <TrendingUp className="w-12 h-12 mb-3 opacity-30" />
+              <p className="text-sm">ยังไม่มี snapshot ที่บันทึก — กด "Save" ในแท็บ Report เพื่อเก็บข้อมูลรายสัปดาห์</p>
+            </div>
+          ) : (
+            <>
+              {/* กราฟเส้น %OOS ต่อ type store + Total */}
+              <div className="h-72 mb-4 border rounded p-2">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={trendView.chart} margin={{ top: 8, right: 16, bottom: 4, left: -8 }}>
+                    <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
+                    <XAxis dataKey="week" tick={{ fontSize: 11 }} />
+                    <YAxis tick={{ fontSize: 11 }} unit="%" />
+                    <RTooltip formatter={(v: any) => (v == null ? "-" : `${v}%`)} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    {trendView.types.map((t, i) => (
+                      <Line key={t} type="monotone" dataKey={t} stroke={TREND_COLORS[i % TREND_COLORS.length]} strokeWidth={2} connectNulls dot={{ r: 2 }} />
+                    ))}
+                    <Line type="monotone" dataKey="Total" stroke="#111827" strokeWidth={2.5} strokeDasharray="5 3" connectNulls dot={{ r: 3 }} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+
+              {/* ตาราง pivot: type store x week (มีลูกศรเทียบสัปดาห์ก่อน) */}
+              <div className="overflow-auto border rounded">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="text-xs sticky left-0 bg-background">Type store</TableHead>
+                      {trendView.weeks.map((w) => (
+                        <TableHead key={w} className="text-xs text-right whitespace-nowrap">{w}</TableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {[...trendView.types, "__total__"].map((t) => {
+                      const isTotal = t === "__total__";
+                      return (
+                        <TableRow key={t} className={isTotal ? "bg-muted font-semibold" : ""}>
+                          <TableCell className="text-xs sticky left-0 bg-inherit whitespace-nowrap">
+                            {isTotal ? "Total (ทุกกลุ่ม)" : t}
+                          </TableCell>
+                          {trendView.weeks.map((w, wi) => {
+                            const cur = isTotal ? trendView.getTotalPct(w) : trendView.getPct(t, w);
+                            const prevW = trendView.weeks[wi - 1];
+                            const prev = prevW ? (isTotal ? trendView.getTotalPct(prevW) : trendView.getPct(t, prevW)) : null;
+                            const delta = cur != null && prev != null ? cur - prev : null;
+                            return (
+                              <TableCell key={w} className="text-xs text-right tabular-nums">
+                                {cur == null ? (
+                                  <span className="text-muted-foreground">-</span>
+                                ) : (
+                                  <span className="inline-flex items-center justify-end gap-1">
+                                    {delta != null && Math.abs(delta) >= 0.0005 && (
+                                      delta > 0
+                                        ? <ArrowUp className="w-3 h-3 text-destructive" />
+                                        : <ArrowDown className="w-3 h-3 text-green-600" />
+                                    )}
+                                    {delta != null && Math.abs(delta) < 0.0005 && <Minus className="w-3 h-3 text-muted-foreground" />}
+                                    <span className={pctClass(cur)}>{pct(cur)}</span>
+                                  </span>
+                                )}
+                              </TableCell>
+                            );
+                          })}
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+              <p className="text-[10px] text-muted-foreground mt-2">
+                ↑ แดง = OOS แย่ลงจากสัปดาห์ก่อน · ↓ เขียว = ดีขึ้น · %OOS คิดจากระดับ store-sku (OOS ÷ Range ทั้งหมด)
+              </p>
             </>
           )}
         </TabsContent>

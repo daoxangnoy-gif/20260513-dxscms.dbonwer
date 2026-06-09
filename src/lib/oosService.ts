@@ -61,6 +61,14 @@ export interface OOSSnapshotMeta {
   created_at: string;
 }
 
+export interface OOSTrendRow {
+  week_label: string;
+  snapshot_date: string;
+  type_store: string;
+  n_range: number;
+  n_oos: number;
+}
+
 export interface OOSFilterOptions {
   divisions: string[];
   departments: string[];
@@ -125,6 +133,13 @@ export async function getOOSFilterOptions(): Promise<OOSFilterOptions> {
   const { data, error } = await (supabase as any).rpc("get_oos_filter_options");
   if (error) throw error;
   return data as OOSFilterOptions;
+}
+
+// ===== Trend (เทียบ %OOS ระหว่าง week) =====
+export async function getOOSTrend(): Promise<OOSTrendRow[]> {
+  const { data, error } = await (supabase as any).rpc("get_oos_trend");
+  if (error) throw error;
+  return (data || []) as OOSTrendRow[];
 }
 
 // ===== Snapshots list / load =====
