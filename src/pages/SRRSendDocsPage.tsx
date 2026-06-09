@@ -117,6 +117,43 @@ interface Movement {
   created_at: string;
 }
 
+// สถานะของเอกสาร (คำนวณจาก movements) — ใช้ทั้งใน badge และ dropdown filter
+type DocStatusKey = "start" | "transit" | "arrived" | "done_full" | "done_clear" | "done_diff" | "done_incomplete";
+
+const DOC_STATUS_OPTIONS: { key: DocStatusKey; label: string }[] = [
+  { key: "start", label: "เริ่มฝาก" },
+  { key: "transit", label: "กำลังเดินทาง" },
+  { key: "arrived", label: "รอดำเนินการ" },
+  { key: "done_full", label: "จบ-ครบ" },
+  { key: "done_clear", label: "จบ-เคลียร์แล้ว" },
+  { key: "done_diff", label: "จบ-มีส่วนต่าง" },
+  { key: "done_incomplete", label: "จบ-ไม่ครบ" },
+];
+
+function computeDocStatusKey(s: Shipment, allMovements: Movement[]): DocStatusKey {
+  const docMvs = allMovements.filter((m) => m.shipment_id === s.id);
+  const isClosed = docMvs.some((m) => m.action === "closed");
+  const hasAdjustments = docMvs.some((m) => m.action === "adjust");
+  const allHandledCodes = new Set<string>();
+  docMvs.forEach((m) => {
+    if (m.action === "arrived" || m.action === "closed" || m.action === "adjust") {
+      (m.codes || []).forEach((c) => allHandledCodes.add(c));
+    }
+  });
+  const allOriginAccountedFor = (s.origin_codes || []).every((c) => allHandledCodes.has(c));
+  const lastAction = docMvs
+    .slice()
+    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+    .at(-1)?.action;
+  if (isClosed) {
+    if (allOriginAccountedFor) return hasAdjustments ? "done_clear" : "done_full";
+    return hasAdjustments ? "done_diff" : "done_incomplete";
+  }
+  if (lastAction === "forward") return "transit";
+  if (lastAction === "arrived") return "arrived";
+  return "start";
+}
+
 const ACTION_LABELS: Record<string, string> = {
   origin_save: "เริ่มฝาก",
   arrived: "รับตรวจ",
@@ -1328,6 +1365,7 @@ export default function SRRSendDocsPage() {
   // Locations master
   const [locations, setLocations] = useState<DocLocation[]>([]);
   const [depositSearch, setDepositSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<Set<string>>(new Set());
   const [locOpen, setLocOpen] = useState(false);
   const [newLocName, setNewLocName] = useState("");
   const [newLocDesc, setNewLocDesc] = useState("");
@@ -1919,6 +1957,43 @@ export default function SRRSendDocsPage() {
                 <X className="w-3.5 h-3.5 mr-1" />ล้าง
               </Button>
             )}
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="outline" className="h-9">
+                  <FileSpreadsheet className="w-4 h-4 mr-2" />
+                  สถานะ{statusFilter.size > 0 ? ` (${statusFilter.size})` : ""}
+                  <ChevronDown className="w-3.5 h-3.5 ml-2" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-56 p-2" align="end">
+                <div className="flex items-center justify-between px-1 pb-1.5 mb-1 border-b">
+                  <span className="text-xs font-medium text-muted-foreground">กรองตามสถานะ</span>
+                  {statusFilter.size > 0 && (
+                    <button className="text-xs text-blue-600 hover:underline" onClick={() => setStatusFilter(new Set())}>
+                      ล้าง
+                    </button>
+                  )}
+                </div>
+                <div className="space-y-0.5">
+                  {DOC_STATUS_OPTIONS.map((opt) => (
+                    <label key={opt.key} className="flex items-center gap-2 px-1.5 py-1.5 rounded hover:bg-muted cursor-pointer text-sm">
+                      <Checkbox
+                        checked={statusFilter.has(opt.key)}
+                        onCheckedChange={(checked) => {
+                          setStatusFilter((prev) => {
+                            const next = new Set(prev);
+                            if (checked) next.add(opt.key);
+                            else next.delete(opt.key);
+                            return next;
+                          });
+                        }}
+                      />
+                      {opt.label}
+                    </label>
+                  ))}
+                </div>
+              </PopoverContent>
+            </Popover>
           </div>
 
           {isAdmin && selectedIds.size > 0 && (
@@ -1935,7 +2010,9 @@ export default function SRRSendDocsPage() {
               <thead className="bg-muted sticky top-0 z-10">
                 {(() => {
                   const q = depositSearch.trim().toLowerCase();
-                  const visibleIds = (!q ? items : items.filter((s) => {
+                  const matchStatus = (s: Shipment) => statusFilter.size === 0 || statusFilter.has(computeDocStatusKey(s, movements));
+                  const matchSearch = (s: Shipment) => {
+                    if (!q) return true;
                     if ((s.doc_name || "").toLowerCase().includes(q)) return true;
                     if ((s.depositor_name || "").toLowerCase().includes(q)) return true;
                     if ((s.receiver_name || "").toLowerCase().includes(q)) return true;
@@ -1950,7 +2027,8 @@ export default function SRRSendDocsPage() {
                     // ทุกจุดในเส้นทาง (รวมจุดปัจจุบัน)
                     if (mvs.some(m => (m.location_name || "").toLowerCase().includes(q))) return true;
                     return false;
-                  })).map(s => s.id);
+                  };
+                  const visibleIds = items.filter(s => matchStatus(s) && matchSearch(s)).map(s => s.id);
                   const allChecked = visibleIds.length > 0 && visibleIds.every(id => selectedIds.has(id));
                   const someChecked = visibleIds.some(id => selectedIds.has(id));
                   return (
@@ -1988,7 +2066,9 @@ export default function SRRSendDocsPage() {
               <tbody>
                 {(() => {
                   const q = depositSearch.trim().toLowerCase();
-                  const filteredItems = !q ? items : items.filter((s) => {
+                  const matchStatus = (s: Shipment) => statusFilter.size === 0 || statusFilter.has(computeDocStatusKey(s, movements));
+                  const matchSearch = (s: Shipment) => {
+                    if (!q) return true;
                     if ((s.doc_name || "").toLowerCase().includes(q)) return true;
                     if ((s.depositor_name || "").toLowerCase().includes(q)) return true;
                     if ((s.receiver_name || "").toLowerCase().includes(q)) return true;
@@ -2004,9 +2084,10 @@ export default function SRRSendDocsPage() {
                     // ทุกจุดในเส้นทาง (รวมจุดปัจจุบัน)
                     if (mvs.some(m => (m.location_name || "").toLowerCase().includes(q))) return true;
                     return false;
-                  });
+                  };
+                  const filteredItems = items.filter(s => matchStatus(s) && matchSearch(s));
                   if (loading) return <tr><td colSpan={11} className="text-center p-6 text-muted-foreground">กำลังโหลด...</td></tr>;
-                  if (filteredItems.length === 0) return <tr><td colSpan={11} className="text-center p-6 text-muted-foreground">{q ? "ไม่พบรายการที่ค้นหา" : "ยังไม่มีเอกสาร"}</td></tr>;
+                  if (filteredItems.length === 0) return <tr><td colSpan={11} className="text-center p-6 text-muted-foreground">{(q || statusFilter.size > 0) ? "ไม่พบรายการที่ค้นหา" : "ยังไม่มีเอกสาร"}</td></tr>;
                   return filteredItems.map((s) => {
                   const originN = s.origin_codes?.length || 0;
                   const destN = s.destination_codes?.length || 0;
