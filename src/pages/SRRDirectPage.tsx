@@ -634,6 +634,28 @@ const D2S_COLUMNS: { key: keyof D2SRow; label: string; group?: string }[] = [
 ];
 
 const ALL_D2S_KEYS = D2S_COLUMNS.map((c) => c.key);
+// Default columns ที่แสดงตอนเปิดหน้า (ที่เหลือซ่อนไว้ ผู้ใช้ติกเพิ่มเองได้)
+const DEFAULT_D2S_VISIBLE = new Set<string>([
+  "store_name",
+  "division",
+  "vendor_display",
+  "sku_code",
+  "product_name_la",
+  "rank_sales",
+  "avg_sales_store",
+  "min_store",
+  "stock_store",
+  "stock_dc",
+  "srr_suggest",
+  "on_order_store",
+  "final_order_uom",
+  "final_order_uom_div",
+  "unit_name",
+  "order_uom_edit",
+  "doh_asis",
+  "doh_tobe",
+  "po_cost_unit",
+]);
 const HIGHLIGHT_D2S = new Set([
   "srr_suggest",
   "final_order_qty",
@@ -1053,7 +1075,7 @@ export default function SRRDirectPage() {
   const [selectedDocIds, setSelectedDocIds] = useState<Set<string>>(new Set());
 
   // Tab 2: filters (load from stateRef for persistence)
-  const [itemTypeFilter, setItemTypeFilter] = useState<string[]>(d2sStateRef.current?.itemTypeFilter || []);
+  const [itemTypeFilter, setItemTypeFilter] = useState<string[]>(d2sStateRef.current?.itemTypeFilter ?? ["Basic"]);
   const [selectedDocSpc, setSelectedDocSpc] = useState<string[]>(d2sStateRef.current?.selectedDocSpc || []);
   const [orderDayFilter, setOrderDayFilter] = useState<string[]>(d2sStateRef.current?.orderDayFilter || []);
   const [vendorFilter, setVendorFilter] = useState<string[]>(d2sStateRef.current?.vendorFilter || []);
@@ -1062,6 +1084,7 @@ export default function SRRDirectPage() {
   const [buyingStatusFilter, setBuyingStatusFilter] = useState<string[]>(d2sStateRef.current?.buyingStatusFilter || []);
   const [poGroupFilter, setPoGroupFilter] = useState<string[]>(d2sStateRef.current?.poGroupFilter || []);
   const [showOnlyFinalGt0, setShowOnlyFinalGt0] = useState<boolean>(d2sStateRef.current?.showOnlyFinalGt0 || false);
+  const [showOnlyMinGt0, setShowOnlyMinGt0] = useState<boolean>(d2sStateRef.current?.showOnlyMinGt0 ?? true);
   // Tab 2 mode toggle (independent from Tab 1) — "filter" | "vendor" | "import"(=barcode)
   const [tab2Mode, setTab2Mode] = useState<"filter" | "vendor" | "import">(
     (d2sStateRef.current?.tab2Mode as "filter" | "vendor" | "import") || "filter",
@@ -1115,7 +1138,7 @@ export default function SRRDirectPage() {
   const [activeCell, setActiveCell] = useState<{ row: number; col: number } | null>(null);
   const [lastClickedRow, setLastClickedRow] = useState<number | null>(null);
   const tableContainerRef = useRef<HTMLDivElement>(null);
-  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(ALL_D2S_KEYS));
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set(DEFAULT_D2S_VISIBLE));
   // Saved column views (persist in localStorage)
   const D2S_VIEWS_KEY = "srr_d2s_column_views";
   const [savedViews, setSavedViews] = useState<{ name: string; columns: string[] }[]>(() => {
@@ -1199,6 +1222,7 @@ export default function SRRDirectPage() {
         buyingStatusFilter,
         poGroupFilter,
         showOnlyFinalGt0,
+        showOnlyMinGt0,
         tab2Mode,
         showData,
         safetyByRank,
@@ -2877,14 +2901,15 @@ export default function SRRDirectPage() {
 
   // Paged
   const filteredShowData = useMemo(() => {
-    const base = showOnlyFinalGt0 ? showData.filter((r) => r.final_order_qty > 0) : showData;
+    let base = showOnlyFinalGt0 ? showData.filter((r) => r.final_order_qty > 0) : showData;
+    if (showOnlyMinGt0) base = base.filter((r) => (Number(r.min_store) || 0) > 0);
     const patched = base.map(r => ({
       ...r,
       orig_on_order_store: r.orig_on_order_store ?? r.on_order_store,
       orig_stock_store: r.orig_stock_store ?? r.stock_store,
     }));
     return applyChipFilter(patched, tableSearchChips, TABLE_SEARCH_KEYS);
-  }, [showData, tableSearchChips, TABLE_SEARCH_KEYS, showOnlyFinalGt0]);
+  }, [showData, tableSearchChips, TABLE_SEARCH_KEYS, showOnlyFinalGt0, showOnlyMinGt0]);
   const pagedData = filteredShowData.slice(page * pageSize, (page + 1) * pageSize);
   const totalPages = Math.ceil(filteredShowData.length / pageSize);
 
@@ -4416,6 +4441,17 @@ export default function SRRDirectPage() {
                   className="h-3.5 w-3.5"
                 />
                 <span>Show FinalOrder &gt; 0</span>
+              </label>
+              <label className="flex items-center gap-1.5 text-xs cursor-pointer ml-2 select-none">
+                <Checkbox
+                  checked={showOnlyMinGt0}
+                  onCheckedChange={(c) => {
+                    setShowOnlyMinGt0(!!c);
+                    setPage(0);
+                  }}
+                  className="h-3.5 w-3.5"
+                />
+                <span>Show Min &gt; 0</span>
               </label>
             </div>
           )}
