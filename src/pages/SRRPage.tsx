@@ -2665,6 +2665,43 @@ function SRRDCItemPage() {
       }
       setCost0RefreshKey(k => k + 1);
     }
+
+    // Save Doc Final — เก็บ snapshot ของ Doc ที่ผ่าน Review (บันทึกเฉพาะตอนกด Save/Export)
+    if (user?.id) {
+      try {
+        const dateKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+        const src = activeDateMode || "filter";
+        const finalInserts = exportVendors.map(vc => {
+          const vDoc = vendorDocs.find(d => d.vendor_code === vc);
+          const vRows = showData.filter(r => r.vendor_code === vc);
+          return {
+            date_key: dateKey,
+            spc_name: vDoc?.spc_name || vRows[0]?.spc_name || "",
+            vendor_code: vc,
+            vendor_display: vDoc?.vendor_display || vRows[0]?.vendor_display || vc,
+            data: vRows as any,
+            item_count: vRows.length,
+            suggest_count: vRows.filter(r => r.final_suggest_qty > 0).length,
+            edited_columns: vDoc?.edited_columns || [],
+            source: src,
+            saved_by: user.id,
+          };
+        });
+        if (finalInserts.length > 0) {
+          const { error: finErr } = await (supabase as any).from("srr_final_documents").insert(finalInserts);
+          if (finErr) {
+            console.error("srr_final_documents insert error:", finErr);
+            toast({ title: "บันทึก Doc Final ไม่สำเร็จ", description: finErr.message || "ตรวจสอบว่า table srr_final_documents ถูกสร้างแล้ว", variant: "destructive" });
+          } else {
+            loadFinalDocs();
+          }
+        }
+      } catch (finErr: any) {
+        console.error("Failed to save Doc Final:", finErr);
+        toast({ title: "บันทึก Doc Final ไม่สำเร็จ", description: finErr?.message || "Unknown error", variant: "destructive" });
+      }
+    }
+
     setExportOpen(false);
     const cost0Total = cost0DocsCreated.reduce((s, d) => s + d.rows.length, 0);
     toast({
