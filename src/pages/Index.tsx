@@ -9,6 +9,7 @@ import RangeStorePage from "@/pages/RangeStorePage";
 import MinmaxCalPage from "@/pages/MinmaxCalPage";
 import SRRPage from "@/pages/SRRPage";
 import ReportPage from "@/pages/ReportPage";
+import ReportOOSPage from "@/pages/ReportOOSPage";
 import LogPage from "@/pages/LogPage";
 import LogPoCostPage from "@/pages/LogPoCostPage";
 import UserManagementPage from "@/pages/UserManagementPage";
@@ -200,13 +201,7 @@ const Index = () => {
         {currentPage === "srr" && <SRRPage activeSub={activeSrrSub} />}
         {currentPage === "user_control" && <UserManagementPage />}
         {currentPage === "report" && activeReportSub === "report_po" && <ReportPage />}
-        {currentPage === "report" && activeReportSub === "report_oos" && (
-          <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground">
-            <BarChart3 className="w-12 h-12 text-muted-foreground/40" />
-            <div className="text-lg font-medium">Report OOS</div>
-            <div className="text-sm">Coming soon</div>
-          </div>
-        )}
+        {currentPage === "report" && activeReportSub === "report_oos" && <ReportOOSPage />}
         {currentPage === "report" && activeReportSub === "report_doh" && (
           <div className="flex flex-col items-center justify-center h-full gap-4 text-muted-foreground">
             <BarChart3 className="w-12 h-12 text-muted-foreground/40" />
