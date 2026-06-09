@@ -305,6 +305,9 @@ export default function SAROrderFromStoreTab() {
   const [resultDocsLoading, setResultDocsLoading] = useState(false);
   const [selectedPoIds, setSelectedPoIds] = useState<Set<string>>(new Set());
   const [selectedRoIds, setSelectedRoIds] = useState<Set<string>>(new Set());
+  // จำตำแหน่งคลิกล่าสุด (ต่อ batch + ต่อคอลัมน์) สำหรับ Shift+Click เลือกหลาย Doc แบบช่วง
+  const lastPoClick = useRef<{ key: string; idx: number } | null>(null);
+  const lastRoClick = useRef<{ key: string; idx: number } | null>(null);
   const [viewItems, setViewItems] = useState<ProcessedRow[] | null>(null);
   const [viewTitle, setViewTitle] = useState("");
   const [viewDocType, setViewDocType] = useState<"RO" | "PO" | "MIXED" | null>(null);
@@ -2092,6 +2095,36 @@ export default function SAROrderFromStoreTab() {
                         const toggleBatchPO = () => { setSelectedPoIds(s => { const n = new Set(s); if (allPoSelected) poDocIds.forEach(id => n.delete(id)); else poDocIds.forEach(id => n.add(id)); return n; }); clearExtra(); };
                         const toggleBatchRO = () => { setSelectedRoIds(s => { const n = new Set(s); if (allRoSelected) roDocIds.forEach(id => n.delete(id)); else roDocIds.forEach(id => n.add(id)); return n; }); clearExtra(); };
 
+                        // Shift+Click: เลือกช่วงตามลำดับที่แสดงผล (filteredRows) — แยก PO / RO และแยกต่อ batch (วันที่)
+                        const poRowsOrdered = filteredRows.filter(r => r.po);
+                        const roRowsOrdered = filteredRows.filter(r => r.ro);
+                        const handlePoClick = (poId: string, shift: boolean) => {
+                          const idx = poRowsOrdered.findIndex(r => r.po?.id === poId);
+                          if (shift && lastPoClick.current?.key === key && lastPoClick.current.idx >= 0 && idx >= 0) {
+                            const a = Math.min(lastPoClick.current.idx, idx);
+                            const b = Math.max(lastPoClick.current.idx, idx);
+                            const ids = poRowsOrdered.slice(a, b + 1).map(r => r.po!.id);
+                            setSelectedPoIds(s => { const n = new Set(s); ids.forEach(id => n.add(id)); return n; });
+                            clearExtra();
+                          } else {
+                            togglePoDoc(poId);
+                          }
+                          lastPoClick.current = { key, idx };
+                        };
+                        const handleRoClick = (roId: string, shift: boolean) => {
+                          const idx = roRowsOrdered.findIndex(r => r.ro?.id === roId);
+                          if (shift && lastRoClick.current?.key === key && lastRoClick.current.idx >= 0 && idx >= 0) {
+                            const a = Math.min(lastRoClick.current.idx, idx);
+                            const b = Math.max(lastRoClick.current.idx, idx);
+                            const ids = roRowsOrdered.slice(a, b + 1).map(r => r.ro!.id);
+                            setSelectedRoIds(s => { const n = new Set(s); ids.forEach(id => n.add(id)); return n; });
+                            clearExtra();
+                          } else {
+                            toggleRoDoc(roId);
+                          }
+                          lastRoClick.current = { key, idx };
+                        };
+
                         return (
                           <div key={key} className="border-b last:border-b-0">
                             {/* Date header */}
@@ -2174,8 +2207,8 @@ export default function SAROrderFromStoreTab() {
                                             const td = (e.target as HTMLElement).closest("td");
                                             if (!td) return;
                                             const idx = (td as HTMLTableCellElement).cellIndex;
-                                            if (idx >= 1 && idx <= 3 && po) togglePoDoc(po.id);
-                                            else if (idx >= 5 && idx <= 7 && ro) toggleRoDoc(ro.id);
+                                            if (idx >= 1 && idx <= 3 && po) handlePoClick(po.id, e.shiftKey);
+                                            else if (idx >= 5 && idx <= 7 && ro) handleRoClick(ro.id, e.shiftKey);
                                           }}
                                         >
                                           <td className="px-3 py-1.5 font-medium truncate max-w-[160px]" title={store}>
