@@ -2908,7 +2908,13 @@ export default function SRRDirectPage() {
       orig_on_order_store: r.orig_on_order_store ?? r.on_order_store,
       orig_stock_store: r.orig_stock_store ?? r.stock_store,
     }));
-    return applyChipFilter(patched, tableSearchChips, TABLE_SEARCH_KEYS);
+    const filtered = applyChipFilter(patched, tableSearchChips, TABLE_SEARCH_KEYS);
+    // Sort by Product Name (EN) A-Z → แล้วเรียง Store ตามรหัสสาขา (store_name ขึ้นต้นด้วย store code)
+    return [...filtered].sort((a, b) => {
+      const p = ((a as any).product_name_en || "").localeCompare((b as any).product_name_en || "");
+      if (p !== 0) return p;
+      return (a.store_name || "").localeCompare(b.store_name || "", undefined, { numeric: true });
+    });
   }, [showData, tableSearchChips, TABLE_SEARCH_KEYS, showOnlyFinalGt0, showOnlyMinGt0, itemTypeFilter]);
   const pagedData = filteredShowData.slice(page * pageSize, (page + 1) * pageSize);
   const totalPages = Math.ceil(filteredShowData.length / pageSize);

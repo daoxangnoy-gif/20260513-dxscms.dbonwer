@@ -2186,7 +2186,13 @@ function SRRDCItemPage() {
       if (!needsSafetyUpdate && r.orig_on_order != null) return r;
       return recalcRow({ ...r, orig_on_order: origOnOrder, safety: newSafety });
     });
-    return applyChipFilter(patched, tableSearchChips, TABLE_SEARCH_KEYS);
+    const filtered = applyChipFilter(patched, tableSearchChips, TABLE_SEARCH_KEYS);
+    // Sort by Product Name (EN) A-Z (tie-break ด้วย SKU เพื่อความเสถียร)
+    return [...filtered].sort((a, b) => {
+      const p = (a.product_name_en || "").localeCompare(b.product_name_en || "");
+      if (p !== 0) return p;
+      return String(a.sku_code || "").localeCompare(String(b.sku_code || ""));
+    });
   }, [showData, tableSearchChips, TABLE_SEARCH_KEYS, showOnlyFinalGt0, showOnlyTTMinGt0, itemTypeFilter, safetyByRank]);
   const pagedData = filteredShowData.slice(page * pageSize, (page + 1) * pageSize);
   const totalPages = Math.ceil(filteredShowData.length / pageSize);
