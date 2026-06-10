@@ -173,9 +173,10 @@ export function useDataTable(tableName: TableName) {
       }
 
       const columnMap = buildColumnMap(jsonData[0], tableName);
-      // stock มี row มากและ payload หนัก ลด batch size เพื่อป้องกัน connection timeout
-      const BATCH_SIZES: Partial<Record<string, number>> = { stock: 200 };
+      // batch ใหญ่ขึ้น + ส่งหลาย batch พร้อมกัน (parallel) เพื่อ import เร็วขึ้นมาก
+      const BATCH_SIZES: Partial<Record<string, number>> = { stock: 1000 };
       const batchSize = BATCH_SIZES[tableName] ?? 500;
+      const CONCURRENCY = 6; // จำนวน batch ที่ส่งพร้อมกัน
       const totalBatches = Math.ceil(jsonData.length / batchSize);
       let processed = 0;
       setImportProgress({ current: 0, total: jsonData.length, phase: "กำลังนำเข้า" });
@@ -236,6 +237,20 @@ export function useDataTable(tableName: TableName) {
         throw error;
       };
 
+      // insert + retry (สำหรับตารางที่ไม่มี unique key เช่น stock)
+      const insertWithRetry = async (rows: any[], attempt = 1): Promise<void> => {
+        const { error } = await supabase.from(tableName).insert(rows as any);
+        if (!error) return;
+        const msg = (error.message || "") + (error.code || "");
+        const transient = /fetch|network|timeout|503|504|ECONN|gateway|reset|abort/i.test(msg);
+        if (transient && attempt <= 6) {
+          const delay = Math.min(1000 * Math.pow(2, attempt - 1), 30000);
+          await new Promise(r => setTimeout(r, delay));
+          return insertWithRetry(rows, attempt + 1);
+        }
+        throw error;
+      };
+
       let batchIdx = 0;
       const uniqueKey = TABLE_UNIQUE_KEY[tableName];
 
@@ -266,9 +281,9 @@ export function useDataTable(tableName: TableName) {
       const totalBatchesAfter = Math.ceil(totalAfterDedupe / batchSize);
       setImportProgress({ current: 0, total: totalAfterDedupe, phase: "กำลังนำเข้า" });
 
-      for (let i = 0; i < workingData.length; i += batchSize) {
-        batchIdx++;
-        const batch = workingData.slice(i, i + batchSize).map(row => {
+      // map ช่วงแถว -> payload (coerce + filter ว่าง)
+      const mapBatch = (slice: Record<string, any>[]) =>
+        slice.map(row => {
           const mapped: Record<string, any> = {};
           for (const [excelCol, dbCol] of Object.entries(columnMap)) {
             if (dbCol && row[excelCol] !== undefined) {
@@ -279,48 +294,51 @@ export function useDataTable(tableName: TableName) {
           return mapped;
         }).filter(row => Object.keys(row).length > 0);
 
-        if (batch.length > 0) {
-          if (mode === "update" && tableName === "data_master") {
-            // data_master uses composite key: sku_code + main_barcode + barcode.
-            for (const row of batch) {
-              const sku = row.sku_code;
-              const mb = row.main_barcode;
-              const bc = row.barcode;
-              if (!sku || !mb || !bc) continue;
-              const updateData: Record<string, any> = { ...row };
-              delete updateData.sku_code;
-              delete updateData.main_barcode;
-              delete updateData.barcode;
-              if (Object.keys(updateData).length === 0) continue;
-              const { error } = await supabase
-                .from("data_master")
-                .update(updateData as any)
-                .eq("sku_code", sku)
-                .eq("main_barcode", mb)
-                .eq("barcode", bc);
-              if (error) throw error;
-            }
-          } else if (mode === "update") {
-            const finalBatch = uniqueKey ? dedupeByKey(batch, uniqueKey) : batch;
-            await upsertWithRetry(finalBatch, { onConflict: uniqueKey || "id", ignoreDuplicates: false });
-          } else if (uniqueKey) {
-            const finalBatch = dedupeByKey(batch, uniqueKey);
-            await upsertWithRetry(finalBatch, { onConflict: uniqueKey, ignoreDuplicates: false });
-          } else {
-            const { error } = await supabase.from(tableName).insert(batch as any);
+      if (mode === "update" && tableName === "data_master") {
+        // data_master update ใช้ composite key (sku_code+main_barcode+barcode) → ต้องทำทีละแถวเรียงกัน
+        for (let i = 0; i < workingData.length; i += batchSize) {
+          batchIdx++;
+          const batch = mapBatch(workingData.slice(i, i + batchSize));
+          for (const row of batch) {
+            const sku = row.sku_code, mb = row.main_barcode, bc = row.barcode;
+            if (!sku || !mb || !bc) continue;
+            const updateData: Record<string, any> = { ...row };
+            delete updateData.sku_code; delete updateData.main_barcode; delete updateData.barcode;
+            if (Object.keys(updateData).length === 0) continue;
+            const { error } = await supabase.from("data_master").update(updateData as any)
+              .eq("sku_code", sku).eq("main_barcode", mb).eq("barcode", bc);
             if (error) throw error;
           }
           processed += batch.length;
-          // พักระหว่าง batch ให้ server หายใจได้ ป้องกัน connection drop เมื่อ import ข้อมูลจำนวนมาก
-          if (i + batchSize < workingData.length) {
-            await new Promise(r => setTimeout(r, 120));
-          }
+          setImportProgress({ current: processed, total: totalAfterDedupe, phase: `Batch ${batchIdx}/${totalBatchesAfter}` });
         }
-        setImportProgress({
-          current: processed,
-          total: totalAfterDedupe,
-          phase: `Batch ${batchIdx}/${totalBatchesAfter}`,
-        });
+      } else {
+        // INSERT/UPSERT แบบ parallel: ส่งหลาย batch พร้อมกัน (CONCURRENCY) ไม่มี sleep
+        // ปลอดภัยเพราะ workingData ถูก dedupe ตาม uniqueKey ทั้งไฟล์แล้ว → ไม่มี key ซ้ำข้าม batch
+        const starts: number[] = [];
+        for (let i = 0; i < workingData.length; i += batchSize) starts.push(i);
+        let cursor = 0, doneBatches = 0;
+        const worker = async () => {
+          while (true) {
+            const myIdx = cursor++;
+            if (myIdx >= starts.length) break;
+            const batch = mapBatch(workingData.slice(starts[myIdx], starts[myIdx] + batchSize));
+            if (batch.length > 0) {
+              if (mode === "update") {
+                const finalBatch = uniqueKey ? dedupeByKey(batch, uniqueKey) : batch;
+                await upsertWithRetry(finalBatch, { onConflict: uniqueKey || "id", ignoreDuplicates: false });
+              } else if (uniqueKey) {
+                await upsertWithRetry(dedupeByKey(batch, uniqueKey), { onConflict: uniqueKey, ignoreDuplicates: false });
+              } else {
+                await insertWithRetry(batch);
+              }
+              processed += batch.length;
+            }
+            doneBatches++;
+            setImportProgress({ current: processed, total: totalAfterDedupe, phase: `Batch ${doneBatches}/${starts.length} (parallel x${CONCURRENCY})` });
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(CONCURRENCY, starts.length) }, () => worker()));
       }
 
       toast({ title: `${mode === "update" ? "Update" : "Import"} สำเร็จ`, description: `ประมวลผล ${processed} แถว` });
