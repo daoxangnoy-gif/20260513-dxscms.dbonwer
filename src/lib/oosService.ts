@@ -144,6 +144,19 @@ export async function saveOOSSnapshot(
   return data as { id: string; total_rows: number };
 }
 
+// ===== Materialized View: refresh + status =====
+export async function refreshOOSMv(): Promise<{ refreshed_at: string; row_count: number }> {
+  const { data, error } = await (supabase as any).rpc("refresh_oos_mv");
+  if (error) throw error;
+  return data as { refreshed_at: string; row_count: number };
+}
+
+export async function getOOSMvStatus(): Promise<{ refreshed_at: string | null; row_count: number | null }> {
+  const { data, error } = await (supabase as any).rpc("get_oos_mv_status");
+  if (error) throw error;
+  return (data || { refreshed_at: null, row_count: null }) as { refreshed_at: string | null; row_count: number | null };
+}
+
 // ===== Filter options =====
 export async function getOOSFilterOptions(): Promise<OOSFilterOptions> {
   const { data, error } = await (supabase as any).rpc("get_oos_filter_options");

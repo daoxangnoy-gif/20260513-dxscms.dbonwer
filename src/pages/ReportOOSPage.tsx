@@ -19,6 +19,7 @@ import {
   OOSRow, OOSFilters, OOSSummary, OOSSnapshotMeta, OOSFilterOptions, OOSTrendRow,
   getOOSDetailPreview, getOOSDetailPage, saveOOSSnapshot, getOOSFilterOptions, listOOSSnapshots,
   loadOOSSnapshotRows, computeOOSSummary, getWeekLabel, getOOSTrend, deleteOOSSnapshot,
+  refreshOOSMv, getOOSMvStatus,
 } from "@/lib/oosService";
 
 const GET_CHUNK = 50000; // ขนาด chunk ตอนโหลดชุดเต็ม (เลี่ยง payload ใหญ่)
@@ -85,6 +86,10 @@ export default function ReportOOSPage() {
   const [selectedSnap, setSelectedSnap] = useState<string>(LIVE);
   const [snapChecked, setSnapChecked] = useState<Set<string>>(new Set());
 
+  // materialized view freshness
+  const [mvAt, setMvAt] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
   // trend
   const [trend, setTrend] = useState<OOSTrendRow[]>([]);
   const [trendLoading, setTrendLoading] = useState(false);
@@ -95,8 +100,36 @@ export default function ReportOOSPage() {
       toast({ title: "โหลดตัวเลือกไม่สำเร็จ", description: e.message, variant: "destructive" })
     );
     refreshSnapshots();
+    getOOSMvStatus().then((s) => setMvAt(s.refreshed_at)).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const fmtMvAt = (iso: string | null) => {
+    if (!iso) return "ยังไม่เคย refresh";
+    const d = new Date(iso);
+    return d.toLocaleString("th-TH", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  };
+
+  const handleRefreshMv = async () => {
+    if (!window.confirm("รีเฟรชข้อมูล OOS จากฐานข้อมูลล่าสุด?\n\nใช้เวลาประมาณ 1-2 นาที (ทำหลัง import stock ใหม่)")) return;
+    setRefreshing(true);
+    startTimer("กำลังรีเฟรชข้อมูล (ประมวลผลฝั่ง server)...");
+    try {
+      const res = await refreshOOSMv();
+      setMvAt(res.refreshed_at);
+      setLastLoadInfo(`รีเฟรชข้อมูลแล้ว · ${res.row_count.toLocaleString()} แถว`);
+      toast({ title: "รีเฟรชข้อมูลสำเร็จ", description: `${res.row_count.toLocaleString()} แถว · ข้อมูล ณ ${fmtMvAt(res.refreshed_at)}` });
+    } catch (e: any) {
+      toast({
+        title: "รีเฟรชไม่สำเร็จ/ใช้เวลานาน",
+        description: `${e.message || e} — ถ้าใช้เวลานานเกิน อาจยังทำงานเบื้องหลัง รอสักครู่แล้วเปิดหน้าใหม่เพื่อเช็ค "ข้อมูล ณ"`,
+        variant: "destructive",
+      });
+    } finally {
+      stopTimer();
+      setRefreshing(false);
+    }
+  };
 
   const refreshSnapshots = () =>
     listOOSSnapshots().then(setSnapshots).catch(() => {});
@@ -418,6 +451,9 @@ export default function ReportOOSPage() {
           <PackageX className="w-5 h-5 text-primary" />
           <h1 className="text-lg font-bold">Report OOS</h1>
           <Badge variant="secondary" className="ml-1">{weekLabel}</Badge>
+          <span className="text-[11px] text-muted-foreground ml-1" title="เวลาที่ข้อมูลถูกประมวลผลล่าสุด (กดรีเฟรชหลัง import stock ใหม่)">
+            🗄 ข้อมูล ณ {fmtMvAt(mvAt)}
+          </span>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <Popover>
@@ -471,7 +507,11 @@ export default function ReportOOSPage() {
           >
             <Trash2 className="w-3.5 h-3.5 mr-1" /> ลบที่เลือก{snapChecked.size > 0 ? ` (${snapChecked.size})` : ""}
           </Button>
-          <Button size="sm" onClick={handleGet} disabled={getting || loadingMore} className="text-xs">
+          <Button size="sm" variant="outline" onClick={handleRefreshMv} disabled={refreshing || getting || loadingMore} className="text-xs" title="ประมวลผลข้อมูล OOS จาก stock ล่าสุด (ทำหลัง import)">
+            {refreshing ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <RefreshCw className="w-3.5 h-3.5 mr-1" />}
+            รีเฟรชข้อมูล
+          </Button>
+          <Button size="sm" onClick={handleGet} disabled={getting || loadingMore || refreshing} className="text-xs">
             {getting || loadingMore ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Database className="w-3.5 h-3.5 mr-1" />}
             Get
           </Button>
@@ -513,9 +553,9 @@ export default function ReportOOSPage() {
       </div>
 
       {/* แถบสถานะดึงข้อมูล + ตัวนับวินาที real-time */}
-      {(getting || loadingMore || saving || lastLoadInfo) && (
-        <div className={`flex items-center gap-2 px-3 py-1.5 text-xs border-b ${getting || loadingMore || saving ? "bg-primary/5 text-primary" : "bg-green-50 text-green-700"}`}>
-          {getting || loadingMore || saving ? (
+      {(getting || loadingMore || saving || refreshing || lastLoadInfo) && (
+        <div className={`flex items-center gap-2 px-3 py-1.5 text-xs border-b ${getting || loadingMore || saving || refreshing ? "bg-primary/5 text-primary" : "bg-green-50 text-green-700"}`}>
+          {getting || loadingMore || saving || refreshing ? (
             <>
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
               <span>{loadStatus}</span>
