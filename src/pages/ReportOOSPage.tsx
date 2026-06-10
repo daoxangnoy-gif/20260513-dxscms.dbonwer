@@ -144,6 +144,7 @@ export default function ReportOOSPage() {
   const [compareStores, setCompareStores] = useState<OOSStoreSummaryRow[]>([]);
   const [compareTotals, setCompareTotals] = useState<OOSTypeTotalRow[]>([]);
   const [comparing, setComparing] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   // trend
   const [trend, setTrend] = useState<OOSTrendRow[]>([]);
@@ -556,33 +557,48 @@ export default function ReportOOSPage() {
   }, [trend]);
 
   // ===== export =====
-  const handleExport = () => {
+  // 1 แถว Data (17 คอลัมน์ + Ranking/Core Item) · ใส่ Week นำหน้าได้ (ตอนเทียบ)
+  const dataRowObj = (r: OOSRow, week?: string) => ({
+    ...(week ? { Week: week } : {}),
+    Division: r.division, Department: r.department, "Range Store": r.store_name,
+    "Id Mactch": r.id_match, SKU: r.sku, Barcode: r.barcode, "Name (LA)": r.name_la,
+    Vendor: r.vendor, Teadterm: r.teadterm, Type: r.item_type, Buying: r.buying,
+    Rank: r.rank_sale, Ranking: r.ranking ?? "", "Core Item": r.core_item,
+    "Store Apply": r.store_apply, "Stock Store": r.stock_store, "Stock DC": r.stock_dc,
+    "Remark Stock": r.remark_stock, "Remark OOS": r.remark_oos,
+  });
+
+  const handleExport = async () => {
+    // โหมดเทียบ week → Raw Data ทุก week เรียงต่อกันลงมา (มีคอลัมน์ Week แยก)
+    if (compareView && compareWeeks) {
+      setExporting(true);
+      startTimer("กำลังเตรียม Export (โหลด detail แต่ละ week)...");
+      try {
+        const all: any[] = [];
+        for (const w of compareWeeks) {
+          const snap = snapshots.find((s) => s.week_label === w);
+          if (!snap) continue;
+          setLoadStatus(`กำลังโหลด detail ${w}... (รวม ${all.length.toLocaleString()} แถว)`);
+          const rs = await loadOOSSnapshotRows(snap.id);
+          for (const r of rs) all.push(dataRowObj(r, w));
+        }
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(all), "Data");
+        XLSX.writeFile(wb, `OOS_Data_${compareWeeks.map((w) => w.replace(/\s/g, "")).join("-")}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+        setLastLoadInfo(`Export ${all.length.toLocaleString()} แถว (${compareWeeks.length} week)`);
+      } catch (e: any) {
+        toast({ title: "Export ไม่สำเร็จ", description: e.message, variant: "destructive" });
+      } finally {
+        stopTimer();
+        setExporting(false);
+      }
+      return;
+    }
+
+    // โหมดปกติ (snapshot/live เดียว)
     if (rows.length === 0) return;
     const wb = XLSX.utils.book_new();
-
-    // Sheet 1: Data (ตรงตามไฟล์ตัวอย่าง)
-    const dataSheet = rows.map((r) => ({
-      Division: r.division,
-      Department: r.department,
-      "Range Store": r.store_name,
-      "Id Mactch": r.id_match,
-      SKU: r.sku,
-      Barcode: r.barcode,
-      "Name (LA)": r.name_la,
-      Vendor: r.vendor,
-      Teadterm: r.teadterm,
-      Type: r.item_type,
-      Buying: r.buying,
-      Rank: r.rank_sale,
-      Ranking: r.ranking ?? "",
-      "Core Item": r.core_item,
-      "Store Apply": r.store_apply,
-      "Stock Store": r.stock_store,
-      "Stock DC": r.stock_dc,
-      "Remark Stock": r.remark_stock,
-      "Remark OOS": r.remark_oos,
-    }));
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dataSheet), "Data");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows.map((r) => dataRowObj(r))), "Data");
 
     // Sheet 2: Report (+ Total ราย type store)
     const sum = summary || computeOOSSummary(rows);
@@ -720,8 +736,8 @@ export default function ReportOOSPage() {
             {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Save className="w-3.5 h-3.5 mr-1" />}
             Save
           </Button>
-          <Button size="sm" variant="outline" onClick={handleExport} disabled={rows.length === 0} className="text-xs">
-            <Download className="w-3.5 h-3.5 mr-1" /> Export
+          <Button size="sm" variant="outline" onClick={handleExport} disabled={exporting || (rows.length === 0 && !compareView)} className="text-xs">
+            {exporting ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Download className="w-3.5 h-3.5 mr-1" />} Export
           </Button>
         </div>
       </div>
@@ -751,9 +767,9 @@ export default function ReportOOSPage() {
       </div>
 
       {/* แถบสถานะดึงข้อมูล + ตัวนับวินาที real-time */}
-      {(getting || loadingMore || saving || refreshing || importing || comparing || lastLoadInfo) && (
-        <div className={`flex items-center gap-2 px-3 py-1.5 text-xs border-b ${getting || loadingMore || saving || refreshing || importing || comparing ? "bg-primary/5 text-primary" : "bg-green-50 text-green-700"}`}>
-          {getting || loadingMore || saving || refreshing || importing || comparing ? (
+      {(getting || loadingMore || saving || refreshing || importing || comparing || exporting || lastLoadInfo) && (
+        <div className={`flex items-center gap-2 px-3 py-1.5 text-xs border-b ${getting || loadingMore || saving || refreshing || importing || comparing || exporting ? "bg-primary/5 text-primary" : "bg-green-50 text-green-700"}`}>
+          {getting || loadingMore || saving || refreshing || importing || comparing || exporting ? (
             <>
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
               <span>{loadStatus}</span>
