@@ -895,7 +895,7 @@ export default function ReportOOSPage() {
           {compareView && compareWeeks ? (
             <>
               <div className="flex items-center justify-between mb-2 gap-2">
-                <span className="text-sm font-medium">เทียบ {compareWeeks.length} week: {compareWeeks.join(" · ")}</span>
+                <span className="text-sm font-medium">Summary OOS By Weekly <span className="text-muted-foreground font-normal">({compareWeeks.join(" · ")})</span></span>
                 <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={clearCompare}>
                   <X className="w-3.5 h-3.5 mr-1" /> ปิดการเทียบ
                 </Button>
