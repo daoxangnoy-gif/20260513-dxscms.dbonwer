@@ -18,7 +18,7 @@ import * as XLSX from "xlsx";
 import {
   OOSRow, OOSFilters, OOSSummary, OOSSnapshotMeta, OOSFilterOptions, OOSTrendRow,
   getOOSDetailPreview, getOOSDetailPage, saveOOSSnapshot, getOOSFilterOptions, listOOSSnapshots,
-  loadOOSSnapshotRows, computeOOSSummary, getWeekLabel, getOOSTrend, deleteOOSSnapshot,
+  loadOOSSnapshotRows, computeOOSSummary, getWeekLabel, getISOWeek, getOOSTrend, deleteOOSSnapshot,
   refreshOOSMv, getOOSMvStatus, importOOSSnapshot,
 } from "@/lib/oosService";
 import { supabase } from "@/integrations/supabase/client";
