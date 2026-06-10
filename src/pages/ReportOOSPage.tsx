@@ -39,6 +39,8 @@ const DATA_COLUMNS: DataCol[] = [
   { key: "item_type", label: "Type", w: 80 },
   { key: "buying", label: "Buying", w: 100 },
   { key: "rank_sale", label: "Rank", w: 60 },
+  { key: "ranking", label: "Ranking", w: 80 },
+  { key: "core_item", label: "Core Item", w: 100 },
   { key: "store_apply", label: "Store Apply", w: 95, align: "right" },
   { key: "stock_store", label: "Stock Store", w: 95, align: "right" },
   { key: "stock_dc", label: "Stock DC", w: 90, align: "right" },
@@ -437,6 +439,8 @@ export default function ReportOOSPage() {
       Type: r.item_type,
       Buying: r.buying,
       Rank: r.rank_sale,
+      Ranking: r.ranking ?? "",
+      "Core Item": r.core_item,
       "Store Apply": r.store_apply,
       "Stock Store": r.stock_store,
       "Stock DC": r.stock_dc,
@@ -685,6 +689,13 @@ export default function ReportOOSPage() {
                             return (
                               <td key={c.key} className={base} title={display}>
                                 <span className={r.remark_oos === "Store OOS" ? "text-destructive font-medium" : "text-green-600"}>{display}</span>
+                              </td>
+                            );
+                          }
+                          if (c.key === "core_item") {
+                            return (
+                              <td key={c.key} className={base} title={display}>
+                                <span className={r.core_item === "Core Item" ? "text-blue-600 font-medium" : "text-muted-foreground"}>{display}</span>
                               </td>
                             );
                           }

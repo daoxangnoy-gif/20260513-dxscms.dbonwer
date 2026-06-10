@@ -20,6 +20,8 @@ export interface OOSRow {
   stock_dc: number;
   remark_stock: string;
   remark_oos: string;
+  ranking: string | null;   // Ranking จาก core_item (AA–BD) — ว่างถ้าไม่ใช่ core
+  core_item: string;        // "Core Item" / "Normal Item"
 }
 
 export interface OOSFilters {
@@ -194,7 +196,7 @@ export async function loadOOSSnapshotRows(snapshotId: string): Promise<OOSRow[]>
   const pageSize = 1000;
   let from = 0;
   const cols =
-    "division, department, store_name, type_store, id_match, sku, barcode, name_la, vendor, teadterm, item_type, buying, rank_sale, store_apply, stock_store, stock_dc, remark_stock, remark_oos";
+    "division, department, store_name, type_store, id_match, sku, barcode, name_la, vendor, teadterm, item_type, buying, rank_sale, store_apply, stock_store, stock_dc, remark_stock, remark_oos, ranking, core_item";
   while (from < 1_000_000) {
     const { data, error } = await (supabase as any)
       .from("oos_snapshot_rows")
