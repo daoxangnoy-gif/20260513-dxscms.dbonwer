@@ -3159,8 +3159,9 @@ CREATE INDEX oos_mv_core       ON public.oos_detail_mv (core_item);
 CREATE INDEX oos_mv_order      ON public.oos_detail_mv (type_store, store_name, sku);
 GRANT SELECT ON public.oos_detail_mv TO anon, authenticated;
 
--- 5) _oos_detail: เพิ่ม output ranking, core_item
-CREATE OR REPLACE FUNCTION public._oos_detail(
+-- 5) _oos_detail: เพิ่ม output ranking, core_item (DROP ก่อน เพราะเปลี่ยน return type)
+DROP FUNCTION IF EXISTS public._oos_detail(text[],text[],text[],text[],text[],text[]);
+CREATE FUNCTION public._oos_detail(
   p_spc text[] DEFAULT NULL, p_vendors text[] DEFAULT NULL, p_divisions text[] DEFAULT NULL,
   p_departments text[] DEFAULT NULL, p_type_stores text[] DEFAULT NULL, p_stores text[] DEFAULT NULL
 )
