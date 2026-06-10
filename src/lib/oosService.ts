@@ -166,6 +166,22 @@ export async function getOOSFilterOptions(): Promise<OOSFilterOptions> {
   return data as OOSFilterOptions;
 }
 
+// ===== เทียบ Report ราย store หลาย week =====
+export interface OOSStoreSummaryRow {
+  week_label: string; snapshot_date: string; type_store: string; store_name: string;
+  have: number; oos: number; range_cnt: number;
+}
+export interface OOSTypeTotalRow {
+  week_label: string; type_store: string; have: number; oos: number; range_cnt: number;
+}
+export async function getOOSStoreSummary(
+  weeks: string[]
+): Promise<{ stores: OOSStoreSummaryRow[]; totals: OOSTypeTotalRow[] }> {
+  const { data, error } = await (supabase as any).rpc("get_oos_store_summary", { p_weeks: weeks });
+  if (error) throw error;
+  return (data || { stores: [], totals: [] }) as { stores: OOSStoreSummaryRow[]; totals: OOSTypeTotalRow[] };
+}
+
 // ===== Trend (เทียบ %OOS ระหว่าง week) =====
 export async function getOOSTrend(): Promise<OOSTrendRow[]> {
   const { data, error } = await (supabase as any).rpc("get_oos_trend");

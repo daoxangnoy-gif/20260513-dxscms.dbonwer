@@ -19,7 +19,8 @@ import {
   OOSRow, OOSFilters, OOSSummary, OOSSnapshotMeta, OOSFilterOptions, OOSTrendRow,
   getOOSDetailPreview, getOOSDetailPage, saveOOSSnapshot, getOOSFilterOptions, listOOSSnapshots,
   loadOOSSnapshotRows, computeOOSSummary, getWeekLabel, getISOWeek, getOOSTrend, deleteOOSSnapshot,
-  refreshOOSMv, getOOSMvStatus, importOOSSnapshot,
+  refreshOOSMv, getOOSMvStatus, importOOSSnapshot, getOOSStoreSummary,
+  OOSStoreSummaryRow, OOSTypeTotalRow,
 } from "@/lib/oosService";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -138,6 +139,12 @@ export default function ReportOOSPage() {
   const [mvAt, setMvAt] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
+  // เทียบหลาย week (cross-tab ใน Report tab)
+  const [compareWeeks, setCompareWeeks] = useState<string[] | null>(null);
+  const [compareStores, setCompareStores] = useState<OOSStoreSummaryRow[]>([]);
+  const [compareTotals, setCompareTotals] = useState<OOSTypeTotalRow[]>([]);
+  const [comparing, setComparing] = useState(false);
+
   // trend
   const [trend, setTrend] = useState<OOSTrendRow[]>([]);
   const [trendLoading, setTrendLoading] = useState(false);
@@ -216,6 +223,7 @@ export default function ReportOOSPage() {
       });
       return;
     }
+    clearCompare();
     setGetting(true);
     setSummary(null);
     setLastLoadInfo("");
@@ -291,6 +299,7 @@ export default function ReportOOSPage() {
   };
 
   const handleSelectSnap = async (val: string) => {
+    clearCompare();
     setSelectedSnap(val);
     if (val === LIVE) {
       setRows([]); setSummary(null); setPage(0);
@@ -341,6 +350,51 @@ export default function ReportOOSPage() {
       toast({ title: "ลบไม่สำเร็จ", description: e.message, variant: "destructive" });
     }
   };
+
+  const clearCompare = () => { setCompareWeeks(null); setCompareStores([]); setCompareTotals([]); };
+
+  const handleCompareWeeks = async () => {
+    // เอา week จาก snapshot ที่ติ๊ก เรียงตามวันที่
+    const picked = snapshots.filter((s) => snapChecked.has(s.id))
+      .sort((a, b) => a.snapshot_date.localeCompare(b.snapshot_date));
+    const weeks = [...new Set(picked.map((s) => s.week_label))];
+    if (weeks.length < 1) { toast({ title: "เลือก week ที่จะเทียบก่อน (ติ๊ก checkbox ใน dropdown)" }); return; }
+    setComparing(true);
+    startTimer(`กำลังเทียบ ${weeks.length} week...`);
+    try {
+      const res = await getOOSStoreSummary(weeks);
+      setCompareWeeks(weeks);
+      setCompareStores(res.stores);
+      setCompareTotals(res.totals);
+      setActiveTab("report");
+      setLastLoadInfo(`เทียบ ${weeks.length} week: ${weeks.join(", ")}`);
+    } catch (e: any) {
+      toast({ title: "เทียบไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      stopTimer();
+      setComparing(false);
+    }
+  };
+
+  // โครงสร้างสำหรับ render cross-tab เทียบ week
+  const compareView = useMemo(() => {
+    if (!compareWeeks) return null;
+    const sKey = (w: string, t: string, st: string) => `${w}|${t}|${st}`;
+    const tKey = (w: string, t: string) => `${w}|${t}`;
+    const sMap = new Map<string, OOSStoreSummaryRow>();
+    for (const r of compareStores) sMap.set(sKey(r.week_label, r.type_store, r.store_name), r);
+    const tMap = new Map<string, OOSTypeTotalRow>();
+    for (const r of compareTotals) tMap.set(tKey(r.week_label, r.type_store), r);
+    // รายการ (type_store, store) ไม่ซ้ำ เรียง
+    const seen = new Set<string>();
+    const rowsList: { type_store: string; store_name: string }[] = [];
+    for (const r of [...compareStores].sort((a, b) => a.type_store.localeCompare(b.type_store) || a.store_name.localeCompare(b.store_name))) {
+      const k = `${r.type_store}|${r.store_name}`;
+      if (!seen.has(k)) { seen.add(k); rowsList.push({ type_store: r.type_store, store_name: r.store_name }); }
+    }
+    const types = [...new Set(rowsList.map((r) => r.type_store))];
+    return { sMap, tMap, rowsList, types, sKey, tKey };
+  }, [compareWeeks, compareStores, compareTotals]);
 
   // ===== นำเข้า Excel → Save เป็น snapshot (backfill week ย้อนหลัง) =====
   const handleImportFile = async (file: File) => {
@@ -635,6 +689,14 @@ export default function ReportOOSPage() {
           >
             <Trash2 className="w-3.5 h-3.5 mr-1" /> ลบที่เลือก{snapChecked.size > 0 ? ` (${snapChecked.size})` : ""}
           </Button>
+          <Button
+            size="sm" variant="outline" onClick={handleCompareWeeks}
+            disabled={snapChecked.size === 0 || comparing}
+            className="text-xs h-8 px-2 disabled:opacity-40" title="เทียบ Report ของ week ที่ติ๊กเลือก (รายสาขา ข้ามสัปดาห์)"
+          >
+            {comparing ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <BarChart3 className="w-3.5 h-3.5 mr-1" />}
+            เทียบ{snapChecked.size > 0 ? ` (${snapChecked.size})` : ""}
+          </Button>
           <input
             ref={importFileRef} type="file" accept=".xlsx,.xls" className="hidden"
             onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportFile(f); }}
@@ -689,9 +751,9 @@ export default function ReportOOSPage() {
       </div>
 
       {/* แถบสถานะดึงข้อมูล + ตัวนับวินาที real-time */}
-      {(getting || loadingMore || saving || refreshing || importing || lastLoadInfo) && (
-        <div className={`flex items-center gap-2 px-3 py-1.5 text-xs border-b ${getting || loadingMore || saving || refreshing || importing ? "bg-primary/5 text-primary" : "bg-green-50 text-green-700"}`}>
-          {getting || loadingMore || saving || refreshing || importing ? (
+      {(getting || loadingMore || saving || refreshing || importing || comparing || lastLoadInfo) && (
+        <div className={`flex items-center gap-2 px-3 py-1.5 text-xs border-b ${getting || loadingMore || saving || refreshing || importing || comparing ? "bg-primary/5 text-primary" : "bg-green-50 text-green-700"}`}>
+          {getting || loadingMore || saving || refreshing || importing || comparing ? (
             <>
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
               <span>{loadStatus}</span>
@@ -814,10 +876,84 @@ export default function ReportOOSPage() {
 
         {/* ===== REPORT TAB ===== */}
         <TabsContent value="report" className="flex-1 overflow-auto p-3 mt-0">
-          {!summary ? (
+          {compareView && compareWeeks ? (
+            <>
+              <div className="flex items-center justify-between mb-2 gap-2">
+                <span className="text-sm font-medium">เทียบ {compareWeeks.length} week: {compareWeeks.join(" · ")}</span>
+                <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={clearCompare}>
+                  <X className="w-3.5 h-3.5 mr-1" /> ปิดการเทียบ
+                </Button>
+              </div>
+              <div className="overflow-auto border rounded">
+                <table className="text-[10px] border-collapse whitespace-nowrap">
+                  <thead className="bg-muted/40">
+                    <tr>
+                      <th rowSpan={2} className="sticky left-0 z-10 bg-muted px-2 py-1 text-left border-r border-b">Type store</th>
+                      <th rowSpan={2} className="px-2 py-1 text-left border-r border-b">Store Name</th>
+                      {compareWeeks.map((w) => (
+                        <th key={w} colSpan={4} className="px-2 py-1 text-center border-l border-r border-b font-semibold">{w}</th>
+                      ))}
+                    </tr>
+                    <tr>
+                      {compareWeeks.map((w) => (
+                        <Fragment key={w}>
+                          <th className="px-1.5 py-1 text-right border-l border-b font-medium">Have</th>
+                          <th className="px-1.5 py-1 text-right border-b font-medium">OOS</th>
+                          <th className="px-1.5 py-1 text-right border-b font-medium">Range</th>
+                          <th className="px-1.5 py-1 text-right border-r border-b font-medium">%OOS</th>
+                        </Fragment>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {compareView.rowsList.map((row, i) => {
+                      const prev = compareView.rowsList[i - 1];
+                      const next = compareView.rowsList[i + 1];
+                      const firstOfType = !prev || prev.type_store !== row.type_store;
+                      const lastOfType = !next || next.type_store !== row.type_store;
+                      const cell = (have: number | null, oos: number | null, rng: number | null) => {
+                        const p = rng && rng > 0 ? (oos ?? 0) / rng : null;
+                        return (
+                          <>
+                            <td className="px-1.5 py-0.5 text-right tabular-nums border-l">{have == null ? "-" : have.toLocaleString()}</td>
+                            <td className="px-1.5 py-0.5 text-right tabular-nums">{oos == null ? "-" : oos.toLocaleString()}</td>
+                            <td className="px-1.5 py-0.5 text-right tabular-nums">{rng == null ? "-" : rng.toLocaleString()}</td>
+                            <td className={`px-1.5 py-0.5 text-right tabular-nums border-r ${p != null ? pctClass(p) : ""}`}>{p != null ? pct(p) : "-"}</td>
+                          </>
+                        );
+                      };
+                      return (
+                        <Fragment key={row.type_store + row.store_name}>
+                          <tr className="border-b hover:bg-accent/30">
+                            <td className="sticky left-0 z-10 bg-background px-2 py-0.5 border-r">{firstOfType ? row.type_store : ""}</td>
+                            <td className="px-2 py-0.5 border-r">{row.store_name.replace(/^\d+-/, "")}</td>
+                            {compareWeeks.map((w) => {
+                              const c = compareView.sMap.get(compareView.sKey(w, row.type_store, row.store_name));
+                              return <Fragment key={w}>{cell(c?.have ?? null, c?.oos ?? null, c?.range_cnt ?? null)}</Fragment>;
+                            })}
+                          </tr>
+                          {lastOfType && (
+                            <tr className="bg-muted font-semibold border-b">
+                              <td className="sticky left-0 z-10 bg-muted px-2 py-0.5 border-r">{row.type_store}</td>
+                              <td className="px-2 py-0.5 border-r">Total (Distinct SKU)</td>
+                              {compareWeeks.map((w) => {
+                                const t = compareView.tMap.get(compareView.tKey(w, row.type_store));
+                                return <Fragment key={w}>{cell(t?.have ?? null, t?.oos ?? null, t?.range_cnt ?? null)}</Fragment>;
+                              })}
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-[10px] text-muted-foreground mt-2">Have/OOS/Range ราย store = นับตรง · Total = Distinct SKU (OOS = ขาดทุกสาขา)</p>
+            </>
+          ) : !summary ? (
             <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
               <BarChart3 className="w-12 h-12 mb-3 opacity-30" />
-              <p className="text-sm">กด "Get" แล้วกด "Cal" เพื่อสร้างรายงาน</p>
+              <p className="text-sm">กด "Get" แล้วกด "Cal" เพื่อสร้างรายงาน · หรือติ๊กหลาย week ใน dropdown แล้วกด "เทียบ"</p>
             </div>
           ) : (
             <>
