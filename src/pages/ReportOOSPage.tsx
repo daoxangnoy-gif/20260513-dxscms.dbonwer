@@ -20,7 +20,7 @@ import {
   getOOSDetailPreview, getOOSDetailPage, saveOOSSnapshot, getOOSFilterOptions, listOOSSnapshots,
   loadOOSSnapshotRows, computeOOSSummary, getWeekLabel, getISOWeek, getOOSTrend, deleteOOSSnapshot,
   refreshOOSMv, getOOSMvStatus, importOOSSnapshot, getOOSStoreSummary,
-  OOSStoreSummaryRow, OOSTypeTotalRow,
+  OOSStoreSummaryRow, OOSTypeTotalRow, computeDCCoverage,
 } from "@/lib/oosService";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -62,6 +62,12 @@ function pctClass(n: number) {
   if (n > 0.4) return "text-destructive font-semibold";
   if (n >= 0.2) return "text-amber-600 font-medium";
   return "text-green-600";
+}
+// % DC Have stock: ยิ่งสูง = ดี (เติมจาก DC ได้) → เขียว
+function pctHaveClass(n: number) {
+  if (n >= 0.6) return "text-green-600 font-medium";
+  if (n >= 0.4) return "text-amber-600";
+  return "text-destructive font-medium";
 }
 
 export default function ReportOOSPage() {
@@ -396,6 +402,9 @@ export default function ReportOOSPage() {
     const types = [...new Set(rowsList.map((r) => r.type_store))];
     return { sMap, tMap, rowsList, types, sKey, tKey };
   }, [compareWeeks, compareStores, compareTotals]);
+
+  // DC Coverage (ในสินค้า Store OOS — DC เติมได้ไหม) จาก rows ที่โหลด
+  const dcCoverage = useMemo(() => (rows.length ? computeDCCoverage(rows) : null), [rows]);
 
   // ===== นำเข้า Excel → Save เป็น snapshot (backfill week ย้อนหลัง) =====
   const handleImportFile = async (file: File) => {
@@ -1026,6 +1035,63 @@ export default function ReportOOSPage() {
                   </TableBody>
                 </Table>
               </div>
+
+              {/* ===== DC Coverage (OOS เติมจาก DC ได้ไหม) ===== */}
+              {dcCoverage && (
+                <div className="mt-6">
+                  <div className="text-sm font-semibold mb-0.5">
+                    DC Coverage — สินค้า Store OOS เติมจาก DC ได้ไหม <span className="text-muted-foreground font-normal">({weekLabel})</span>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground mb-2">
+                    DC Have stock = สาขาขาดแต่ DC มีของ (เติมได้) · DC No Stock = ขาดทั้งสาขาและ DC (ต้องสั่งซื้อ) · % ยิ่งสูงยิ่งดี
+                  </p>
+                  <div className="overflow-auto border rounded">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="text-xs">Type store</TableHead>
+                          <TableHead className="text-xs">Store Name</TableHead>
+                          <TableHead className="text-xs text-right">DC Have stock</TableHead>
+                          <TableHead className="text-xs text-right">DC No Stock</TableHead>
+                          <TableHead className="text-xs text-right">Total OOS</TableHead>
+                          <TableHead className="text-xs text-right">% DC Have stock</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {dcCoverage.stores.map((s, idx) => {
+                          const prev = dcCoverage.stores[idx - 1];
+                          const next = dcCoverage.stores[idx + 1];
+                          const firstOfType = !prev || prev.type_store !== s.type_store;
+                          const total = (!next || next.type_store !== s.type_store)
+                            ? dcCoverage.totals.find((t) => t.type_store === s.type_store) : null;
+                          return (
+                            <Fragment key={s.type_store + s.store_name}>
+                              <TableRow>
+                                <TableCell className="text-xs">{firstOfType ? s.type_store : ""}</TableCell>
+                                <TableCell className="text-xs whitespace-nowrap">{s.store_name}</TableCell>
+                                <TableCell className="text-xs text-right tabular-nums">{s.dc_have.toLocaleString()}</TableCell>
+                                <TableCell className="text-xs text-right tabular-nums">{s.dc_no.toLocaleString()}</TableCell>
+                                <TableCell className="text-xs text-right tabular-nums">{s.total_oos.toLocaleString()}</TableCell>
+                                <TableCell className={`text-xs text-right tabular-nums ${pctHaveClass(s.pct_have)}`}>{pct(s.pct_have)}</TableCell>
+                              </TableRow>
+                              {total && (
+                                <TableRow className="bg-muted font-semibold">
+                                  <TableCell className="text-xs">{s.type_store}</TableCell>
+                                  <TableCell className="text-xs">Total (Distinct SKU)</TableCell>
+                                  <TableCell className="text-xs text-right tabular-nums">{total.dc_have.toLocaleString()}</TableCell>
+                                  <TableCell className="text-xs text-right tabular-nums">{total.dc_no.toLocaleString()}</TableCell>
+                                  <TableCell className="text-xs text-right tabular-nums">{total.total_oos.toLocaleString()}</TableCell>
+                                  <TableCell className={`text-xs text-right tabular-nums ${pctHaveClass(total.pct_have)}`}>{pct(total.pct_have)}</TableCell>
+                                </TableRow>
+                              )}
+                            </Fragment>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </TabsContent>

@@ -166,6 +166,42 @@ export async function getOOSFilterOptions(): Promise<OOSFilterOptions> {
   return data as OOSFilterOptions;
 }
 
+// ===== DC Coverage: ในสินค้า Store OOS — DC มีของให้เติมได้ไหม =====
+export interface DCStoreRow {
+  type_store: string; store_name: string;
+  dc_have: number; dc_no: number; total_oos: number; pct_have: number;
+}
+export interface DCCoverage { stores: DCStoreRow[]; totals: DCStoreRow[]; }
+
+export function computeDCCoverage(rows: OOSRow[]): DCCoverage {
+  const storeMap = new Map<string, DCStoreRow>();
+  // ราย type: sku ที่ Store OOS (อย่างน้อย 1 สาขา) -> DC มีของไหม (remark_stock ต่อ sku เหมือนกันทุกสาขา เพราะ DC เดียว)
+  const typeOosSku = new Map<string, Map<string, boolean>>();
+  for (const r of rows) {
+    if (r.remark_oos !== "Store OOS") continue;
+    const ts = r.type_store || "(ไม่ระบุ)";
+    const dcHave = r.remark_stock === "DC Have stock";
+    const sKey = `${ts}|||${r.store_name}`;
+    let s = storeMap.get(sKey);
+    if (!s) { s = { type_store: ts, store_name: r.store_name, dc_have: 0, dc_no: 0, total_oos: 0, pct_have: 0 }; storeMap.set(sKey, s); }
+    s.total_oos++;
+    if (dcHave) s.dc_have++; else s.dc_no++;
+    let m = typeOosSku.get(ts);
+    if (!m) { m = new Map(); typeOosSku.set(ts, m); }
+    if (!m.has(r.sku)) m.set(r.sku, dcHave);
+  }
+  const stores = [...storeMap.values()]
+    .map((s) => ({ ...s, pct_have: s.total_oos > 0 ? s.dc_have / s.total_oos : 0 }))
+    .sort((a, b) => a.type_store.localeCompare(b.type_store) || a.store_name.localeCompare(b.store_name));
+  const totals: DCStoreRow[] = [...typeOosSku.entries()].map(([ts, m]) => {
+    let have = 0, no = 0;
+    for (const v of m.values()) { if (v) have++; else no++; }
+    const total = have + no;
+    return { type_store: ts, store_name: "", dc_have: have, dc_no: no, total_oos: total, pct_have: total > 0 ? have / total : 0 };
+  }).sort((a, b) => a.type_store.localeCompare(b.type_store));
+  return { stores, totals };
+}
+
 // ===== เทียบ Report ราย store หลาย week =====
 export interface OOSStoreSummaryRow {
   week_label: string; snapshot_date: string; type_store: string; store_name: string;
