@@ -173,6 +173,45 @@ export async function getOOSTrend(): Promise<OOSTrendRow[]> {
   return (data || []) as OOSTrendRow[];
 }
 
+// ===== Import snapshot จาก Excel (backfill week ย้อนหลัง) =====
+// สร้าง header + batch insert rows แบบ parallel (รันใน browser ที่ login แล้ว → ผ่าน RLS)
+export async function importOOSSnapshot(
+  weekLabel: string,
+  snapshotDate: string,
+  rows: OOSRow[],
+  onProgress?: (done: number, total: number) => void
+): Promise<number> {
+  // ทับ week เดิมถ้ามี (cascade ลบ rows)
+  await (supabase as any).from("oos_snapshots").delete().eq("week_label", weekLabel);
+
+  const { data: hdr, error: e1 } = await (supabase as any)
+    .from("oos_snapshots")
+    .insert({ week_label: weekLabel, snapshot_date: snapshotDate, total_rows: rows.length })
+    .select("id")
+    .single();
+  if (e1) throw e1;
+  const snapId = hdr.id as string;
+
+  const payload = rows.map((r) => ({ snapshot_id: snapId, ...r }));
+  const BATCH = 1000, CONCURRENCY = 6;
+  const starts: number[] = [];
+  for (let i = 0; i < payload.length; i += BATCH) starts.push(i);
+  let cursor = 0, done = 0;
+  const worker = async () => {
+    while (true) {
+      const idx = cursor++;
+      if (idx >= starts.length) break;
+      const slice = payload.slice(starts[idx], starts[idx] + BATCH);
+      const { error } = await (supabase as any).from("oos_snapshot_rows").insert(slice);
+      if (error) throw error;
+      done += slice.length;
+      onProgress?.(done, payload.length);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, starts.length) }, () => worker()));
+  return payload.length;
+}
+
 // ===== Snapshots list / load =====
 export async function listOOSSnapshots(): Promise<OOSSnapshotMeta[]> {
   const { data, error } = await (supabase as any)

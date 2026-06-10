@@ -12,15 +12,16 @@ import { MultiSelectFilter } from "@/components/MultiSelectFilter";
 import { useToast } from "@/hooks/use-toast";
 import {
   PackageX, Loader2, Download, Database, BarChart3, Save, Calculator, X, ChevronLeft, ChevronRight,
-  TrendingUp, ArrowUp, ArrowDown, Minus, RefreshCw, Trash2, ChevronDown,
+  TrendingUp, ArrowUp, ArrowDown, Minus, RefreshCw, Trash2, ChevronDown, Upload,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import {
   OOSRow, OOSFilters, OOSSummary, OOSSnapshotMeta, OOSFilterOptions, OOSTrendRow,
   getOOSDetailPreview, getOOSDetailPage, saveOOSSnapshot, getOOSFilterOptions, listOOSSnapshots,
   loadOOSSnapshotRows, computeOOSSummary, getWeekLabel, getOOSTrend, deleteOOSSnapshot,
-  refreshOOSMv, getOOSMvStatus,
+  refreshOOSMv, getOOSMvStatus, importOOSSnapshot,
 } from "@/lib/oosService";
+import { supabase } from "@/integrations/supabase/client";
 
 const GET_CHUNK = 50000; // ขนาด chunk ตอนโหลดชุดเต็ม (เลี่ยง payload ใหญ่)
 
@@ -130,6 +131,8 @@ export default function ReportOOSPage() {
   const [snapshots, setSnapshots] = useState<OOSSnapshotMeta[]>([]);
   const [selectedSnap, setSelectedSnap] = useState<string>(LIVE);
   const [snapChecked, setSnapChecked] = useState<Set<string>>(new Set());
+  const [importing, setImporting] = useState(false);
+  const importFileRef = useRef<HTMLInputElement>(null);
 
   // materialized view freshness
   const [mvAt, setMvAt] = useState<string | null>(null);
@@ -336,6 +339,84 @@ export default function ReportOOSPage() {
       toast({ title: `ลบ ${ids.length} snapshot แล้ว` });
     } catch (e: any) {
       toast({ title: "ลบไม่สำเร็จ", description: e.message, variant: "destructive" });
+    }
+  };
+
+  // ===== นำเข้า Excel → Save เป็น snapshot (backfill week ย้อนหลัง) =====
+  const handleImportFile = async (file: File) => {
+    const week = window.prompt("นำเข้าเป็น Week ไหน? (เช่น Week 23)", "Week 23")?.trim();
+    if (!week) return;
+    setImporting(true);
+    startTimer(`กำลังอ่านไฟล์ ${file.name}...`);
+    try {
+      const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const raw = XLSX.utils.sheet_to_json<any>(wb.Sheets[wb.SheetNames[0]], { raw: true, defval: "" });
+      if (raw.length === 0) throw new Error("ไฟล์ว่าง");
+      const h = Object.keys(raw[0]);
+      if (!h.includes("Range Store") || !h.includes("SKU") || !h.includes("Remark OOS"))
+        throw new Error("รูปแบบคอลัมน์ไม่ตรง (ต้องเป็นไฟล์ Export จาก Data tab)");
+
+      // map type_store + core_item/ranking
+      setLoadStatus("กำลังเตรียมข้อมูลอ้างอิง (store/core item)...");
+      const [stRes, ciRes] = await Promise.all([
+        (supabase as any).from("store_type").select("store_name,type_store").limit(5000),
+        (supabase as any).from("core_item").select("id18,ranking").limit(10000),
+      ]);
+      const typeMap = new Map<string, string>((stRes.data || []).map((s: any) => [s.store_name, s.type_store || ""]));
+      const ciMap = new Map<string, string | null>((ciRes.data || []).map((c: any) => [c.id18, c.ranking ?? null]));
+
+      const mapped: OOSRow[] = raw.map((r) => {
+        const store = String(r["Range Store"] ?? "");
+        const sku = String(r["SKU"] ?? "");
+        return {
+          division: String(r["Division"] ?? ""),
+          department: String(r["Department"] ?? ""),
+          store_name: store,
+          type_store: typeMap.get(store) || "",
+          id_match: String(r["Id Mactch"] ?? (store + sku)),
+          sku,
+          barcode: String(r["Barcode"] ?? ""),
+          name_la: String(r["Name (LA)"] ?? ""),
+          vendor: String(r["Vendor"] ?? ""),
+          teadterm: String(r["Teadterm"] ?? ""),
+          item_type: String(r["Type"] ?? ""),
+          buying: String(r["Buying"] ?? ""),
+          rank_sale: String(r["Rank"] ?? ""),
+          store_apply: Number(r["Store Apply"]) || 0,
+          stock_store: Number(r["Stock Store"]) || 0,
+          stock_dc: Number(r["Stock DC"]) || 0,
+          remark_stock: String(r["Remark Stock"] ?? ""),
+          remark_oos: String(r["Remark OOS"] ?? ""),
+          ranking: ciMap.has(sku) ? (ciMap.get(sku) ?? null) : null,
+          core_item: ciMap.has(sku) ? "Core Item" : "Normal Item",
+        };
+      });
+
+      // snapshot_date: ประมาณจากเลข week เทียบสัปดาห์ปัจจุบัน (เพื่อให้ Trend เรียงถูก)
+      const wkNum = parseInt(week.replace(/\D/g, ""), 10);
+      const curWk = getISOWeek(new Date());
+      const d = new Date();
+      if (!isNaN(wkNum)) d.setDate(d.getDate() - (curWk - wkNum) * 7);
+      const snapDate = d.toISOString().slice(0, 10);
+
+      if (snapshots.find((s) => s.week_label === week) &&
+          !window.confirm(`${week} มี snapshot อยู่แล้ว — นำเข้าทับของเดิมไหม?`)) {
+        setImporting(false); stopTimer(); return;
+      }
+
+      const n = await importOOSSnapshot(week, snapDate, mapped, (done, total) =>
+        setLoadStatus(`กำลังนำเข้า ${week}... ${done.toLocaleString()}/${total.toLocaleString()} แถว`)
+      );
+      setLastLoadInfo(`นำเข้า ${week} สำเร็จ · ${n.toLocaleString()} แถว`);
+      toast({ title: "นำเข้าสำเร็จ", description: `${week} · ${n.toLocaleString()} แถว` });
+      await refreshSnapshots();
+      setTrendLoaded(false);
+    } catch (e: any) {
+      toast({ title: "นำเข้าไม่สำเร็จ", description: e.message || String(e), variant: "destructive" });
+    } finally {
+      stopTimer();
+      setImporting(false);
+      if (importFileRef.current) importFileRef.current.value = "";
     }
   };
 
@@ -554,6 +635,14 @@ export default function ReportOOSPage() {
           >
             <Trash2 className="w-3.5 h-3.5 mr-1" /> ลบที่เลือก{snapChecked.size > 0 ? ` (${snapChecked.size})` : ""}
           </Button>
+          <input
+            ref={importFileRef} type="file" accept=".xlsx,.xls" className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImportFile(f); }}
+          />
+          <Button size="sm" variant="outline" onClick={() => importFileRef.current?.click()} disabled={importing} className="text-xs" title="นำเข้าไฟล์ Excel (รูปแบบ Data) แล้ว Save เป็น snapshot ของ Week ที่เลือก">
+            {importing ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Upload className="w-3.5 h-3.5 mr-1" />}
+            นำเข้า Excel
+          </Button>
           <Button size="sm" variant="outline" onClick={handleRefreshMv} disabled={refreshing || getting || loadingMore} className="text-xs" title="ประมวลผลข้อมูล OOS จาก stock ล่าสุด (ทำหลัง import)">
             {refreshing ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <RefreshCw className="w-3.5 h-3.5 mr-1" />}
             รีเฟรชข้อมูล
@@ -600,9 +689,9 @@ export default function ReportOOSPage() {
       </div>
 
       {/* แถบสถานะดึงข้อมูล + ตัวนับวินาที real-time */}
-      {(getting || loadingMore || saving || refreshing || lastLoadInfo) && (
-        <div className={`flex items-center gap-2 px-3 py-1.5 text-xs border-b ${getting || loadingMore || saving || refreshing ? "bg-primary/5 text-primary" : "bg-green-50 text-green-700"}`}>
-          {getting || loadingMore || saving || refreshing ? (
+      {(getting || loadingMore || saving || refreshing || importing || lastLoadInfo) && (
+        <div className={`flex items-center gap-2 px-3 py-1.5 text-xs border-b ${getting || loadingMore || saving || refreshing || importing ? "bg-primary/5 text-primary" : "bg-green-50 text-green-700"}`}>
+          {getting || loadingMore || saving || refreshing || importing ? (
             <>
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
               <span>{loadStatus}</span>
