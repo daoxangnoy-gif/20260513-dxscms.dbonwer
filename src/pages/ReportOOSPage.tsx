@@ -24,6 +24,28 @@ import {
 
 const GET_CHUNK = 50000; // ขนาด chunk ตอนโหลดชุดเต็ม (เลี่ยง payload ใหญ่)
 
+// คอลัมน์ Data tab (ลากปรับกว้างได้ + บรรทัดเดียว)
+type DataCol = { key: keyof OOSRow; label: string; w: number; align?: "right"; mono?: boolean };
+const DATA_COLUMNS: DataCol[] = [
+  { key: "division", label: "Division", w: 95 },
+  { key: "department", label: "Department", w: 130 },
+  { key: "store_name", label: "Range Store", w: 170 },
+  { key: "id_match", label: "Id Mactch", w: 190, mono: true },
+  { key: "sku", label: "SKU", w: 100, mono: true },
+  { key: "barcode", label: "Barcode", w: 125, mono: true },
+  { key: "name_la", label: "Name (LA)", w: 240 },
+  { key: "vendor", label: "Vendor", w: 200 },
+  { key: "teadterm", label: "Teadterm", w: 90 },
+  { key: "item_type", label: "Type", w: 80 },
+  { key: "buying", label: "Buying", w: 100 },
+  { key: "rank_sale", label: "Rank", w: 60 },
+  { key: "store_apply", label: "Store Apply", w: 95, align: "right" },
+  { key: "stock_store", label: "Stock Store", w: 95, align: "right" },
+  { key: "stock_dc", label: "Stock DC", w: 90, align: "right" },
+  { key: "remark_stock", label: "Remark Stock", w: 120 },
+  { key: "remark_oos", label: "Remark OOS", w: 120 },
+];
+
 const TREND_COLORS = ["#2563eb", "#dc2626", "#16a34a", "#d97706", "#7c3aed", "#0891b2", "#db2777"];
 
 const PAGE_SIZE = 50;
@@ -56,6 +78,27 @@ export default function ReportOOSPage() {
   // data
   const [rows, setRows] = useState<OOSRow[]>([]);
   const [summary, setSummary] = useState<OOSSummary | null>(null);
+
+  // ความกว้างคอลัมน์ Data tab (ลากปรับได้)
+  const [colW, setColW] = useState<Record<string, number>>(() =>
+    Object.fromEntries(DATA_COLUMNS.map((c) => [c.key, c.w]))
+  );
+  const startResize = (key: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = colW[key];
+    const onMove = (ev: MouseEvent) =>
+      setColW((w) => ({ ...w, [key]: Math.max(48, startW + (ev.clientX - startX)) }));
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    document.body.style.cursor = "col-resize";
+  };
+  const tableW = useMemo(() => DATA_COLUMNS.reduce((s, c) => s + colW[c.key], 0), [colW]);
 
   // ui state
   const [getting, setGetting] = useState(false);      // phase 1: ยังไม่มีแถวเลย
@@ -606,54 +649,54 @@ export default function ReportOOSPage() {
                 </span>
               </div>
               <div className="overflow-auto border rounded">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="text-[10px]">Division</TableHead>
-                      <TableHead className="text-[10px]">Department</TableHead>
-                      <TableHead className="text-[10px]">Range Store</TableHead>
-                      <TableHead className="text-[10px]">Id Mactch</TableHead>
-                      <TableHead className="text-[10px]">SKU</TableHead>
-                      <TableHead className="text-[10px]">Barcode</TableHead>
-                      <TableHead className="text-[10px]">Name (LA)</TableHead>
-                      <TableHead className="text-[10px]">Vendor</TableHead>
-                      <TableHead className="text-[10px]">Teadterm</TableHead>
-                      <TableHead className="text-[10px]">Type</TableHead>
-                      <TableHead className="text-[10px]">Buying</TableHead>
-                      <TableHead className="text-[10px]">Rank</TableHead>
-                      <TableHead className="text-[10px] text-right">Store Apply</TableHead>
-                      <TableHead className="text-[10px] text-right">Stock Store</TableHead>
-                      <TableHead className="text-[10px] text-right">Stock DC</TableHead>
-                      <TableHead className="text-[10px]">Remark Stock</TableHead>
-                      <TableHead className="text-[10px]">Remark OOS</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
+                <table className="text-xs border-collapse" style={{ tableLayout: "fixed", width: tableW }}>
+                  <colgroup>
+                    {DATA_COLUMNS.map((c) => <col key={c.key} style={{ width: colW[c.key] }} />)}
+                  </colgroup>
+                  <thead className="bg-muted/40">
+                    <tr>
+                      {DATA_COLUMNS.map((c) => (
+                        <th
+                          key={c.key}
+                          className={`relative text-[10px] font-medium px-2 py-1.5 border-b border-r select-none ${c.align === "right" ? "text-right" : "text-left"}`}
+                        >
+                          <span className="block truncate">{c.label}</span>
+                          {/* ขอบลากปรับความกว้าง */}
+                          <span
+                            onMouseDown={(e) => startResize(c.key as string, e)}
+                            className="absolute top-0 right-0 h-full w-1.5 cursor-col-resize hover:bg-primary/50"
+                            title="ลากเพื่อปรับความกว้าง"
+                          />
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
                     {pageRows.map((r, i) => (
-                      <TableRow key={r.id_match + i}>
-                        <TableCell className="text-[11px] py-1">{r.division}</TableCell>
-                        <TableCell className="text-[11px] py-1">{r.department}</TableCell>
-                        <TableCell className="text-[11px] py-1 whitespace-nowrap">{r.store_name}</TableCell>
-                        <TableCell className="text-[11px] py-1 font-mono">{r.id_match}</TableCell>
-                        <TableCell className="text-[11px] py-1 font-mono">{r.sku}</TableCell>
-                        <TableCell className="text-[11px] py-1 font-mono">{r.barcode}</TableCell>
-                        <TableCell className="text-[11px] py-1 max-w-[220px] truncate" title={r.name_la}>{r.name_la}</TableCell>
-                        <TableCell className="text-[11px] py-1 max-w-[180px] truncate" title={r.vendor}>{r.vendor}</TableCell>
-                        <TableCell className="text-[11px] py-1">{r.teadterm}</TableCell>
-                        <TableCell className="text-[11px] py-1">{r.item_type}</TableCell>
-                        <TableCell className="text-[11px] py-1">{r.buying}</TableCell>
-                        <TableCell className="text-[11px] py-1">{r.rank_sale}</TableCell>
-                        <TableCell className="text-[11px] py-1 text-right">{r.store_apply}</TableCell>
-                        <TableCell className="text-[11px] py-1 text-right tabular-nums">{Number(r.stock_store).toLocaleString()}</TableCell>
-                        <TableCell className="text-[11px] py-1 text-right tabular-nums">{Number(r.stock_dc).toLocaleString()}</TableCell>
-                        <TableCell className={`text-[11px] py-1 ${r.remark_stock === "DC No Stock" ? "text-muted-foreground" : ""}`}>{r.remark_stock}</TableCell>
-                        <TableCell className="text-[11px] py-1">
-                          <span className={r.remark_oos === "Store OOS" ? "text-destructive font-medium" : "text-green-600"}>{r.remark_oos}</span>
-                        </TableCell>
-                      </TableRow>
+                      <tr key={r.id_match + i} className="border-b hover:bg-accent/30">
+                        {DATA_COLUMNS.map((c) => {
+                          const raw = r[c.key];
+                          const display =
+                            c.key === "stock_store" || c.key === "stock_dc"
+                              ? Number(raw).toLocaleString()
+                              : String(raw ?? "");
+                          const base = `px-2 py-1 whitespace-nowrap overflow-hidden text-ellipsis border-r ${c.align === "right" ? "text-right tabular-nums" : ""} ${c.mono ? "font-mono" : ""}`;
+                          if (c.key === "remark_oos") {
+                            return (
+                              <td key={c.key} className={base} title={display}>
+                                <span className={r.remark_oos === "Store OOS" ? "text-destructive font-medium" : "text-green-600"}>{display}</span>
+                              </td>
+                            );
+                          }
+                          const extra = c.key === "remark_stock" && r.remark_stock === "DC No Stock" ? " text-muted-foreground" : "";
+                          return (
+                            <td key={c.key} className={base + extra} title={display}>{display}</td>
+                          );
+                        })}
+                      </tr>
                     ))}
-                  </TableBody>
-                </Table>
+                  </tbody>
+                </table>
               </div>
               {/* pagination */}
               <div className="flex items-center justify-center gap-2 mt-3">
