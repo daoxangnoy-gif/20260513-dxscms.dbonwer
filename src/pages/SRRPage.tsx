@@ -42,6 +42,7 @@ import { SrrFiltersPopover } from "@/components/SrrFiltersPopover";
 import { TableChipSearch, applyChipFilter, type SearchChip } from "@/components/TableChipSearch";
 import { getLatestRangeStorePackBox } from "@/lib/rangeStorePackBox";
 import { DocsPopupDialog, formatDocNo, type DocRow } from "@/components/DocsPopupDialog";
+import { FinalDocsPopupDialog, type FinalDocRow } from "@/components/FinalDocsPopupDialog";
 import { buildCost0Doc, appendCost0Docs, COST0_KEY_DC, type Cost0Doc } from "@/lib/cost0Docs";
 import { listPublicViews, savePublicView, deletePublicView, type SrrPublicView } from "@/lib/srrPublicViews";
 import type { SRRRow, VendorInfo, VendorDocument, SavedPO, ColumnView } from "@/lib/srrTypes";
@@ -633,6 +634,63 @@ function SRRDCItemPage() {
       toast({ title: "เปิด Doc Final ไม่สำเร็จ", description: err?.message || "Unknown error", variant: "destructive" });
     } finally {
       setFinalDocsLoading(false);
+    }
+  };
+
+  // เปิด Doc Final หลายฉบับพร้อมกัน (ตามที่ติ๊ก) — ดึง data ทุกฉบับแล้ว merge เป็นตารางเดียว
+  const openFinalDocs = async (ds: any[]) => {
+    if (ds.length === 0) return;
+    if (ds.length === 1) { await openFinalDoc(ds[0]); return; }
+    setFinalDocsLoading(true);
+    try {
+      const ids = ds.map((d) => d.id);
+      const { data, error } = await (supabase as any)
+        .from("srr_final_documents")
+        .select("id, data")
+        .in("id", ids);
+      if (error || !data) {
+        toast({ title: "เปิด Doc Final ไม่สำเร็จ", description: error?.message || "ไม่พบข้อมูล", variant: "destructive" });
+        return;
+      }
+      const seen = new Set<string>();
+      const merged: SRRRow[] = [];
+      for (const rec of data as any[]) {
+        for (const r of patchSnapshotRows((rec.data || []) as SRRRow[])) {
+          if (r?.id && seen.has(r.id)) continue;
+          if (r?.id) seen.add(r.id);
+          merged.push(r);
+        }
+      }
+      setTab2Mode((ds[0].source || "filter") as "filter" | "vendor" | "import");
+      setSelectedDocSpc([...new Set(ds.map((d) => d.spc_name).filter(Boolean))]);
+      setVendorFilter([...new Set(ds.map((d) => d.vendor_code).filter(Boolean))]);
+      setOrderDayFilter([]); setItemTypeFilter(["Basic"]); setBuyingStatusFilter([]); setPoGroupFilter([]); setShowOnlyTTMinGt0(true);
+      setShowData(merged);
+      setPage(0);
+      setSelectedRows(new Set());
+      setActiveCell(null);
+      setActiveTab("show-edit");
+      setFinalDocsDialogOpen(false);
+    } catch (err: any) {
+      toast({ title: "เปิด Doc Final ไม่สำเร็จ", description: err?.message || "Unknown error", variant: "destructive" });
+    } finally {
+      setFinalDocsLoading(false);
+    }
+  };
+
+  // ลบ Doc Final ตาม ids
+  const deleteFinalDocs = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    try {
+      const { error } = await (supabase as any).from("srr_final_documents").delete().in("id", ids);
+      if (error) {
+        toast({ title: "ลบ Doc Final ไม่สำเร็จ", description: error.message, variant: "destructive" });
+        return;
+      }
+      setFinalDocs((prev) => prev.filter((d) => !ids.includes(d.id)));
+      toast({ title: `ลบ Doc Final แล้ว ${ids.length} ฉบับ` });
+    } catch (err: any) {
+      toast({ title: "ลบ Doc Final ไม่สำเร็จ", description: err?.message || "Unknown error", variant: "destructive" });
     }
   };
 
@@ -4044,91 +4102,30 @@ function SRRDCItemPage() {
       </Dialog>
 
       {/* ===== Doc Final Dialog ===== */}
-      <Dialog open={finalDocsDialogOpen} onOpenChange={setFinalDocsDialogOpen}>
-        <DialogContent className="max-w-4xl max-h-[80vh] flex flex-col">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-amber-500" />
-              Doc Final — เอกสารที่ผ่านการ Review แล้ว
-            </DialogTitle>
-            <DialogDescription className="text-xs">บันทึกอัตโนมัติทุกครั้งที่กด Save · เก็บ 60 วัน</DialogDescription>
-          </DialogHeader>
-
-          {finalDocsLoading ? (
-            <div className="flex items-center justify-center py-10 text-muted-foreground gap-2">
-              <Loader2 className="w-4 h-4 animate-spin" /> กำลังโหลด...
-            </div>
-          ) : finalDocs.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-10 text-muted-foreground gap-2">
-              <CheckCircle2 className="w-10 h-10 opacity-20" />
-              <p className="text-sm">ยังไม่มี Doc Final · กด Save เพื่อบันทึกครั้งแรก</p>
-            </div>
-          ) : (
-            <div className="overflow-auto flex-1">
-              <table className="w-full text-xs border-collapse">
-                <thead className="bg-muted/50 sticky top-0">
-                  <tr>
-                    <th className="text-left p-2 border-b font-medium">วันที่ Save</th>
-                    <th className="text-left p-2 border-b font-medium">Vendor</th>
-                    <th className="text-left p-2 border-b font-medium">SPC</th>
-                    <th className="text-right p-2 border-b font-medium">Items</th>
-                    <th className="text-right p-2 border-b font-medium">Suggest</th>
-                    <th className="text-left p-2 border-b font-medium">คอลัมน์ที่แก้ไข</th>
-                    <th className="text-left p-2 border-b font-medium">Source</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {finalDocs.map((d: any) => (
-                    <tr key={d.id} onClick={() => openFinalDoc(d)} title="คลิกเพื่อเปิดมาแสดง" className="border-b hover:bg-muted/30 transition-colors cursor-pointer">
-                      <td className="p-2 text-muted-foreground whitespace-nowrap">
-                        <div className="flex items-center gap-1">
-                          <Clock className="w-3 h-3 opacity-50" />
-                          {new Date(d.saved_at).toLocaleString("th-TH", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" })}
-                        </div>
-                      </td>
-                      <td className="p-2 font-mono">
-                        <div className="font-semibold">{d.vendor_code}</div>
-                        <div className="text-muted-foreground truncate max-w-[180px]">{d.vendor_display}</div>
-                      </td>
-                      <td className="p-2">{d.spc_name || "—"}</td>
-                      <td className="p-2 text-right tabular-nums">{(d.item_count || 0).toLocaleString()}</td>
-                      <td className="p-2 text-right tabular-nums text-green-600 font-semibold">{(d.suggest_count || 0).toLocaleString()}</td>
-                      <td className="p-2 max-w-[200px]">
-                        {(d.edited_columns || []).length === 0 ? (
-                          <span className="text-muted-foreground">—</span>
-                        ) : (
-                          <div className="flex flex-wrap gap-1">
-                            {(d.edited_columns as string[]).slice(0, 4).map((c: string) => (
-                              <span key={c} className="bg-amber-100 text-amber-700 rounded px-1 py-0.5 text-[10px]">{c}</span>
-                            ))}
-                            {(d.edited_columns as string[]).length > 4 && (
-                              <span className="text-muted-foreground text-[10px]">+{(d.edited_columns as string[]).length - 4}</span>
-                            )}
-                          </div>
-                        )}
-                      </td>
-                      <td className="p-2">
-                        <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                          d.source === "filter" ? "bg-blue-100 text-blue-700" :
-                          d.source === "vendor" ? "bg-purple-100 text-purple-700" :
-                          "bg-gray-100 text-gray-700"
-                        }`}>{d.source || "filter"}</span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          <DialogFooter className="pt-2">
-            <Button variant="outline" size="sm" onClick={() => { loadFinalDocs(); }}>
-              <RefreshCw className="w-3.5 h-3.5 mr-1" /> Refresh
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => setFinalDocsDialogOpen(false)}>ปิด</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <FinalDocsPopupDialog
+        open={finalDocsDialogOpen}
+        onOpenChange={setFinalDocsDialogOpen}
+        variant="dc"
+        loading={finalDocsLoading}
+        canDelete={canDeleteDoc}
+        docs={finalDocs.map<FinalDocRow>((d: any) => ({
+          id: d.id,
+          saved_at: d.saved_at,
+          date_key: d.date_key,
+          spc_name: d.spc_name,
+          vendor_code: d.vendor_code,
+          vendor_display: d.vendor_display,
+          item_count: d.item_count,
+          suggest_count: d.suggest_count,
+          edited_columns: d.edited_columns || [],
+          source: (d.source || "filter") as "filter" | "vendor" | "import",
+          saved_by: d.saved_by,
+        }))}
+        onOpenDoc={openFinalDoc}
+        onOpenDocs={openFinalDocs}
+        onDeleteDocs={deleteFinalDocs}
+        onRefresh={loadFinalDocs}
+      />
     </div>
   );
 }

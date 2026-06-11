@@ -69,7 +69,7 @@ const fmtMoney = (n: number) =>
   (n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 // Dropdown filter for a column — search + multi-select values
-function ColumnFilterDropdown({
+export function ColumnFilterDropdown({
   values,
   selected,
   onChange,

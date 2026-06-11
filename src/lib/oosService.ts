@@ -210,12 +210,18 @@ export interface OOSStoreSummaryRow {
 export interface OOSTypeTotalRow {
   week_label: string; type_store: string; have: number; oos: number; range_cnt: number;
 }
-export async function getOOSStoreSummary(
-  weeks: string[]
-): Promise<{ stores: OOSStoreSummaryRow[]; totals: OOSTypeTotalRow[] }> {
+export interface DCSummaryRow {
+  week_label: string; type_store: string; store_name?: string;
+  dc_have: number; dc_no: number; total_oos: number;
+}
+export interface OOSCompareResult {
+  stores: OOSStoreSummaryRow[]; totals: OOSTypeTotalRow[];
+  dc_stores: DCSummaryRow[]; dc_totals: DCSummaryRow[];
+}
+export async function getOOSStoreSummary(weeks: string[]): Promise<OOSCompareResult> {
   const { data, error } = await (supabase as any).rpc("get_oos_store_summary", { p_weeks: weeks });
   if (error) throw error;
-  return (data || { stores: [], totals: [] }) as { stores: OOSStoreSummaryRow[]; totals: OOSTypeTotalRow[] };
+  return (data || { stores: [], totals: [], dc_stores: [], dc_totals: [] }) as OOSCompareResult;
 }
 
 // ===== Trend (เทียบ %OOS ระหว่าง week) =====
