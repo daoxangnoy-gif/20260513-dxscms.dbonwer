@@ -69,6 +69,13 @@ function pctHaveClass(n: number) {
   if (n >= 0.4) return "text-amber-600";
   return "text-destructive font-medium";
 }
+// ไฮไลต์เทียบ %OOS กับ week ก่อนหน้า: ลดลง=เขียวอ่อน, เพิ่ม=ส้มอ่อน, เท่าเดิม/ไม่มีก่อนหน้า=ไม่ไฮไลต์
+function cmpBg(cur: number | null, prev: number | null) {
+  if (cur == null || prev == null) return "";
+  if (cur < prev - 1e-6) return "bg-green-100";
+  if (cur > prev + 1e-6) return "bg-orange-100";
+  return "";
+}
 
 export default function ReportOOSPage() {
   const { toast } = useToast();
@@ -950,14 +957,15 @@ export default function ReportOOSPage() {
                       const next = compareView.rowsList[i + 1];
                       const firstOfType = !prev || prev.type_store !== row.type_store;
                       const lastOfType = !next || next.type_store !== row.type_store;
-                      const cell = (have: number | null, oos: number | null, rng: number | null) => {
-                        const p = rng && rng > 0 ? (oos ?? 0) / rng : null;
+                      const pctOf = (oos?: number | null, rng?: number | null) => (rng && rng > 0 ? (oos ?? 0) / rng : null);
+                      const cell = (have: number | null, oos: number | null, rng: number | null, prevPct: number | null) => {
+                        const p = pctOf(oos, rng);
                         return (
                           <>
                             <td className="px-1.5 py-0.5 text-right tabular-nums border-l">{have == null ? "-" : have.toLocaleString()}</td>
                             <td className="px-1.5 py-0.5 text-right tabular-nums">{oos == null ? "-" : oos.toLocaleString()}</td>
                             <td className="px-1.5 py-0.5 text-right tabular-nums">{rng == null ? "-" : rng.toLocaleString()}</td>
-                            <td className={`px-1.5 py-0.5 text-right tabular-nums border-r ${p != null ? pctClass(p) : ""}`}>{p != null ? pct(p) : "-"}</td>
+                            <td className={`px-1.5 py-0.5 text-right tabular-nums border-r ${cmpBg(p, prevPct)} ${p != null ? pctClass(p) : ""}`}>{p != null ? pct(p) : "-"}</td>
                           </>
                         );
                       };
@@ -966,18 +974,20 @@ export default function ReportOOSPage() {
                           <tr className="border-b hover:bg-accent/30">
                             <td className="sticky left-0 z-10 bg-background px-2 py-0.5 border-r">{firstOfType ? row.type_store : ""}</td>
                             <td className="px-2 py-0.5 border-r">{row.store_name.replace(/^\d+-/, "")}</td>
-                            {compareWeeks.map((w) => {
+                            {compareWeeks.map((w, wi) => {
                               const c = compareView.sMap.get(compareView.sKey(w, row.type_store, row.store_name));
-                              return <Fragment key={w}>{cell(c?.have ?? null, c?.oos ?? null, c?.range_cnt ?? null)}</Fragment>;
+                              const pc = wi > 0 ? compareView.sMap.get(compareView.sKey(compareWeeks[wi - 1], row.type_store, row.store_name)) : undefined;
+                              return <Fragment key={w}>{cell(c?.have ?? null, c?.oos ?? null, c?.range_cnt ?? null, pctOf(pc?.oos, pc?.range_cnt))}</Fragment>;
                             })}
                           </tr>
                           {lastOfType && (
                             <tr className="bg-muted font-semibold border-b">
                               <td className="sticky left-0 z-10 bg-muted px-2 py-0.5 border-r">{row.type_store}</td>
                               <td className="px-2 py-0.5 border-r">Total (Distinct SKU)</td>
-                              {compareWeeks.map((w) => {
+                              {compareWeeks.map((w, wi) => {
                                 const t = compareView.tMap.get(compareView.tKey(w, row.type_store));
-                                return <Fragment key={w}>{cell(t?.have ?? null, t?.oos ?? null, t?.range_cnt ?? null)}</Fragment>;
+                                const pt = wi > 0 ? compareView.tMap.get(compareView.tKey(compareWeeks[wi - 1], row.type_store)) : undefined;
+                                return <Fragment key={w}>{cell(t?.have ?? null, t?.oos ?? null, t?.range_cnt ?? null, pctOf(pt?.oos, pt?.range_cnt))}</Fragment>;
                               })}
                             </tr>
                           )}
