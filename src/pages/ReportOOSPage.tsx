@@ -319,7 +319,7 @@ export default function ReportOOSPage() {
     startTimer("กำลังโหลด snapshot...");
     const t0 = Date.now();
     try {
-      const data = await loadOOSSnapshotRows(val);
+      const data = await loadOOSSnapshotRows(val, (d, t) => setLoadStatus(`กำลังโหลด snapshot... ${d.toLocaleString()}/${t.toLocaleString()} แถว`));
       setRows(data);
       setSummary(computeOOSSummary(data));
       setPage(0);
@@ -599,8 +599,10 @@ export default function ReportOOSPage() {
         for (const w of compareWeeks) {
           const snap = snapshots.find((s) => s.week_label === w);
           if (!snap) continue;
-          setLoadStatus(`กำลังโหลด detail ${w}... (รวม ${all.length.toLocaleString()} แถว)`);
-          const rs = await loadOOSSnapshotRows(snap.id);
+          const accSoFar = all.length;
+          const rs = await loadOOSSnapshotRows(snap.id, (d, t) =>
+            setLoadStatus(`กำลังโหลด detail ${w}... ${d.toLocaleString()}/${t.toLocaleString()} (รวม ${(accSoFar + d).toLocaleString()})`)
+          );
           for (const r of rs) all.push(dataRowObj(r, w));
         }
         const wb = XLSX.utils.book_new();
