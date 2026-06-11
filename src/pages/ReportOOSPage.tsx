@@ -20,7 +20,7 @@ import {
   getOOSDetailPreview, getOOSDetailPage, saveOOSSnapshot, getOOSFilterOptions, listOOSSnapshots,
   loadOOSSnapshotRows, computeOOSSummary, getWeekLabel, getISOWeek, getOOSTrend, deleteOOSSnapshot,
   refreshOOSMv, getOOSMvStatus, importOOSSnapshot, getOOSStoreSummary,
-  OOSStoreSummaryRow, OOSTypeTotalRow, computeDCCoverage,
+  OOSStoreSummaryRow, OOSTypeTotalRow, DCSummaryRow, computeDCCoverage,
 } from "@/lib/oosService";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -149,6 +149,8 @@ export default function ReportOOSPage() {
   const [compareWeeks, setCompareWeeks] = useState<string[] | null>(null);
   const [compareStores, setCompareStores] = useState<OOSStoreSummaryRow[]>([]);
   const [compareTotals, setCompareTotals] = useState<OOSTypeTotalRow[]>([]);
+  const [compareDcStores, setCompareDcStores] = useState<DCSummaryRow[]>([]);
+  const [compareDcTotals, setCompareDcTotals] = useState<DCSummaryRow[]>([]);
   const [comparing, setComparing] = useState(false);
   const [exporting, setExporting] = useState(false);
 
@@ -358,7 +360,10 @@ export default function ReportOOSPage() {
     }
   };
 
-  const clearCompare = () => { setCompareWeeks(null); setCompareStores([]); setCompareTotals([]); };
+  const clearCompare = () => {
+    setCompareWeeks(null); setCompareStores([]); setCompareTotals([]);
+    setCompareDcStores([]); setCompareDcTotals([]);
+  };
 
   const handleCompareWeeks = async () => {
     // เอา week จาก snapshot ที่ติ๊ก เรียงตามวันที่
@@ -373,6 +378,8 @@ export default function ReportOOSPage() {
       setCompareWeeks(weeks);
       setCompareStores(res.stores);
       setCompareTotals(res.totals);
+      setCompareDcStores(res.dc_stores || []);
+      setCompareDcTotals(res.dc_totals || []);
       setActiveTab("report");
       setLastLoadInfo(`เทียบ ${weeks.length} week: ${weeks.join(", ")}`);
     } catch (e: any) {
@@ -400,8 +407,13 @@ export default function ReportOOSPage() {
       if (!seen.has(k)) { seen.add(k); rowsList.push({ type_store: r.type_store, store_name: r.store_name }); }
     }
     const types = [...new Set(rowsList.map((r) => r.type_store))];
-    return { sMap, tMap, rowsList, types, sKey, tKey };
-  }, [compareWeeks, compareStores, compareTotals]);
+    // DC Coverage maps
+    const dcSMap = new Map<string, DCSummaryRow>();
+    for (const r of compareDcStores) dcSMap.set(sKey(r.week_label, r.type_store, r.store_name || ""), r);
+    const dcTMap = new Map<string, DCSummaryRow>();
+    for (const r of compareDcTotals) dcTMap.set(tKey(r.week_label, r.type_store), r);
+    return { sMap, tMap, rowsList, types, sKey, tKey, dcSMap, dcTMap };
+  }, [compareWeeks, compareStores, compareTotals, compareDcStores, compareDcTotals]);
 
   // DC Coverage (ในสินค้า Store OOS — DC เติมได้ไหม) จาก rows ที่โหลด
   const dcCoverage = useMemo(() => (rows.length ? computeDCCoverage(rows) : null), [rows]);
@@ -974,6 +986,68 @@ export default function ReportOOSPage() {
                 </table>
               </div>
               <p className="text-[10px] text-muted-foreground mt-2">Have/OOS/Range ราย store = นับตรง · Total = Distinct SKU (OOS = ขาดทุกสาขา)</p>
+
+              {/* ===== DC Coverage By Weekly (cross-tab) ===== */}
+              <div className="text-sm font-medium mt-6 mb-1">DC Coverage By Weekly <span className="text-muted-foreground font-normal">(ในสินค้า Store OOS — DC เติมได้ไหม)</span></div>
+              <div className="overflow-auto border rounded">
+                <table className="text-[10px] border-collapse whitespace-nowrap">
+                  <thead className="bg-muted/40">
+                    <tr>
+                      <th rowSpan={2} className="sticky left-0 z-10 bg-muted px-2 py-1 text-left border-r border-b">Type store</th>
+                      <th rowSpan={2} className="px-2 py-1 text-left border-r border-b">Store Name</th>
+                      {compareWeeks.map((w) => (
+                        <th key={w} colSpan={4} className="px-2 py-1 text-center border-l border-r border-b font-semibold">{w}</th>
+                      ))}
+                    </tr>
+                    <tr>
+                      {compareWeeks.map((w) => (
+                        <Fragment key={w}>
+                          <th className="px-1.5 py-1 text-right border-l border-b font-medium">DC Have</th>
+                          <th className="px-1.5 py-1 text-right border-b font-medium">DC No</th>
+                          <th className="px-1.5 py-1 text-right border-b font-medium">Total OOS</th>
+                          <th className="px-1.5 py-1 text-right border-r border-b font-medium">%DC Have</th>
+                        </Fragment>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {compareView.rowsList.map((row, i) => {
+                      const prev = compareView.rowsList[i - 1];
+                      const next = compareView.rowsList[i + 1];
+                      const firstOfType = !prev || prev.type_store !== row.type_store;
+                      const lastOfType = !next || next.type_store !== row.type_store;
+                      const dcCell = (c?: DCSummaryRow) => {
+                        const p = c && c.total_oos > 0 ? c.dc_have / c.total_oos : null;
+                        return (
+                          <>
+                            <td className="px-1.5 py-0.5 text-right tabular-nums border-l">{c ? c.dc_have.toLocaleString() : "-"}</td>
+                            <td className="px-1.5 py-0.5 text-right tabular-nums">{c ? c.dc_no.toLocaleString() : "-"}</td>
+                            <td className="px-1.5 py-0.5 text-right tabular-nums">{c ? c.total_oos.toLocaleString() : "-"}</td>
+                            <td className={`px-1.5 py-0.5 text-right tabular-nums border-r ${p != null ? pctHaveClass(p) : ""}`}>{p != null ? pct(p) : "-"}</td>
+                          </>
+                        );
+                      };
+                      return (
+                        <Fragment key={"dc" + row.type_store + row.store_name}>
+                          <tr className="border-b hover:bg-accent/30">
+                            <td className="sticky left-0 z-10 bg-background px-2 py-0.5 border-r">{firstOfType ? row.type_store : ""}</td>
+                            <td className="px-2 py-0.5 border-r">{row.store_name.replace(/^\d+-/, "")}</td>
+                            {compareWeeks.map((w) => <Fragment key={w}>{dcCell(compareView.dcSMap.get(compareView.sKey(w, row.type_store, row.store_name)))}</Fragment>)}
+                          </tr>
+                          {lastOfType && (
+                            <tr className="bg-muted font-semibold border-b">
+                              <td className="sticky left-0 z-10 bg-muted px-2 py-0.5 border-r">{row.type_store}</td>
+                              <td className="px-2 py-0.5 border-r">Total (Distinct SKU)</td>
+                              {compareWeeks.map((w) => <Fragment key={w}>{dcCell(compareView.dcTMap.get(compareView.tKey(w, row.type_store)))}</Fragment>)}
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-[10px] text-muted-foreground mt-2">DC Have = สาขาขาดแต่ DC มีของ (เติมได้) · DC No = ขาดทั้งสาขา+DC · %DC Have ยิ่งสูงยิ่งดี · Total = Distinct SKU</p>
             </>
           ) : !summary ? (
             <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
