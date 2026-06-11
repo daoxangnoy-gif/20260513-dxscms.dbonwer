@@ -76,6 +76,13 @@ function cmpBg(cur: number | null, prev: number | null) {
   if (cur > prev + 1e-6) return "bg-orange-100";
   return "";
 }
+// กลับด้าน (สำหรับ %DC Have: เพิ่ม=ดี=เขียว, ลด=ส้ม)
+function cmpBgRev(cur: number | null, prev: number | null) {
+  if (cur == null || prev == null) return "";
+  if (cur > prev + 1e-6) return "bg-green-100";
+  if (cur < prev - 1e-6) return "bg-orange-100";
+  return "";
+}
 
 export default function ReportOOSPage() {
   const { toast } = useToast();
@@ -1026,14 +1033,15 @@ export default function ReportOOSPage() {
                     {compareView.rowsList.map((row, i) => {
                       const prev = compareView.rowsList[i - 1];
                       const firstOfType = !prev || prev.type_store !== row.type_store;
-                      const dcCell = (c?: DCSummaryRow) => {
-                        const p = c && c.total_oos > 0 ? c.dc_have / c.total_oos : null;
+                      const dcPctOf = (c?: DCSummaryRow) => (c && c.total_oos > 0 ? c.dc_have / c.total_oos : null);
+                      const dcCell = (c: DCSummaryRow | undefined, prevPct: number | null) => {
+                        const p = dcPctOf(c);
                         return (
                           <>
                             <td className="px-1.5 py-0.5 text-right tabular-nums border-l">{c ? c.dc_have.toLocaleString() : "-"}</td>
                             <td className="px-1.5 py-0.5 text-right tabular-nums">{c ? c.dc_no.toLocaleString() : "-"}</td>
                             <td className="px-1.5 py-0.5 text-right tabular-nums">{c ? c.total_oos.toLocaleString() : "-"}</td>
-                            <td className={`px-1.5 py-0.5 text-right tabular-nums border-r ${p != null ? pctHaveClass(p) : ""}`}>{p != null ? pct(p) : "-"}</td>
+                            <td className={`px-1.5 py-0.5 text-right tabular-nums border-r ${cmpBgRev(p, prevPct)} ${p != null ? pctHaveClass(p) : ""}`}>{p != null ? pct(p) : "-"}</td>
                           </>
                         );
                       };
@@ -1042,7 +1050,11 @@ export default function ReportOOSPage() {
                           <tr className="border-b hover:bg-accent/30">
                             <td className="sticky left-0 z-10 bg-background px-2 py-0.5 border-r">{firstOfType ? row.type_store : ""}</td>
                             <td className="px-2 py-0.5 border-r">{row.store_name.replace(/^\d+-/, "")}</td>
-                            {compareWeeks.map((w) => <Fragment key={w}>{dcCell(compareView.dcSMap.get(compareView.sKey(w, row.type_store, row.store_name)))}</Fragment>)}
+                            {compareWeeks.map((w, wi) => {
+                              const c = compareView.dcSMap.get(compareView.sKey(w, row.type_store, row.store_name));
+                              const pc = wi > 0 ? compareView.dcSMap.get(compareView.sKey(compareWeeks[wi - 1], row.type_store, row.store_name)) : undefined;
+                              return <Fragment key={w}>{dcCell(c, dcPctOf(pc))}</Fragment>;
+                            })}
                           </tr>
                         </Fragment>
                       );
