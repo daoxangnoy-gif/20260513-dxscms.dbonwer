@@ -1013,9 +1013,7 @@ export default function ReportOOSPage() {
                   <tbody>
                     {compareView.rowsList.map((row, i) => {
                       const prev = compareView.rowsList[i - 1];
-                      const next = compareView.rowsList[i + 1];
                       const firstOfType = !prev || prev.type_store !== row.type_store;
-                      const lastOfType = !next || next.type_store !== row.type_store;
                       const dcCell = (c?: DCSummaryRow) => {
                         const p = c && c.total_oos > 0 ? c.dc_have / c.total_oos : null;
                         return (
@@ -1034,13 +1032,6 @@ export default function ReportOOSPage() {
                             <td className="px-2 py-0.5 border-r">{row.store_name.replace(/^\d+-/, "")}</td>
                             {compareWeeks.map((w) => <Fragment key={w}>{dcCell(compareView.dcSMap.get(compareView.sKey(w, row.type_store, row.store_name)))}</Fragment>)}
                           </tr>
-                          {lastOfType && (
-                            <tr className="bg-muted font-semibold border-b">
-                              <td className="sticky left-0 z-10 bg-muted px-2 py-0.5 border-r">{row.type_store}</td>
-                              <td className="px-2 py-0.5 border-r">Total (Distinct SKU)</td>
-                              {compareWeeks.map((w) => <Fragment key={w}>{dcCell(compareView.dcTMap.get(compareView.tKey(w, row.type_store)))}</Fragment>)}
-                            </tr>
-                          )}
                         </Fragment>
                       );
                     })}
@@ -1134,31 +1125,16 @@ export default function ReportOOSPage() {
                       <TableBody>
                         {dcCoverage.stores.map((s, idx) => {
                           const prev = dcCoverage.stores[idx - 1];
-                          const next = dcCoverage.stores[idx + 1];
                           const firstOfType = !prev || prev.type_store !== s.type_store;
-                          const total = (!next || next.type_store !== s.type_store)
-                            ? dcCoverage.totals.find((t) => t.type_store === s.type_store) : null;
                           return (
-                            <Fragment key={s.type_store + s.store_name}>
-                              <TableRow>
-                                <TableCell className="text-xs">{firstOfType ? s.type_store : ""}</TableCell>
-                                <TableCell className="text-xs whitespace-nowrap">{s.store_name}</TableCell>
-                                <TableCell className="text-xs text-right tabular-nums">{s.dc_have.toLocaleString()}</TableCell>
-                                <TableCell className="text-xs text-right tabular-nums">{s.dc_no.toLocaleString()}</TableCell>
-                                <TableCell className="text-xs text-right tabular-nums">{s.total_oos.toLocaleString()}</TableCell>
-                                <TableCell className={`text-xs text-right tabular-nums ${pctHaveClass(s.pct_have)}`}>{pct(s.pct_have)}</TableCell>
-                              </TableRow>
-                              {total && (
-                                <TableRow className="bg-muted font-semibold">
-                                  <TableCell className="text-xs">{s.type_store}</TableCell>
-                                  <TableCell className="text-xs">Total (Distinct SKU)</TableCell>
-                                  <TableCell className="text-xs text-right tabular-nums">{total.dc_have.toLocaleString()}</TableCell>
-                                  <TableCell className="text-xs text-right tabular-nums">{total.dc_no.toLocaleString()}</TableCell>
-                                  <TableCell className="text-xs text-right tabular-nums">{total.total_oos.toLocaleString()}</TableCell>
-                                  <TableCell className={`text-xs text-right tabular-nums ${pctHaveClass(total.pct_have)}`}>{pct(total.pct_have)}</TableCell>
-                                </TableRow>
-                              )}
-                            </Fragment>
+                            <TableRow key={s.type_store + s.store_name}>
+                              <TableCell className="text-xs">{firstOfType ? s.type_store : ""}</TableCell>
+                              <TableCell className="text-xs whitespace-nowrap">{s.store_name}</TableCell>
+                              <TableCell className="text-xs text-right tabular-nums">{s.dc_have.toLocaleString()}</TableCell>
+                              <TableCell className="text-xs text-right tabular-nums">{s.dc_no.toLocaleString()}</TableCell>
+                              <TableCell className="text-xs text-right tabular-nums">{s.total_oos.toLocaleString()}</TableCell>
+                              <TableCell className={`text-xs text-right tabular-nums ${pctHaveClass(s.pct_have)}`}>{pct(s.pct_have)}</TableCell>
+                            </TableRow>
                           );
                         })}
                       </TableBody>
