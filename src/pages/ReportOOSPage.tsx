@@ -988,7 +988,7 @@ export default function ReportOOSPage() {
               <p className="text-[10px] text-muted-foreground mt-2">Have/OOS/Range ราย store = นับตรง · Total = Distinct SKU (OOS = ขาดทุกสาขา)</p>
 
               {/* ===== DC Coverage By Weekly (cross-tab) ===== */}
-              <div className="text-sm font-medium mt-6 mb-1">DC Coverage By Weekly <span className="text-muted-foreground font-normal">(ในสินค้า Store OOS — DC เติมได้ไหม)</span></div>
+              <div className="text-sm font-medium mt-6 mb-1">Status Stock DC <span className="text-muted-foreground font-normal">(ในสินค้า Store OOS — DC เติมได้ไหม)</span></div>
               <div className="overflow-auto border rounded">
                 <table className="text-[10px] border-collapse whitespace-nowrap">
                   <thead className="bg-muted/40">
@@ -1114,7 +1114,7 @@ export default function ReportOOSPage() {
               {dcCoverage && (
                 <div className="mt-6">
                   <div className="text-sm font-semibold mb-0.5">
-                    DC Coverage — สินค้า Store OOS เติมจาก DC ได้ไหม <span className="text-muted-foreground font-normal">({weekLabel})</span>
+                    Status Stock DC — สินค้า Store OOS เติมจาก DC ได้ไหม <span className="text-muted-foreground font-normal">({weekLabel})</span>
                   </div>
                   <p className="text-[11px] text-muted-foreground mb-2">
                     DC Have stock = สาขาขาดแต่ DC มีของ (เติมได้) · DC No Stock = ขาดทั้งสาขาและ DC (ต้องสั่งซื้อ) · % ยิ่งสูงยิ่งดี
