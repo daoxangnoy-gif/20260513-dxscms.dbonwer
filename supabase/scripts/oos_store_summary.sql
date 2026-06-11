@@ -43,17 +43,17 @@ AS $function$
     FROM base GROUP BY week_label, type_store, store_name
   ),
   sku_oos AS (
-    -- remark_stock ต่อ sku เหมือนกันทุกสาขา (DC เดียว) → bool_or เอาค่าได้
+    -- all_oos = ขาดทุกสาขา (นิยาม B ตรงกับ Total ตารางบน) · remark_stock ต่อ sku เหมือนกันทุกสาขา (DC เดียว)
     SELECT week_label, type_store, sku,
-      bool_or(remark_oos='Store OOS')        AS is_oos,
+      bool_and(remark_oos='Store OOS')       AS all_oos,
       bool_or(remark_stock='DC Have stock')  AS dc_have
     FROM base GROUP BY week_label, type_store, sku
   ),
   dc_totals AS (
     SELECT week_label, type_store,
-      COUNT(*) FILTER (WHERE is_oos AND dc_have)     AS dc_have,
-      COUNT(*) FILTER (WHERE is_oos AND NOT dc_have) AS dc_no,
-      COUNT(*) FILTER (WHERE is_oos)                 AS total_oos
+      COUNT(*) FILTER (WHERE all_oos AND dc_have)     AS dc_have,
+      COUNT(*) FILTER (WHERE all_oos AND NOT dc_have) AS dc_no,
+      COUNT(*) FILTER (WHERE all_oos)                 AS total_oos
     FROM sku_oos GROUP BY week_label, type_store
   )
   SELECT jsonb_build_object(
