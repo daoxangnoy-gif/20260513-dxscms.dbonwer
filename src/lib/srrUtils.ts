@@ -78,7 +78,7 @@ export const HIGHLIGHT_COLS = new Set([
 ]);
 export const TRUNCATE_COLS = new Set(["product_name_la", "product_name_en", "vendor_display"]);
 
-export const SRR_COLUMNS: { key: keyof SRRRow | "pack_size"; label: string; group?: string }[] = [
+export const SRR_COLUMNS: { key: keyof SRRRow | "pack_size" | "ranking" | "core_item"; label: string; group?: string }[] = [
   { key: "vendor_display", label: "Vendor" },
   { key: "po_group", label: "PO Group" },
   { key: "division_group", label: "Division Group" },
@@ -96,6 +96,8 @@ export const SRR_COLUMNS: { key: keyof SRRRow | "pack_size"; label: string; grou
   { key: "spc_name", label: "SPC" },
   { key: "order_day", label: "Order Day" },
   { key: "rank_sales", label: "Rank" },
+  { key: "ranking", label: "Ranking" },
+  { key: "core_item", label: "Core Item" },
   { key: "min_jmart", label: "Min Jmart", group: "Min/Max" },
   { key: "min_kokkok", label: "Min Kokkok", group: "Min/Max" },
   { key: "min_kokkok_fc", label: "Min Kokkok-fc", group: "Min/Max" },
@@ -149,6 +151,8 @@ export const DEFAULT_SRR_VISIBLE = new Set<string>([
   "sku_code",
   "product_name_la",
   "rank_sales",
+  "ranking",
+  "core_item",
   "tt_min",
   "tt_max",
   "stock_dc",

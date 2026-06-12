@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { fetchCoreItemMap, coreItemLabel, coreItemRanking } from "@/lib/coreItemService";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -593,7 +594,7 @@ function buildD2SRows(rawRows: any[]): D2SRow[] {
 }
 
 // --- Columns (Spec A→AJ exact order) ---
-const D2S_COLUMNS: { key: keyof D2SRow; label: string; group?: string }[] = [
+const D2S_COLUMNS: { key: keyof D2SRow | "ranking" | "core_item"; label: string; group?: string }[] = [
   { key: "store_name", label: "Store Name" }, // A
   { key: "type_store", label: "Type Store" }, // B
   { key: "division_group", label: "Division Group" }, // C
@@ -615,6 +616,8 @@ const D2S_COLUMNS: { key: keyof D2SRow; label: string; group?: string }[] = [
   { key: "product_name_la", label: "Product Name (LA)" }, // R
   { key: "product_name_en", label: "Product Name (EN)" }, // S
   { key: "rank_sales", label: "Sale Rank" }, // T
+  { key: "ranking", label: "Ranking" }, // derive จาก core_item ตอนแสดงผล
+  { key: "core_item", label: "Core Item" }, // derive จาก core_item ตอนแสดงผล
   { key: "avg_sales_store", label: "Avg Unit Sale/Day", group: "Sales" }, // V
   { key: "min_store", label: "Min Store", group: "Min/Max" }, // W
   { key: "stock_store", label: "Store Stock", group: "Stock" }, // X
@@ -645,6 +648,8 @@ const DEFAULT_D2S_VISIBLE = new Set<string>([
   "sku_code",
   "product_name_la",
   "rank_sales",
+  "ranking",
+  "core_item",
   "avg_sales_store",
   "min_store",
   "stock_store",
@@ -1206,6 +1211,13 @@ export default function SRRDirectPage() {
 
   const { toast } = useToast();
   const displayColumns = useMemo(() => D2S_COLUMNS.filter((c) => visibleColumns.has(c.key)), [visibleColumns]);
+
+  // Core Item / Ranking lookup (เงื่อนไขเดียวกับ Report OOS) — derive ตอนแสดงผล ไม่ฝังลง Doc
+  const [coreItemMap, setCoreItemMap] = useState<Map<string, string | null>>(new Map());
+  useEffect(() => { fetchCoreItemMap().then(setCoreItemMap).catch(() => {}); }, []);
+  const deriveCoreVal = useCallback((row: D2SRow, key: string) =>
+    key === "core_item" ? coreItemLabel(coreItemMap, row.sku_code) : coreItemRanking(coreItemMap, row.sku_code),
+  [coreItemMap]);
 
   // Persist state (filters + showData + assign values + per-mode date + import context for mode isolation)
   useEffect(() => {
@@ -3088,7 +3100,11 @@ export default function SRRDirectPage() {
     const headers = displayColumns.map(c => c.label);
     const exportRows = rows.map((r) => {
       const mapped: Record<string, any> = {};
-      for (const col of displayColumns) mapped[col.label] = r[col.key];
+      for (const col of displayColumns) {
+        mapped[col.label] = (col.key === "core_item" || col.key === "ranking")
+          ? deriveCoreVal(r, col.key)
+          : (r as any)[col.key];
+      }
       return mapped;
     });
     const formulaRow = buildSRRDirectFormulaRow(headers);
@@ -3573,7 +3589,9 @@ export default function SRRDirectPage() {
                   </td>
                 )}
                 {displayColumns.map((col, colIdx) => {
-                  const val = row[col.key];
+                  const val = (col.key === "core_item" || col.key === "ranking")
+                    ? deriveCoreVal(row, col.key)
+                    : row[col.key as keyof D2SRow];
                   const displayVal = formatCellValue(val, col.key);
                   const isTruncate = TRUNCATE_D2S.has(col.key);
                   const isHighlight = HIGHLIGHT_D2S.has(col.key);
@@ -3604,6 +3622,7 @@ export default function SRRDirectPage() {
                           "bg-blue-50/40 dark:bg-blue-950/20",
                         isOverriddenFinal && "bg-orange-100 dark:bg-orange-950/40",
                         isDohRed && "bg-red-100 dark:bg-red-950/40 text-red-700 dark:text-red-300 font-semibold",
+                        col.key === "core_item" && (val === "Core Item" ? "text-blue-600 dark:text-blue-400 font-medium" : "text-muted-foreground"),
                         col.key === "final_order_qty" &&
                           typeof val === "number" &&
                           (val as number) > 0 &&

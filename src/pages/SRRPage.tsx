@@ -57,6 +57,7 @@ import {
   VENDOR_DOCS_KEY, loadVendorDocs, saveVendorDocs,
   getDateKey, isWithin30Days, stripSeconds, formatLocalBatchLabel, getLocalPOBatches,
 } from "@/lib/srrUtils";
+import { fetchCoreItemMap, coreItemLabel, coreItemRanking } from "@/lib/coreItemService";
 export { applyHighPrecisionFormat, getLocalPOBatches } from "@/lib/srrUtils";
 export { ListImportPO } from "@/components/ListImportPO";
 
@@ -561,6 +562,13 @@ function SRRDCItemPage() {
 
   const { toast } = useToast();
   const displayColumns = useMemo(() => SRR_COLUMNS.filter(c => visibleColumns.has(c.key)), [visibleColumns]);
+
+  // Core Item / Ranking lookup (เงื่อนไขเดียวกับ Report OOS) — derive ตอนแสดงผล ไม่ฝังลง Doc
+  const [coreItemMap, setCoreItemMap] = useState<Map<string, string | null>>(new Map());
+  useEffect(() => { fetchCoreItemMap().then(setCoreItemMap).catch(() => {}); }, []);
+  const deriveCoreVal = useCallback((row: SRRRow, key: string) =>
+    key === "core_item" ? coreItemLabel(coreItemMap, row.sku_code) : coreItemRanking(coreItemMap, row.sku_code),
+  [coreItemMap]);
 
   // Persist state (filters + showData + per-mode date + import context for mode isolation)
   useEffect(() => {
@@ -2446,7 +2454,9 @@ function SRRDCItemPage() {
       for (const col of displayColumns) {
         mapped[col.label] = col.key === "pack_size"
           ? (Number(r.moq) === 1 ? "Unit" : `1x${Number(r.moq) || 0}`)
-          : (r as any)[col.key];
+          : (col.key === "core_item" || col.key === "ranking")
+            ? deriveCoreVal(r, col.key)
+            : (r as any)[col.key];
       }
       return mapped;
     });
@@ -2903,7 +2913,9 @@ function SRRDCItemPage() {
                   const isCellActive = activeCell?.row === idx && activeCell?.col === colIdx;
                   const val = col.key === "pack_size"
                     ? (Number(row.moq) === 1 ? "Unit" : `1x${Number(row.moq) || 0}`)
-                    : row[col.key as keyof SRRRow];
+                    : (col.key === "core_item" || col.key === "ranking")
+                      ? deriveCoreVal(row, col.key)
+                      : row[col.key as keyof SRRRow];
                   const displayVal = formatCellValue(val, col.key);
                   const isEditable = showEditColumns && EDITABLE_COLS.has(col.key);
                   const isTruncate = TRUNCATE_COLS.has(col.key);
@@ -2932,6 +2944,7 @@ function SRRDCItemPage() {
                         isDohRed && "bg-red-100 dark:bg-red-950/40 text-red-700 dark:text-red-300 font-semibold",
                         isPackUnit && "bg-green-100 dark:bg-green-950/40",
                         isPackMoq && "bg-sky-100 dark:bg-sky-950/40",
+                        col.key === "core_item" && (val === "Core Item" ? "text-blue-600 dark:text-blue-400 font-medium" : "text-muted-foreground"),
                         col.key === "final_suggest_qty" && typeof val === "number" && (val as number) > 0 && !isOverriddenFinal
                           ? "font-semibold text-green-600 dark:text-green-400" : ""
                       )}
@@ -3965,7 +3978,9 @@ function SRRDCItemPage() {
                               {formatCellValue(
                                 col.key === "pack_size"
                                   ? (Number(row.moq) === 1 ? "Unit" : `1x${Number(row.moq) || 0}`)
-                                  : row[col.key as keyof SRRRow],
+                                  : (col.key === "core_item" || col.key === "ranking")
+                                    ? deriveCoreVal(row, col.key)
+                                    : row[col.key as keyof SRRRow],
                                 col.key
                               )}
                             </span>
@@ -3984,7 +3999,11 @@ function SRRDCItemPage() {
               <Button onClick={() => {
                 const exportRows = previewDoc.data.map(r => {
                   const mapped: Record<string, any> = {};
-                  for (const col of SRR_COLUMNS) { mapped[col.label] = r[col.key]; }
+                  for (const col of SRR_COLUMNS) {
+                    mapped[col.label] = (col.key === "core_item" || col.key === "ranking")
+                      ? deriveCoreVal(r, col.key)
+                      : (r as any)[col.key];
+                  }
                   return mapped;
                 });
                 const ws = XLSX.utils.json_to_sheet(exportRows);
