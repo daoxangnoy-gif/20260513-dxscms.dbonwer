@@ -44,6 +44,8 @@ interface JobRow {
 }
 
 const BUCKET = "job-assignments";
+// โดเมน production คงที่ ใช้สร้าง short link เสมอ (localhost จะกดไม่ได้ใน WhatsApp)
+const PUBLIC_APP_URL = "https://daoxangnoy-gif.github.io/20260513-dxscms.dbonwer/";
 const SIGNED_TTL = 60 * 60;
 const ALLOWED_TYPES = ["application/pdf", "image/png", "image/jpeg", "image/jpg", "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "text/csv"];
 
@@ -281,8 +283,7 @@ export default function SRRJobAssignPage() {
           .from("short_links" as any)
           .insert({ id, target_url: targetUrl } as any);
         if (!error) {
-          const base = import.meta.env.BASE_URL || "/";
-          return `${window.location.origin}${base}#/r/${id}`;
+          return `${PUBLIC_APP_URL}#/r/${id}`;
         }
         // ชน id ซ้ำ -> สุ่มใหม่; error อื่น -> เลิก
         if (!String(error.message || "").toLowerCase().includes("duplicate")) break;
