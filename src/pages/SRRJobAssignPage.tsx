@@ -263,17 +263,34 @@ export default function SRRJobAssignPage() {
     return data?.signedUrl || url;
   };
 
-  // ย่อลิงก์ให้สั้นลงด้วย is.gd (ถ้าล้มเหลว/เน็ตบล็อก จะคืนลิงก์เดิม)
-  const shortenUrl = async (url: string): Promise<string> => {
-    if (!url) return url;
+  // ย่อลิงก์แบบ self-hosted: เก็บใน short_links แล้วคืนลิงก์ #/r/:id ของระบบเอง
+  // (ถ้าล้มเหลว จะคืนลิงก์เดิมเพื่อไม่ให้ผู้ใช้ตกค้าง)
+  const genShortId = () => {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"; // ตัดตัวกำกวม 0/O/1/l/I
+    let s = "";
+    for (let i = 0; i < 7; i++) s += chars[Math.floor(Math.random() * chars.length)];
+    return s;
+  };
+
+  const createShortLink = async (targetUrl: string): Promise<string> => {
+    if (!targetUrl) return targetUrl;
     try {
-      const res = await fetch(`https://is.gd/create.php?format=simple&url=${encodeURIComponent(url)}`);
-      if (!res.ok) return url;
-      const short = (await res.text()).trim();
-      return short.startsWith("http") ? short : url;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const id = genShortId();
+        const { error } = await supabase
+          .from("short_links" as any)
+          .insert({ id, target_url: targetUrl } as any);
+        if (!error) {
+          const base = import.meta.env.BASE_URL || "/";
+          return `${window.location.origin}${base}#/r/${id}`;
+        }
+        // ชน id ซ้ำ -> สุ่มใหม่; error อื่น -> เลิก
+        if (!String(error.message || "").toLowerCase().includes("duplicate")) break;
+      }
     } catch {
-      return url;
+      /* ignore -> fallback */
     }
+    return targetUrl;
   };
 
   const buildMessage = (r: { assignee_name: string; content: string; due_date: string; fileLink: string; original_due_date?: string | null }) => {
@@ -364,7 +381,7 @@ ${dueLine}
           } as any);
         if (error) throw error;
 
-        const fileLink = attachment_url ? await shortenUrl(await getSignedUrl(attachment_url)) : "";
+        const fileLink = attachment_url ? await createShortLink(await getSignedUrl(attachment_url)) : "";
         const msg = buildMessage({
           assignee_name: assignee.trim(),
           content: content.trim(),
@@ -386,7 +403,7 @@ ${dueLine}
   };
 
   const handleResend = async (r: JobRow) => {
-    const fileLink = r.attachment_url ? await shortenUrl(await getSignedUrl(r.attachment_url)) : "";
+    const fileLink = r.attachment_url ? await createShortLink(await getSignedUrl(r.attachment_url)) : "";
     const msg = buildMessage({
       assignee_name: r.assignee_name,
       content: r.content,
@@ -399,7 +416,7 @@ ${dueLine}
 
   // ===== ทวงงาน — ข้อความเดิม + หัวเรื่องเด่น (WhatsApp ส่งสติกเกอร์จริง/reply เจาะจงไม่ได้) =====
   const handleRemind = async (r: JobRow) => {
-    const fileLink = r.attachment_url ? await shortenUrl(await getSignedUrl(r.attachment_url)) : "";
+    const fileLink = r.attachment_url ? await createShortLink(await getSignedUrl(r.attachment_url)) : "";
     const base = buildMessage({
       assignee_name: r.assignee_name,
       content: r.content,
