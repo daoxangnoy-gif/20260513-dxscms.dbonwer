@@ -10,9 +10,17 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Loader2, Plus, Paperclip, Clipboard, MessageCircle, CheckCircle2, Trash2, FileText, Calendar, Pencil,
+  Clock, BellRing, Search,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
+
+interface Extension {
+  at: string;    // วันที่กดต่อเวลา (YYYY-MM-DD)
+  from: string;  // วันนัดส่งก่อนต่อ
+  to: string;    // วันนัดส่งใหม่
+  days: number;  // จำนวนวันที่ต่อเพิ่ม (to - from)
+}
 
 interface JobRow {
   id: string;
@@ -27,6 +35,12 @@ interface JobRow {
   status: string;
   completed_at: string | null;
   created_at: string;
+  original_due_date: string | null;
+  extensions: Extension[] | null;
+  completion_note: string | null;
+  completion_attachment_url: string | null;
+  completion_attachment_name: string | null;
+  completion_attachment_type: string | null;
 }
 
 const BUCKET = "job-assignments";
@@ -53,6 +67,13 @@ function daysUntil(due: string): number {
   return Math.round((d.getTime() - today.getTime()) / 86400000);
 }
 
+// ส่วนต่างวัน (to - from) เป็นจำนวนวัน
+function dateDiffDays(from: string, to: string): number {
+  const a = new Date(from); a.setHours(0, 0, 0, 0);
+  const b = new Date(to); b.setHours(0, 0, 0, 0);
+  return Math.round((b.getTime() - a.getTime()) / 86400000);
+}
+
 export default function SRRJobAssignPage() {
   const { user } = useAuth();
   const [rows, setRows] = useState<JobRow[]>([]);
@@ -60,6 +81,19 @@ export default function SRRJobAssignPage() {
   const [tab, setTab] = useState<"assigned" | "done">("assigned");
   const [showOnlyOverdue, setShowOnlyOverdue] = useState(false);
   const [showOnlyUpcoming, setShowOnlyUpcoming] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+
+  // ต่อเวลา dialog
+  const [extendRow, setExtendRow] = useState<JobRow | null>(null);
+  const [extendDate, setExtendDate] = useState("");
+  const [extendSaving, setExtendSaving] = useState(false);
+
+  // ทำเครื่องหมายสำเร็จ + แนบหลักฐาน dialog
+  const [doneRow, setDoneRow] = useState<JobRow | null>(null);
+  const [doneNote, setDoneNote] = useState("");
+  const [doneFile, setDoneFile] = useState<File | null>(null);
+  const [doneSaving, setDoneSaving] = useState(false);
+  const doneFileRef = useRef<HTMLInputElement>(null);
   const [users, setUsers] = useState<{ user_id: string; full_name: string; phone: string | null }[]>([]);
   const [userSearch, setUserSearch] = useState("");
   const [userListOpen, setUserListOpen] = useState(false);
@@ -182,15 +216,21 @@ export default function SRRJobAssignPage() {
   );
 
   const filtered = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
     return tabRows.filter(r => {
       if (tab !== "done") {
         const d = daysUntil(r.due_date);
         if (showOnlyOverdue && d >= 0) return false;
         if (showOnlyUpcoming && d < 0) return false;
       }
+      if (q) {
+        const name = (r.assignee_name || "").toLowerCase();
+        const assignDate = (r.created_at || "").slice(0, 10); // วันที่สั่งงาน
+        if (!name.includes(q) && !assignDate.includes(q) && !(r.due_date || "").includes(q)) return false;
+      }
       return true;
     });
-  }, [tabRows, tab, showOnlyOverdue, showOnlyUpcoming]);
+  }, [tabRows, tab, showOnlyOverdue, showOnlyUpcoming, searchTerm]);
 
   const uploadFile = async (f: File) => {
     if (!ALLOWED_TYPES.includes(f.type)) throw new Error("รองรับเฉพาะ PDF / PNG / JPG");
@@ -338,14 +378,113 @@ export default function SRRJobAssignPage() {
     openWhatsApp(r.assignee_phone || "", msg);
   };
 
-  const handleMarkDone = async (r: JobRow) => {
-    const { error } = await supabase
-      .from("job_assignments" as any)
-      .update({ status: "done", completed_at: new Date().toISOString() } as any)
-      .eq("id", r.id);
-    if (error) { toast.error(error.message); return; }
-    toast.success("ย้ายไปแท็บงานสำเร็จแล้ว");
-    await loadRows();
+  // ===== ทวงงาน — ข้อความเดิม + หัวเรื่องเด่น (WhatsApp ส่งสติกเกอร์จริง/reply เจาะจงไม่ได้) =====
+  const handleRemind = async (r: JobRow) => {
+    const fileLink = r.attachment_url ? await getSignedUrl(r.attachment_url) : "";
+    const base = buildMessage({
+      assignee_name: r.assignee_name,
+      content: r.content,
+      due_date: r.due_date,
+      fileLink,
+    });
+    const overdue = daysUntil(r.due_date);
+    const overdueLine = overdue < 0 ? `\n⏰ เลยกำหนดส่งมาแล้ว ${Math.abs(overdue)} วัน` : overdue === 0 ? `\n⏰ ครบกำหนดส่ง *วันนี้*` : "";
+    const msg = `🔴📢 !! ขอทวงงาน !! 📢🔴${overdueLine}\n━━━━━━━━━━━━━━\n${base}`;
+    openWhatsApp(r.assignee_phone || "", msg);
+  };
+
+  // ===== ต่อเวลา — ตั้งวันนัดส่งใหม่ + บันทึกประวัติการต่อ =====
+  const openExtend = (r: JobRow) => {
+    setExtendRow(r);
+    setExtendDate(r.due_date);
+  };
+
+  const handleExtend = async () => {
+    if (!extendRow) return;
+    if (!extendDate) { toast.error("เลือกวันนัดส่งใหม่"); return; }
+    const oldDue = extendRow.due_date;
+    const days = dateDiffDays(oldDue, extendDate);
+    if (days === 0) { toast.error("วันใหม่ต้องไม่ตรงกับวันเดิม"); return; }
+    setExtendSaving(true);
+    try {
+      const exts: Extension[] = [...(extendRow.extensions || [])];
+      exts.push({ at: new Date().toISOString().slice(0, 10), from: oldDue, to: extendDate, days });
+      const original = extendRow.original_due_date || oldDue;
+      const { error } = await supabase
+        .from("job_assignments" as any)
+        .update({ due_date: extendDate, original_due_date: original, extensions: exts as any } as any)
+        .eq("id", extendRow.id);
+      if (error) throw error;
+      toast.success(`ต่อเวลาเป็น ${extendDate} แล้ว (${days > 0 ? "+" : ""}${days} วัน)`);
+      setExtendRow(null);
+      await loadRows();
+    } catch (e: any) {
+      toast.error(e.message || "ต่อเวลาไม่สำเร็จ");
+    } finally {
+      setExtendSaving(false);
+    }
+  };
+
+  // ===== สำเร็จ — แนบหลักฐาน (ไฟล์/ข้อความ) แล้วย้ายไปแท็บงานสำเร็จ =====
+  const openDone = (r: JobRow) => {
+    setDoneRow(r);
+    setDoneNote("");
+    setDoneFile(null);
+  };
+
+  const handleDoneSave = async () => {
+    if (!doneRow) return;
+    if (!doneNote.trim() && !doneFile) { toast.error("กรอกข้อความ หรือ แนบไฟล์ อย่างน้อย 1 อย่าง"); return; }
+    setDoneSaving(true);
+    try {
+      let cu: string | null = null, cn: string | null = null, ct: string | null = null;
+      if (doneFile) {
+        const u = await uploadFile(doneFile);
+        cu = u.url; cn = u.name; ct = u.type;
+      }
+      const { error } = await supabase
+        .from("job_assignments" as any)
+        .update({
+          status: "done",
+          completed_at: new Date().toISOString(),
+          completion_note: doneNote.trim() || null,
+          completion_attachment_url: cu,
+          completion_attachment_name: cn,
+          completion_attachment_type: ct,
+        } as any)
+        .eq("id", doneRow.id);
+      if (error) throw error;
+      toast.success("บันทึกงานสำเร็จแล้ว — ย้ายไปแท็บงานสำเร็จ");
+      setDoneRow(null);
+      await loadRows();
+    } catch (e: any) {
+      toast.error(e.message || "บันทึกไม่สำเร็จ");
+    } finally {
+      setDoneSaving(false);
+    }
+  };
+
+  // ===== แสดงสถานะ: วันนัดส่งเดิมเลยกี่วัน / ต่อเวลาครั้งที่ N กี่วัน =====
+  const renderTimeStatus = (r: JobRow) => {
+    const exts = r.extensions || [];
+    if (exts.length === 0) return null;
+    const origDue = r.original_due_date || r.due_date;
+    const ref = (r.status === "done" && r.completed_at) ? new Date(r.completed_at) : new Date();
+    ref.setHours(0, 0, 0, 0);
+    const origMid = new Date(origDue); origMid.setHours(0, 0, 0, 0);
+    const pastOrig = Math.round((ref.getTime() - origMid.getTime()) / 86400000);
+    return (
+      <div className="mt-1 space-y-0.5 text-[10px] leading-tight text-left">
+        <div className="text-muted-foreground">
+          เดิม {origDue}{pastOrig > 0 ? ` · เลย ${pastOrig} วัน` : ""}
+        </div>
+        {exts.map((e, i) => (
+          <div key={i} className="text-blue-600 font-medium">
+            ต่อเวลาครั้งที่ {i + 1}: +{e.days} วัน → {e.to}
+          </div>
+        ))}
+      </div>
+    );
   };
 
   const handleDelete = async (r: JobRow) => {
@@ -384,6 +523,15 @@ export default function SRRJobAssignPage() {
             </label>
           </>
         )}
+        <div className="relative ml-auto w-full max-w-xs">
+          <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={searchTerm}
+            onChange={e => setSearchTerm(e.target.value)}
+            placeholder="ค้นหา ชื่อผู้รับงาน / วันที่สั่งงาน (YYYY-MM-DD)"
+            className="h-8 pl-7 text-xs"
+          />
+        </div>
       </div>
 
       <div className="flex-1 overflow-auto border rounded-md">
@@ -421,13 +569,30 @@ export default function SRRJobAssignPage() {
                       ) : "-"}
                     </td>
                     <td className="px-2 py-2 whitespace-nowrap">{r.due_date}</td>
-                    <td className="px-2 py-2 text-center">
+                    <td className="px-2 py-2 text-center align-top">
                       {tab === "done" ? (
-                        <span className="text-muted-foreground">-</span>
+                        <span className="text-green-600 font-medium whitespace-nowrap">
+                          ✓ {r.completed_at ? new Date(r.completed_at).toLocaleDateString("th-TH") : "สำเร็จ"}
+                        </span>
                       ) : (
                         <span className={overdue ? "text-red-600 font-bold" : d <= 1 ? "text-orange-600 font-semibold" : ""}>
                           {overdue ? `เลย ${Math.abs(d)} วัน` : d === 0 ? "วันนี้" : `เหลือ ${d} วัน`}
                         </span>
+                      )}
+                      {renderTimeStatus(r)}
+                      {tab === "done" && (r.completion_note || r.completion_attachment_url) && (
+                        <div className="mt-1 text-[10px] text-left text-muted-foreground space-y-0.5">
+                          {r.completion_note && <div className="whitespace-pre-wrap">📝 {r.completion_note}</div>}
+                          {r.completion_attachment_url && (
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1 text-blue-600 underline"
+                              onClick={() => openSignedUrl(r.completion_attachment_url)}
+                            >
+                              <Paperclip className="w-3 h-3" />{r.completion_attachment_name || "หลักฐาน"}
+                            </button>
+                          )}
+                        </div>
                       )}
                     </td>
                     <td className="px-2 py-2">
@@ -440,7 +605,13 @@ export default function SRRJobAssignPage() {
                             <Button variant="outline" size="sm" className="h-7" onClick={() => handleResend(r)} title="ส่งซ้ำผ่าน WhatsApp">
                               <MessageCircle className="w-3.5 h-3.5" />
                             </Button>
-                            <Button variant="default" size="sm" className="h-7" onClick={() => handleMarkDone(r)}>
+                            <Button variant="outline" size="sm" className="h-7 text-amber-600 border-amber-300" onClick={() => handleRemind(r)} title="ทวงงาน (WhatsApp)">
+                              <BellRing className="w-3.5 h-3.5" />
+                            </Button>
+                            <Button variant="outline" size="sm" className="h-7" onClick={() => openExtend(r)} title="ต่อเวลา (ตั้งวันนัดส่งใหม่)">
+                              <Clock className="w-3.5 h-3.5 mr-1" />ต่อเวลา
+                            </Button>
+                            <Button variant="default" size="sm" className="h-7" onClick={() => openDone(r)}>
                               <CheckCircle2 className="w-3.5 h-3.5 mr-1" />สำเร็จ
                             </Button>
                           </>
@@ -542,6 +713,83 @@ export default function SRRJobAssignPage() {
             <Button onClick={handleSave} disabled={saving}>
               {saving ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : editingId ? <CheckCircle2 className="w-4 h-4 mr-1" /> : <MessageCircle className="w-4 h-4 mr-1" />}
               {editingId ? "บันทึกการแก้ไข" : "Save & ส่ง WhatsApp"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ต่อเวลา dialog */}
+      <Dialog open={!!extendRow} onOpenChange={(o) => { if (!o) setExtendRow(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>ต่อเวลา — ตั้งวันนัดส่งใหม่</DialogTitle>
+            <DialogDescription>
+              {extendRow ? `งานของ ${extendRow.assignee_name} · วันนัดส่งเดิม ${extendRow.due_date}` : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <label className="text-xs font-medium">วันนัดส่งใหม่ *</label>
+              <Input type="date" value={extendDate} onChange={e => setExtendDate(e.target.value)} />
+              {extendRow && extendDate && dateDiffDays(extendRow.due_date, extendDate) !== 0 && (
+                <p className="text-[11px] mt-1 text-blue-600">
+                  {dateDiffDays(extendRow.due_date, extendDate) > 0 ? "ต่อเพิ่ม" : "ร่นเข้า"} {Math.abs(dateDiffDays(extendRow.due_date, extendDate))} วัน
+                  {(extendRow.extensions?.length || 0) > 0 ? ` · เป็นการต่อครั้งที่ ${(extendRow.extensions?.length || 0) + 1}` : ""}
+                </p>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setExtendRow(null)} disabled={extendSaving}>ยกเลิก</Button>
+            <Button onClick={handleExtend} disabled={extendSaving}>
+              {extendSaving ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Clock className="w-4 h-4 mr-1" />}
+              บันทึกต่อเวลา
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* สำเร็จ + แนบหลักฐาน dialog */}
+      <Dialog open={!!doneRow} onOpenChange={(o) => { if (!o) setDoneRow(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>ยืนยันงานสำเร็จ — แนบหลักฐาน</DialogTitle>
+            <DialogDescription>
+              {doneRow ? `งานของ ${doneRow.assignee_name} — แนบไฟล์ หรือ กรอกข้อความ อย่างน้อย 1 อย่าง` : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <label className="text-xs font-medium">ข้อความอธิบายว่าเสร็จยังไง</label>
+              <Textarea rows={3} value={doneNote} onChange={e => setDoneNote(e.target.value)} placeholder="เช่น ส่งของครบแล้ว / แนบใบส่งของ..." />
+            </div>
+            <div>
+              <label className="text-xs font-medium">แนบหลักฐาน (PDF / PNG / JPG / Excel ≤ 10MB)</label>
+              <div className="flex items-center gap-2 mt-1">
+                <input
+                  ref={doneFileRef}
+                  type="file"
+                  accept=".pdf,.png,.jpg,.jpeg,.xls,.xlsx,.csv,application/pdf,image/png,image/jpeg,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+                  className="hidden"
+                  onChange={e => setDoneFile(e.target.files?.[0] || null)}
+                />
+                <Button type="button" variant="outline" size="sm" onClick={() => doneFileRef.current?.click()}>
+                  <Paperclip className="w-3.5 h-3.5 mr-1" />เลือกไฟล์
+                </Button>
+                {doneFile && (
+                  <span className="text-xs text-muted-foreground truncate flex-1">
+                    {doneFile.name} ({(doneFile.size / 1024).toFixed(0)} KB)
+                    <button type="button" className="text-destructive ml-2 underline" onClick={() => setDoneFile(null)}>ลบ</button>
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDoneRow(null)} disabled={doneSaving}>ยกเลิก</Button>
+            <Button onClick={handleDoneSave} disabled={doneSaving}>
+              {doneSaving ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-1" />}
+              บันทึกสำเร็จ
             </Button>
           </DialogFooter>
         </DialogContent>
