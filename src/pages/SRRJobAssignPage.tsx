@@ -263,13 +263,31 @@ export default function SRRJobAssignPage() {
     return data?.signedUrl || url;
   };
 
-  const buildMessage = (r: { assignee_name: string; content: string; due_date: string; fileLink: string }) =>
-    `แจ้งมอบหมายงาน ให้คุน ${r.assignee_name}
+  // ย่อลิงก์ให้สั้นลงด้วย is.gd (ถ้าล้มเหลว/เน็ตบล็อก จะคืนลิงก์เดิม)
+  const shortenUrl = async (url: string): Promise<string> => {
+    if (!url) return url;
+    try {
+      const res = await fetch(`https://is.gd/create.php?format=simple&url=${encodeURIComponent(url)}`);
+      if (!res.ok) return url;
+      const short = (await res.text()).trim();
+      return short.startsWith("http") ? short : url;
+    } catch {
+      return url;
+    }
+  };
+
+  const buildMessage = (r: { assignee_name: string; content: string; due_date: string; fileLink: string; original_due_date?: string | null }) => {
+    const extended = r.original_due_date && r.original_due_date !== r.due_date;
+    const dueLine = extended
+      ? `วันที่นัดส่งงานเดิมคือ : ${r.original_due_date}\nวันที่นัดส่งงานต่อเวลาใหม่ : ${r.due_date}`
+      : `วันที่นัดส่งงานคือ : ${r.due_date}`;
+    return `แจ้งมอบหมายงาน ให้คุน ${r.assignee_name}
 คุนมีรายละเอียดงานถูกมอบหมายมาใหม่ดั่งนี้ : ${r.content}
 ไฟล : ${r.fileLink || "-"}
-วันที่นัดส่งงานคือ : ${r.due_date}
+${dueLine}
 ขอให้คุน ${r.assignee_name} ช่วยวางแผน และ ส่งงานตามกำหนดด้วย
 ขอบคุนครับ.`;
+  };
 
   const normalizePhone = (p: string) => {
     let s = (p || "").replace(/[^\d+]/g, "");
@@ -346,7 +364,7 @@ export default function SRRJobAssignPage() {
           } as any);
         if (error) throw error;
 
-        const fileLink = attachment_url ? await getSignedUrl(attachment_url) : "";
+        const fileLink = attachment_url ? await shortenUrl(await getSignedUrl(attachment_url)) : "";
         const msg = buildMessage({
           assignee_name: assignee.trim(),
           content: content.trim(),
@@ -368,24 +386,26 @@ export default function SRRJobAssignPage() {
   };
 
   const handleResend = async (r: JobRow) => {
-    const fileLink = r.attachment_url ? await getSignedUrl(r.attachment_url) : "";
+    const fileLink = r.attachment_url ? await shortenUrl(await getSignedUrl(r.attachment_url)) : "";
     const msg = buildMessage({
       assignee_name: r.assignee_name,
       content: r.content,
       due_date: r.due_date,
       fileLink,
+      original_due_date: r.original_due_date,
     });
     openWhatsApp(r.assignee_phone || "", msg);
   };
 
   // ===== ทวงงาน — ข้อความเดิม + หัวเรื่องเด่น (WhatsApp ส่งสติกเกอร์จริง/reply เจาะจงไม่ได้) =====
   const handleRemind = async (r: JobRow) => {
-    const fileLink = r.attachment_url ? await getSignedUrl(r.attachment_url) : "";
+    const fileLink = r.attachment_url ? await shortenUrl(await getSignedUrl(r.attachment_url)) : "";
     const base = buildMessage({
       assignee_name: r.assignee_name,
       content: r.content,
       due_date: r.due_date,
       fileLink,
+      original_due_date: r.original_due_date,
     });
     const overdue = daysUntil(r.due_date);
     const overdueLine = overdue < 0 ? `\n⏰ เลยกำหนดส่งมาแล้ว ${Math.abs(overdue)} วัน` : overdue === 0 ? `\n⏰ ครบกำหนดส่ง *วันนี้*` : "";
