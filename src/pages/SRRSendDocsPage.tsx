@@ -631,6 +631,8 @@ function ReportTab({ items, movements, poInfoMap, ensurePoInfo, canExport, final
   const [search, setSearch] = useState("");
   const [partnerDocSearch, setPartnerDocSearch] = useState<Record<string, string>>({});
   const [expandedDocId, setExpandedDocId] = useState<string | null>(null);
+  // ความกว้างคอลัมน์ตาราง Report (ลากปรับได้) — เก็บเป็น px ต่อ key
+  const [colWidths, setColWidths] = useState<Record<string, number>>({});
 
   useEffect(() => {
     (async () => {
@@ -808,6 +810,40 @@ function ReportTab({ items, movements, poInfoMap, ensurePoInfo, canExport, final
     partnerList.some(p => (pivot[p]?.[l] || 0) > 0)
   );
 
+  // ===== Resizable columns (ลาก ยืด หด ได้) =====
+  const DEFAULT_W: Record<string, number> = { expand: 36, partner: 240, total: 90 };
+  const colW = (key: string, def: number) => colWidths[key] ?? def;
+  const startResize = (key: string, def: number) => (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startW = colW(key, def);
+    const onMove = (ev: MouseEvent) =>
+      setColWidths(w => ({ ...w, [key]: Math.max(48, startW + ev.clientX - startX) }));
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  };
+  const ResizeHandle = ({ k, def }: { k: string; def: number }) => (
+    <span
+      onMouseDown={startResize(k, def)}
+      onClick={(e) => e.stopPropagation()}
+      className="absolute top-0 right-0 h-full w-1.5 cursor-col-resize select-none hover:bg-primary/50 active:bg-primary"
+    />
+  );
+  const expandW = colW("expand", DEFAULT_W.expand);
+  const partnerW = colW("partner", DEFAULT_W.partner);
+  const totalW = colW("total", DEFAULT_W.total);
+  const tableW = expandW + partnerW + totalW +
+    activeLocations.reduce((s, l) => s + colW("loc:" + l, 120), 0);
+
   const exportExcel = () => {
     const sheet1: any[] = [];
     partnerList.forEach(p => {
@@ -933,14 +969,31 @@ function ReportTab({ items, movements, poInfoMap, ensurePoInfo, canExport, final
         )}
       </div>
       <div className="border rounded overflow-auto max-h-[calc(100vh-260px)]">
-        <table className="w-full text-sm">
+        <table className="text-sm table-fixed" style={{ width: tableW }}>
+          <colgroup>
+            <col style={{ width: expandW }} />
+            <col style={{ width: partnerW }} />
+            <col style={{ width: totalW }} />
+            {activeLocations.map(l => (
+              <col key={l} style={{ width: colW("loc:" + l, 120) }} />
+            ))}
+          </colgroup>
           <thead className="bg-muted sticky top-0 z-10">
             <tr>
-              <th className="w-6 p-2"></th>
-              <th className="text-left p-2">Partner</th>
-              <th className="text-center p-2">Total PO</th>
+              <th className="relative p-2"></th>
+              <th className="relative text-left p-2">
+                Partner
+                <ResizeHandle k="partner" def={DEFAULT_W.partner} />
+              </th>
+              <th className="relative text-center p-2">
+                Total PO
+                <ResizeHandle k="total" def={DEFAULT_W.total} />
+              </th>
               {activeLocations.map(l => (
-                <th key={l} className="text-center p-2 whitespace-nowrap">{l}</th>
+                <th key={l} className="relative text-center p-2 overflow-hidden text-ellipsis whitespace-nowrap" title={l}>
+                  {l}
+                  <ResizeHandle k={"loc:" + l} def={120} />
+                </th>
               ))}
             </tr>
           </thead>
@@ -957,7 +1010,7 @@ function ReportTab({ items, movements, poInfoMap, ensurePoInfo, canExport, final
                         {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                       </Button>
                     </td>
-                    <td className="p-2 font-medium">{p}</td>
+                    <td className="p-2 font-medium overflow-hidden text-ellipsis whitespace-nowrap" title={p}>{p}</td>
                     <td className="p-2 text-center"><Badge variant="secondary">{totalPoByPartner[p] || 0}</Badge></td>
                     {activeLocations.map(l => (
                       <td key={l} className="p-2 text-center">
