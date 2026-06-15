@@ -1617,6 +1617,7 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
     const CONCURRENCY = 4;    // จำนวน insert ที่ส่งพร้อมกัน
     setBigImportProgress({ current: 0, total: 0, phase: "กำลังอ่านไฟล์ (ไม่ค้างจอ)..." });
 
+    console.log("[BigImport] start", { name: file.name, sizeMB: (file.size / 1048576).toFixed(1) });
     const worker = new Worker(new URL("../workers/dataMasterImport.worker.ts", import.meta.url), { type: "module" });
 
     let total = 0;
@@ -1626,6 +1627,19 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
     let failed = false;
     let resolveAll: () => void;
     const finished = new Promise<void>((res) => { resolveAll = res; });
+
+    // ดักจับ worker crash (เช่น parse ไฟล์ใหญ่จน RAM เต็ม) เพื่อไม่ให้ค้างเงียบ
+    const failWith = (msg: string) => {
+      if (failed) return;
+      failed = true;
+      console.error("[BigImport] FAILED:", msg);
+      try { worker.terminate(); } catch { /* noop */ }
+      toast({ title: "Import ล้มเหลว", description: msg, variant: "destructive" });
+      setBigImportProgress(null);
+      resolveAll();
+    };
+    worker.onerror = (err) => failWith(`Worker error: ${err.message || "ไฟล์อาจใหญ่เกินหน่วยความจำเบราว์เซอร์"}`);
+    worker.onmessageerror = () => failWith("Worker message error (ส่งข้อมูลกลับไม่ได้)");
 
     const insertBatch = async (rows: Record<string, any>[]) => {
       const { data, error } = await supabase.functions.invoke("data-master-bulk-import", { body: { rows } });
@@ -1643,6 +1657,7 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
       if (failed) return;
       if (m.type === "parsed") {
         total = m.total;
+        console.log("[BigImport] parsed rows:", total);
         setBigImportProgress({ current: 0, total, phase: "กำลังบันทึกเข้าฐานข้อมูล" });
         for (let k = 0; k < CONCURRENCY; k++) worker.postMessage({ type: "pull" }); // เปิด credit เริ่มต้น
       } else if (m.type === "batch") {
@@ -1655,14 +1670,7 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
             if (!parsingDone) worker.postMessage({ type: "pull" }); // ขอ batch ถัดไป (คืน credit)
             maybeFinish();
           })
-          .catch((err) => {
-            if (failed) return;
-            failed = true;
-            worker.terminate();
-            toast({ title: "Import ผิดพลาด", description: err.message, variant: "destructive" });
-            setBigImportProgress(null);
-            resolveAll();
-          });
+          .catch((err) => failWith(err.message || "insert ล้มเหลว"));
       } else if (m.type === "done") {
         total = m.total || total;
         parsingDone = true;
@@ -1673,11 +1681,7 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
         }
         maybeFinish();
       } else if (m.type === "error") {
-        failed = true;
-        worker.terminate();
-        toast({ title: "อ่านไฟล์ผิดพลาด", description: m.message, variant: "destructive" });
-        setBigImportProgress(null);
-        resolveAll();
+        failWith(`อ่านไฟล์ผิดพลาด: ${m.message}`);
       }
     };
 

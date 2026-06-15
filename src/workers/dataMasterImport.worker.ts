@@ -30,10 +30,14 @@ self.onmessage = async (e: MessageEvent<InMsg>) => {
 
   try {
     const { file, tableName, batchSize } = msg;
+    console.log("[worker] arrayBuffer...");
     const buffer = await file.arrayBuffer();
+    console.log("[worker] XLSX.read...", (buffer.byteLength / 1048576).toFixed(1), "MB");
     const workbook = XLSX.read(buffer, { type: "array" });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    console.log("[worker] sheet_to_json...");
     const rows = XLSX.utils.sheet_to_json<Record<string, any>>(sheet);
+    console.log("[worker] rows parsed:", rows.length);
 
     if (rows.length === 0) {
       (self as any).postMessage({ type: "done", total: 0 });
