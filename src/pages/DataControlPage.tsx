@@ -110,6 +110,8 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
 
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const bigFileInputRef = useRef<HTMLInputElement>(null);
+  const [bigImportProgress, setBigImportProgress] = useState<{ current: number; total: number; phase: string } | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const tableContainerRef = useRef<HTMLDivElement>(null);
   const [importMode, setImportMode] = useState<"insert" | "update">("insert");
@@ -1604,6 +1606,92 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
     setPendingFile(null);
   };
 
+  // Big-file import (data_master) — parse ใน Web Worker (จอไม่ค้าง), ส่ง batch ขนานเข้า Edge Function
+  // โหมดนี้เป็น INSERT ล้วน: ผู้ใช้ต้อง Clear/Delete ตารางให้ว่างก่อน
+  const handleBigImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+
+    const BATCH = 2000;       // แถวต่อ 1 invoke
+    const CONCURRENCY = 4;    // จำนวน insert ที่ส่งพร้อมกัน
+    setBigImportProgress({ current: 0, total: 0, phase: "กำลังอ่านไฟล์ (ไม่ค้างจอ)..." });
+
+    const worker = new Worker(new URL("../workers/dataMasterImport.worker.ts", import.meta.url), { type: "module" });
+
+    let total = 0;
+    let inserted = 0;
+    let inflight = 0;
+    let parsingDone = false;
+    let failed = false;
+    let resolveAll: () => void;
+    const finished = new Promise<void>((res) => { resolveAll = res; });
+
+    const insertBatch = async (rows: Record<string, any>[]) => {
+      const { data, error } = await supabase.functions.invoke("data-master-bulk-import", { body: { rows } });
+      if (error || (data && (data as any).error)) {
+        throw new Error(error?.message || (data as any)?.error || "insert failed");
+      }
+    };
+
+    const maybeFinish = () => {
+      if (parsingDone && inflight === 0 && !failed) resolveAll();
+    };
+
+    worker.onmessage = (ev: MessageEvent<any>) => {
+      const m = ev.data;
+      if (failed) return;
+      if (m.type === "parsed") {
+        total = m.total;
+        setBigImportProgress({ current: 0, total, phase: "กำลังบันทึกเข้าฐานข้อมูล" });
+        for (let k = 0; k < CONCURRENCY; k++) worker.postMessage({ type: "pull" }); // เปิด credit เริ่มต้น
+      } else if (m.type === "batch") {
+        inflight += 1;
+        insertBatch(m.rows)
+          .then(() => {
+            inserted += m.rows.length;
+            setBigImportProgress({ current: inserted, total, phase: "กำลังบันทึกเข้าฐานข้อมูล" });
+            inflight -= 1;
+            if (!parsingDone) worker.postMessage({ type: "pull" }); // ขอ batch ถัดไป (คืน credit)
+            maybeFinish();
+          })
+          .catch((err) => {
+            if (failed) return;
+            failed = true;
+            worker.terminate();
+            toast({ title: "Import ผิดพลาด", description: err.message, variant: "destructive" });
+            setBigImportProgress(null);
+            resolveAll();
+          });
+      } else if (m.type === "done") {
+        total = m.total || total;
+        parsingDone = true;
+        if (total === 0) {
+          toast({ title: "ไม่พบข้อมูล", description: "ไฟล์ไม่มีข้อมูล", variant: "destructive" });
+          setBigImportProgress(null);
+          resolveAll();
+        }
+        maybeFinish();
+      } else if (m.type === "error") {
+        failed = true;
+        worker.terminate();
+        toast({ title: "อ่านไฟล์ผิดพลาด", description: m.message, variant: "destructive" });
+        setBigImportProgress(null);
+        resolveAll();
+      }
+    };
+
+    worker.postMessage({ type: "start", file, tableName: activeTable, batchSize: BATCH });
+
+    await finished;
+    worker.terminate();
+    if (!failed && total > 0) {
+      toast({ title: "Import สำเร็จ", description: `บันทึก ${inserted.toLocaleString()} แถว` });
+      setBigImportProgress(null);
+      await fetchData();
+    }
+  };
+
   const toggleColHighlight = (col: string) => {
     setSelectedCols(prev => {
       const next = new Set(prev);
@@ -1903,6 +1991,7 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleImport} className="hidden" />
+          <input ref={bigFileInputRef} type="file" accept=".xlsx,.xls" onChange={handleBigImport} className="hidden" />
           {activeTable === "po_cost" && (
             <>
               <div className="flex items-center gap-1 text-xs">
@@ -1956,14 +2045,14 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
           {(canImport || canEdit) && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button size="sm" variant="outline" className="text-xs" disabled={!!importProgress || poCostImportLoading}>
-                  {(importProgress || poCostImportProgress) ? (
+                <Button size="sm" variant="outline" className="text-xs" disabled={!!importProgress || poCostImportLoading || !!bigImportProgress}>
+                  {(importProgress || poCostImportProgress || bigImportProgress) ? (
                     <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
                   ) : (
                     <Upload className="w-3.5 h-3.5 mr-1" />
                   )}
                   {(() => {
-                    const p = poCostImportProgress || importProgress;
+                    const p = poCostImportProgress || importProgress || bigImportProgress;
                     if (!p) return "Import";
                     return `${p.phase}${p.total ? ` · ${p.current.toLocaleString()}/${p.total.toLocaleString()} (${Math.floor((p.current / Math.max(p.total, 1)) * 100)}%)` : ""}`;
                   })()}
@@ -1973,6 +2062,11 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
                 {canImport && activeTable !== "po_cost" && (
                   <DropdownMenuItem onClick={() => { setImportMode("insert"); fileInputRef.current?.click(); }}>
                     <Upload className="w-3.5 h-3.5 mr-2" /> Insert (เพิ่มข้อมูลใหม่)
+                  </DropdownMenuItem>
+                )}
+                {canImport && activeTable === "data_master" && (
+                  <DropdownMenuItem onClick={() => bigFileInputRef.current?.click()}>
+                    <Upload className="w-3.5 h-3.5 mr-2" /> Insert ไฟล์ใหญ่ (100MB+ · Clear ตารางก่อน)
                   </DropdownMenuItem>
                 )}
                 {canEdit && (

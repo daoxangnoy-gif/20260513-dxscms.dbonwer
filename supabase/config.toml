@@ -2,3 +2,6 @@ project_id = "sdpplaljveqcesnxwcxz"
 
 [functions.admin-update-user]
 verify_jwt = true
+
+[functions.data-master-bulk-import]
+verify_jwt = true
