@@ -19,8 +19,9 @@ import {
   OOSRow, OOSFilters, OOSSummary, OOSSnapshotMeta, OOSFilterOptions, OOSTrendRow,
   getOOSDetailPreview, getOOSDetailPage, saveOOSSnapshot, getOOSFilterOptions, listOOSSnapshots,
   loadOOSSnapshotRows, computeOOSSummary, getWeekLabel, getISOWeek, getOOSTrend, deleteOOSSnapshot,
-  refreshOOSMv, getOOSMvStatus, importOOSSnapshot, getOOSStoreSummary,
+  refreshOOSMv, getOOSMvStatus, importOOSSnapshot, getOOSStoreSummary, getOOSCoreSummary,
   OOSStoreSummaryRow, OOSTypeTotalRow, DCSummaryRow, computeDCCoverage,
+  OOSCoreStoreRow, OOSCoreTypeRow,
 } from "@/lib/oosService";
 import { supabase } from "@/integrations/supabase/client";
 import { fetchCoreItemMap } from "@/lib/coreItemService";
@@ -167,6 +168,8 @@ export default function ReportOOSPage() {
   const [compareTotals, setCompareTotals] = useState<OOSTypeTotalRow[]>([]);
   const [compareDcStores, setCompareDcStores] = useState<DCSummaryRow[]>([]);
   const [compareDcTotals, setCompareDcTotals] = useState<DCSummaryRow[]>([]);
+  const [compareCoreStores, setCompareCoreStores] = useState<OOSCoreStoreRow[]>([]);
+  const [compareCoreTotals, setCompareCoreTotals] = useState<OOSCoreTypeRow[]>([]);
   const [comparing, setComparing] = useState(false);
   const [exporting, setExporting] = useState(false);
 
@@ -380,6 +383,7 @@ export default function ReportOOSPage() {
   const clearCompare = () => {
     setCompareWeeks(null); setCompareStores([]); setCompareTotals([]);
     setCompareDcStores([]); setCompareDcTotals([]);
+    setCompareCoreStores([]); setCompareCoreTotals([]);
   };
 
   const handleCompareWeeks = async () => {
@@ -397,6 +401,15 @@ export default function ReportOOSPage() {
       setCompareTotals(res.totals);
       setCompareDcStores(res.dc_stores || []);
       setCompareDcTotals(res.dc_totals || []);
+      // Core Item ราย store/type (คำนวณ client-side จาก snapshot rows) — 1 snapshot ต่อ week
+      const weekSnaps = weeks.map((w) => {
+        const sn = picked.find((s) => s.week_label === w);
+        return sn ? { week_label: w, snapshot_id: sn.id } : null;
+      }).filter(Boolean) as { week_label: string; snapshot_id: string }[];
+      setLoadStatus("กำลังคำนวณ Core Item ราย store...");
+      const core = await getOOSCoreSummary(weekSnaps);
+      setCompareCoreStores(core.stores);
+      setCompareCoreTotals(core.totals);
       setActiveTab("report");
       setLastLoadInfo(`เทียบ ${weeks.length} week: ${weeks.join(", ")}`);
     } catch (e: any) {
@@ -429,8 +442,13 @@ export default function ReportOOSPage() {
     for (const r of compareDcStores) dcSMap.set(sKey(r.week_label, r.type_store, r.store_name || ""), r);
     const dcTMap = new Map<string, DCSummaryRow>();
     for (const r of compareDcTotals) dcTMap.set(tKey(r.week_label, r.type_store), r);
-    return { sMap, tMap, rowsList, types, sKey, tKey, dcSMap, dcTMap };
-  }, [compareWeeks, compareStores, compareTotals, compareDcStores, compareDcTotals]);
+    // Core Item maps (ราย store + ราย type total)
+    const csMap = new Map<string, OOSCoreStoreRow>();
+    for (const r of compareCoreStores) csMap.set(sKey(r.week_label, r.type_store, r.store_name), r);
+    const ctMap = new Map<string, OOSCoreTypeRow>();
+    for (const r of compareCoreTotals) ctMap.set(tKey(r.week_label, r.type_store), r);
+    return { sMap, tMap, rowsList, types, sKey, tKey, dcSMap, dcTMap, csMap, ctMap };
+  }, [compareWeeks, compareStores, compareTotals, compareDcStores, compareDcTotals, compareCoreStores, compareCoreTotals]);
 
   // DC Coverage (ในสินค้า Store OOS — DC เติมได้ไหม) จาก rows ที่โหลด
   const dcCoverage = useMemo(() => (rows.length ? computeDCCoverage(rows) : null), [rows]);
@@ -947,16 +965,17 @@ export default function ReportOOSPage() {
                       <th rowSpan={2} className="sticky left-0 z-10 bg-muted px-2 py-1 text-left border-r border-b">Type store</th>
                       <th rowSpan={2} className="px-2 py-1 text-left border-r border-b">Store Name</th>
                       {compareWeeks.map((w) => (
-                        <th key={w} colSpan={4} className="px-2 py-1 text-center border-l border-r border-b font-semibold">{w}</th>
+                        <th key={w} colSpan={5} className="px-2 py-1 text-center border-l border-r border-b font-semibold">{w}</th>
                       ))}
                     </tr>
                     <tr>
                       {compareWeeks.map((w) => (
                         <Fragment key={w}>
-                          <th className="px-1.5 py-1 text-right border-l border-b font-medium">Have</th>
-                          <th className="px-1.5 py-1 text-right border-b font-medium">OOS</th>
+                          <th className="px-1.5 py-1 text-right border-l border-b font-medium">OOS</th>
                           <th className="px-1.5 py-1 text-right border-b font-medium">Range</th>
-                          <th className="px-1.5 py-1 text-right border-r border-b font-medium">%OOS</th>
+                          <th className="px-1.5 py-1 text-right border-b font-medium">%OOS</th>
+                          <th className="px-1.5 py-1 text-right border-l border-b font-medium text-blue-600">Core OOS</th>
+                          <th className="px-1.5 py-1 text-right border-r border-b font-medium text-blue-600">Core %OOS</th>
                         </Fragment>
                       ))}
                     </tr>
@@ -968,14 +987,19 @@ export default function ReportOOSPage() {
                       const firstOfType = !prev || prev.type_store !== row.type_store;
                       const lastOfType = !next || next.type_store !== row.type_store;
                       const pctOf = (oos?: number | null, rng?: number | null) => (rng && rng > 0 ? (oos ?? 0) / rng : null);
-                      const cell = (have: number | null, oos: number | null, rng: number | null, prevPct: number | null) => {
+                      const cell = (
+                        oos: number | null, rng: number | null, prevPct: number | null,
+                        coreOos: number | null, coreRng: number | null, prevCorePct: number | null,
+                      ) => {
                         const p = pctOf(oos, rng);
+                        const cp = pctOf(coreOos, coreRng);
                         return (
                           <>
-                            <td className="px-1.5 py-0.5 text-right tabular-nums border-l">{have == null ? "-" : have.toLocaleString()}</td>
-                            <td className="px-1.5 py-0.5 text-right tabular-nums">{oos == null ? "-" : oos.toLocaleString()}</td>
+                            <td className="px-1.5 py-0.5 text-right tabular-nums border-l">{oos == null ? "-" : oos.toLocaleString()}</td>
                             <td className="px-1.5 py-0.5 text-right tabular-nums">{rng == null ? "-" : rng.toLocaleString()}</td>
-                            <td className={`px-1.5 py-0.5 text-right tabular-nums border-r ${cmpBg(p, prevPct)} ${p != null ? pctClass(p) : ""}`}>{p != null ? pct(p) : "-"}</td>
+                            <td className={`px-1.5 py-0.5 text-right tabular-nums ${cmpBg(p, prevPct)} ${p != null ? pctClass(p) : ""}`}>{p != null ? pct(p) : "-"}</td>
+                            <td className="px-1.5 py-0.5 text-right tabular-nums border-l text-blue-700">{coreOos == null ? "-" : coreOos.toLocaleString()}</td>
+                            <td className={`px-1.5 py-0.5 text-right tabular-nums border-r ${cmpBg(cp, prevCorePct)} ${cp != null ? pctClass(cp) : ""}`}>{cp != null ? pct(cp) : "-"}</td>
                           </>
                         );
                       };
@@ -987,7 +1011,9 @@ export default function ReportOOSPage() {
                             {compareWeeks.map((w, wi) => {
                               const c = compareView.sMap.get(compareView.sKey(w, row.type_store, row.store_name));
                               const pc = wi > 0 ? compareView.sMap.get(compareView.sKey(compareWeeks[wi - 1], row.type_store, row.store_name)) : undefined;
-                              return <Fragment key={w}>{cell(c?.have ?? null, c?.oos ?? null, c?.range_cnt ?? null, pctOf(pc?.oos, pc?.range_cnt))}</Fragment>;
+                              const cc = compareView.csMap.get(compareView.sKey(w, row.type_store, row.store_name));
+                              const pcc = wi > 0 ? compareView.csMap.get(compareView.sKey(compareWeeks[wi - 1], row.type_store, row.store_name)) : undefined;
+                              return <Fragment key={w}>{cell(c?.oos ?? null, c?.range_cnt ?? null, pctOf(pc?.oos, pc?.range_cnt), cc?.core_oos ?? null, cc?.core_range ?? null, pctOf(pcc?.core_oos, pcc?.core_range))}</Fragment>;
                             })}
                           </tr>
                           {lastOfType && (
@@ -997,7 +1023,9 @@ export default function ReportOOSPage() {
                               {compareWeeks.map((w, wi) => {
                                 const t = compareView.tMap.get(compareView.tKey(w, row.type_store));
                                 const pt = wi > 0 ? compareView.tMap.get(compareView.tKey(compareWeeks[wi - 1], row.type_store)) : undefined;
-                                return <Fragment key={w}>{cell(t?.have ?? null, t?.oos ?? null, t?.range_cnt ?? null, pctOf(pt?.oos, pt?.range_cnt))}</Fragment>;
+                                const ct = compareView.ctMap.get(compareView.tKey(w, row.type_store));
+                                const pct2 = wi > 0 ? compareView.ctMap.get(compareView.tKey(compareWeeks[wi - 1], row.type_store)) : undefined;
+                                return <Fragment key={w}>{cell(t?.oos ?? null, t?.range_cnt ?? null, pctOf(pt?.oos, pt?.range_cnt), ct?.core_oos ?? null, ct?.core_range ?? null, pctOf(pct2?.core_oos, pct2?.core_range))}</Fragment>;
                               })}
                             </tr>
                           )}
@@ -1007,7 +1035,7 @@ export default function ReportOOSPage() {
                   </tbody>
                 </table>
               </div>
-              <p className="text-[10px] text-muted-foreground mt-2">Have/OOS/Range ราย store = นับตรง · Total = Distinct SKU (OOS = ขาดทุกสาขา)</p>
+              <p className="text-[10px] text-muted-foreground mt-2">OOS/Range ราย store = นับตรง · Total = Distinct SKU (OOS = ขาดทุกสาขา) · Core OOS/%OOS = เฉพาะ Core Item (% = Core OOS ÷ Core Range, Total = distinct) · ซ่อนคอลัมน์ Have ชั่วคราว</p>
 
               {/* ===== DC Coverage By Weekly (cross-tab) ===== */}
               <div className="text-sm font-medium mt-6 mb-1">Status Stock DC <span className="text-muted-foreground font-normal">(ในสินค้า Store OOS — DC เติมได้ไหม)</span></div>

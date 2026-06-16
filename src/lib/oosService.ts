@@ -235,6 +235,64 @@ export async function getOOSStoreSummary(weeks: string[]): Promise<OOSCompareRes
   return (data || { stores: [], totals: [], dc_stores: [], dc_totals: [] }) as OOSCompareResult;
 }
 
+// ===== Core Item ราย store/type สำหรับตารางเทียบ week =====
+// RPC get_oos_store_summary ยังไม่มี Core → คำนวณ client-side จาก snapshot rows (filter core_item)
+//   ราย store = นับตรง (1 row = 1 sku) · ราย type = distinct B (oos = ขาดทุกสาขา)
+export interface OOSCoreStoreRow { week_label: string; type_store: string; store_name: string; core_oos: number; core_range: number; }
+export interface OOSCoreTypeRow { week_label: string; type_store: string; core_oos: number; core_range: number; }
+
+export async function getOOSCoreSummary(
+  weekSnaps: { week_label: string; snapshot_id: string }[]
+): Promise<{ stores: OOSCoreStoreRow[]; totals: OOSCoreTypeRow[] }> {
+  const stores: OOSCoreStoreRow[] = [];
+  const totals: OOSCoreTypeRow[] = [];
+  for (const { week_label, snapshot_id } of weekSnaps) {
+    // โหลดเฉพาะแถว Core Item (คอลัมน์เท่าที่ใช้) แบบแบ่งหน้า parallel
+    const { count } = await (supabase as any)
+      .from("oos_snapshot_rows").select("id", { count: "exact", head: true })
+      .eq("snapshot_id", snapshot_id).eq("core_item", "Core Item");
+    const total = count || 0;
+    const pageSize = 1000;
+    const pageCount = Math.ceil(total / pageSize);
+    const parts: any[][] = new Array(pageCount);
+    let cursor = 0;
+    const worker = async () => {
+      while (true) {
+        const p = cursor++;
+        if (p >= pageCount) break;
+        const from = p * pageSize;
+        const { data, error } = await (supabase as any)
+          .from("oos_snapshot_rows").select("type_store,store_name,sku,remark_oos")
+          .eq("snapshot_id", snapshot_id).eq("core_item", "Core Item")
+          .order("id", { ascending: true }).range(from, from + pageSize - 1);
+        if (error) throw error;
+        parts[p] = data || [];
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(8, pageCount) }, () => worker()));
+    const rows = parts.flat();
+
+    const sMap = new Map<string, { type_store: string; store_name: string; oos: number; range: number }>();
+    const tSku = new Map<string, { range: Set<string>; have: Set<string> }>();
+    for (const r of rows) {
+      const ts = r.type_store || "(ไม่ระบุ)";
+      const isOOS = r.remark_oos === "Store OOS";
+      const sk = `${ts}|||${r.store_name}`;
+      let s = sMap.get(sk);
+      if (!s) { s = { type_store: ts, store_name: r.store_name, oos: 0, range: 0 }; sMap.set(sk, s); }
+      s.range++; if (isOOS) s.oos++;
+      let t = tSku.get(ts);
+      if (!t) { t = { range: new Set(), have: new Set() }; tSku.set(ts, t); }
+      t.range.add(r.sku); if (!isOOS) t.have.add(r.sku);
+    }
+    for (const s of sMap.values())
+      stores.push({ week_label, type_store: s.type_store, store_name: s.store_name, core_oos: s.oos, core_range: s.range });
+    for (const [ts, t] of tSku.entries())
+      totals.push({ week_label, type_store: ts, core_oos: t.range.size - t.have.size, core_range: t.range.size });
+  }
+  return { stores, totals };
+}
+
 // ===== Trend (เทียบ %OOS ระหว่าง week) =====
 export async function getOOSTrend(): Promise<OOSTrendRow[]> {
   const { data, error } = await (supabase as any).rpc("get_oos_trend");
