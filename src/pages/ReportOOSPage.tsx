@@ -23,6 +23,7 @@ import {
   OOSStoreSummaryRow, OOSTypeTotalRow, DCSummaryRow, computeDCCoverage,
 } from "@/lib/oosService";
 import { supabase } from "@/integrations/supabase/client";
+import { fetchCoreItemMap } from "@/lib/coreItemService";
 
 const GET_CHUNK = 50000; // ขนาด chunk ตอนโหลดชุดเต็ม (เลี่ยง payload ใหญ่)
 
@@ -102,6 +103,7 @@ export default function ReportOOSPage() {
   // data
   const [rows, setRows] = useState<OOSRow[]>([]);
   const [summary, setSummary] = useState<OOSSummary | null>(null);
+  const [coreTotal, setCoreTotal] = useState<number | null>(null); // จำนวน Core Item ทั้งหมดใน master (core_item table)
 
   // ความกว้างคอลัมน์ Data tab (ลากปรับได้)
   const [colW, setColW] = useState<Record<string, number>>(() =>
@@ -179,6 +181,7 @@ export default function ReportOOSPage() {
     );
     refreshSnapshots();
     getOOSMvStatus().then((s) => setMvAt(s.refreshed_at)).catch(() => {});
+    fetchCoreItemMap().then((m) => setCoreTotal(m.size)).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1075,7 +1078,7 @@ export default function ReportOOSPage() {
                 <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Total Range SKU</CardTitle></CardHeader><CardContent><p className="text-2xl font-bold">{summary.grand.range.toLocaleString()}</p></CardContent></Card>
                 <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Total OOS SKU</CardTitle></CardHeader><CardContent><p className="text-2xl font-bold text-destructive">{summary.grand.oos.toLocaleString()}</p></CardContent></Card>
                 <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Overall % OOS</CardTitle></CardHeader><CardContent><p className={`text-2xl font-bold ${pctClass(summary.grand.pct_oos)}`}>{pct(summary.grand.pct_oos)}</p></CardContent></Card>
-                <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Core Item OOS</CardTitle></CardHeader><CardContent><p className={`text-2xl font-bold ${pctClass(summary.core.pct_oos)}`}>{summary.core.oos.toLocaleString()} <span className="text-base">({pct(summary.core.pct_oos)})</span></p><p className="text-[10px] text-muted-foreground mt-0.5">จาก Core Range {summary.core.range.toLocaleString()}</p></CardContent></Card>
+                <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Core Item OOS</CardTitle></CardHeader><CardContent><p className={`text-2xl font-bold ${pctClass(summary.core.pct_oos)}`}>{summary.core.oos.toLocaleString()} <span className="text-base">({pct(summary.core.pct_oos)})</span></p><p className="text-[10px] text-muted-foreground mt-0.5">Range {summary.core.range.toLocaleString()}{coreTotal != null ? ` / ${coreTotal.toLocaleString()}` : ""} Core</p></CardContent></Card>
               </div>
               <div className="overflow-auto border rounded">
                 <Table>
