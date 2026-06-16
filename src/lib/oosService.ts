@@ -53,6 +53,8 @@ export interface OOSSummary {
   stores: OOSStoreSummary[];
   totals: OOSTypeTotal[];
   grand: { have_stock: number; oos: number; range: number; pct_oos: number };
+  // เฉพาะ Core Item — distinct SKU, นิยาม B (oos = ขาดทุกสาขา) · pct_oos = oos / range (Core Item Range)
+  core: { oos: number; range: number; pct_oos: number };
 }
 
 export interface OOSSnapshotMeta {
@@ -347,6 +349,8 @@ export function computeOOSSummary(rows: OOSRow[]): OOSSummary {
     { range: Set<string>; oos: Set<string>; have: Set<string> }
   >();
   const grandSku = { range: new Set<string>(), oos: new Set<string>(), have: new Set<string>() };
+  // เฉพาะ Core Item — distinct SKU แยกสถานะ (นิยาม B เช่นกัน)
+  const coreSku = { range: new Set<string>(), have: new Set<string>() };
 
   for (const r of rows) {
     const ts = r.type_store || "(ไม่ระบุ)";
@@ -374,6 +378,11 @@ export function computeOOSSummary(rows: OOSRow[]): OOSSummary {
     } else {
       t.have.add(r.sku);
       grandSku.have.add(r.sku);
+    }
+
+    if (r.core_item === "Core Item") {
+      coreSku.range.add(r.sku);
+      if (!isOOS) coreSku.have.add(r.sku);
     }
   }
 
@@ -404,5 +413,13 @@ export function computeOOSSummary(rows: OOSRow[]): OOSSummary {
     pct_oos: grandSku.range.size > 0 ? grandOos / grandSku.range.size : 0,
   };
 
-  return { stores, totals, grand };
+  // Core Item OOS (นิยาม B) = Core Item range − Core Item ที่มีของ ≥1 สาขา · % = OOS / Core Item Range
+  const coreOos = coreSku.range.size - coreSku.have.size;
+  const core = {
+    oos: coreOos,
+    range: coreSku.range.size,
+    pct_oos: coreSku.range.size > 0 ? coreOos / coreSku.range.size : 0,
+  };
+
+  return { stores, totals, grand, core };
 }

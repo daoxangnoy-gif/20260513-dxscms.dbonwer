@@ -1071,10 +1071,11 @@ export default function ReportOOSPage() {
             </div>
           ) : (
             <>
-              <div className="grid grid-cols-3 gap-3 mb-3">
+              <div className="grid grid-cols-4 gap-3 mb-3">
                 <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Total Range SKU</CardTitle></CardHeader><CardContent><p className="text-2xl font-bold">{summary.grand.range.toLocaleString()}</p></CardContent></Card>
                 <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Total OOS SKU</CardTitle></CardHeader><CardContent><p className="text-2xl font-bold text-destructive">{summary.grand.oos.toLocaleString()}</p></CardContent></Card>
                 <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Overall % OOS</CardTitle></CardHeader><CardContent><p className={`text-2xl font-bold ${pctClass(summary.grand.pct_oos)}`}>{pct(summary.grand.pct_oos)}</p></CardContent></Card>
+                <Card><CardHeader className="pb-2"><CardTitle className="text-xs text-muted-foreground">Core Item OOS</CardTitle></CardHeader><CardContent><p className={`text-2xl font-bold ${pctClass(summary.core.pct_oos)}`}>{summary.core.oos.toLocaleString()} <span className="text-base">({pct(summary.core.pct_oos)})</span></p><p className="text-[10px] text-muted-foreground mt-0.5">จาก Core Range {summary.core.range.toLocaleString()}</p></CardContent></Card>
               </div>
               <div className="overflow-auto border rounded">
                 <Table>
