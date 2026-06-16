@@ -346,7 +346,6 @@ export function computeOOSSummary(rows: OOSRow[]): OOSSummary {
     string,
     { range: Set<string>; oos: Set<string>; have: Set<string> }
   >();
-  const grandSku = { range: new Set<string>(), oos: new Set<string>(), have: new Set<string>() };
 
   for (const r of rows) {
     const ts = r.type_store || "(ไม่ระบุ)";
@@ -367,13 +366,10 @@ export function computeOOSSummary(rows: OOSRow[]): OOSSummary {
       typeSku.set(ts, t);
     }
     t.range.add(r.sku);
-    grandSku.range.add(r.sku);
     if (isOOS) {
       t.oos.add(r.sku);
-      grandSku.oos.add(r.sku);
     } else {
       t.have.add(r.sku);
-      grandSku.have.add(r.sku);
     }
   }
 
@@ -396,12 +392,17 @@ export function computeOOSSummary(rows: OOSRow[]): OOSSummary {
     }))
     .sort((a, b) => a.type_store.localeCompare(b.type_store));
 
-  const grandOos = grandSku.range.size - grandSku.have.size;
+  // Grand (การ์ดสรุปด้านบน): รวมแถว OOS/Range "ทุกสาขา" (sum รายสาขา)
+  //   → 1 SKU ที่ขาดใน 3 สาขา นับเป็น 3 · %OOS จะตรงกับค่าเฉลี่ยรายสาขาในตาราง
+  //   (ต่างจากแถว Total ราย type_store ที่เป็น Distinct SKU = นิยาม B)
+  const grandHave = stores.reduce((sum, s) => sum + s.have_stock, 0);
+  const grandOos = stores.reduce((sum, s) => sum + s.oos, 0);
+  const grandRange = stores.reduce((sum, s) => sum + s.range, 0);
   const grand = {
-    have_stock: grandSku.have.size,
+    have_stock: grandHave,
     oos: grandOos,
-    range: grandSku.range.size,
-    pct_oos: grandSku.range.size > 0 ? grandOos / grandSku.range.size : 0,
+    range: grandRange,
+    pct_oos: grandRange > 0 ? grandOos / grandRange : 0,
   };
 
   return { stores, totals, grand };
