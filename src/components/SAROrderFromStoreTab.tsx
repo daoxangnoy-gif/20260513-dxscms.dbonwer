@@ -124,7 +124,9 @@ async function queryInChunks<T>(table: string, field: string, values: string[], 
     const out: T[] = [];
     let off = 0;
     while (true) {
-      let q = (supabase.from(table as any) as any).select(sel).in(field, chunk).range(off, off + 999);
+      // ต้อง order ด้วย field ที่กรอง ไม่งั้น pagination (range) จะข้ามแถวหายเมื่อผลลัพธ์ > 1000 แถว
+      // (1 sku_code มีหลายแถวใน data_master → เกิน 1000 → แบ่งหน้า → ถ้าไม่ order แถวจะหาย → ขึ้น "ไม่พบใน Data master" ทั้งที่มีจริง)
+      let q = (supabase.from(table as any) as any).select(sel).in(field, chunk).order(field, { ascending: true }).range(off, off + 999);
       if (extra) q = extra(q);
       const { data } = await q;
       const rows = (data || []) as T[];
