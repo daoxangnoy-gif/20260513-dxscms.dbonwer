@@ -11,7 +11,7 @@ export default function SRROrderB2BInternalPage() {
         <div className="border-b px-4 pt-3">
           <TabsList className="h-8">
             <TabsTrigger value="brand" className="text-xs gap-1.5">
-              <Tag className="w-3.5 h-3.5" /> Brand
+              <Tag className="w-3.5 h-3.5" /> Brand control
             </TabsTrigger>
           </TabsList>
         </div>
