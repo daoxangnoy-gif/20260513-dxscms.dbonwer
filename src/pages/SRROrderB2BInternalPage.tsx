@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -65,6 +64,22 @@ const fileToDataUrl = (file: File): Promise<string> =>
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+
+// คอลัมน์ของตาราง Monthly usage (1 item = 1 แถว) + ความกว้างเริ่มต้น (px) — ลากปรับได้
+const MU_COLS = [
+  { key: "idx", label: "#", def: 44, min: 36 },
+  { key: "barcode", label: "Barcode (คีย์เอง)", def: 150, min: 90 },
+  { key: "sku", label: "ID (SKU)", def: 120, min: 80 },
+  { key: "bunit", label: "Barcode Unit", def: 140, min: 90 },
+  { key: "uom", label: "UOM", def: 80, min: 60 },
+  { key: "pname", label: "Product name", def: 240, min: 120 },
+  { key: "mqty", label: "Monthly qty", def: 110, min: 80 },
+  { key: "dqty", label: "Daily qty (÷30)", def: 110, min: 70 },
+  { key: "pic", label: "Picture", def: 150, min: 120 },
+  { key: "remark", label: "Remark", def: 200, min: 100 },
+  { key: "act", label: "", def: 74, min: 64 },
+] as const;
+const MU_COL_KEY = "mu_col_widths_v1";
 
 export default function SRROrderB2BInternalPage() {
   const [activeTab, setActiveTab] = useState("brand");
@@ -245,6 +260,39 @@ export default function SRROrderB2BInternalPage() {
   const [selectedBrand, setSelectedBrand] = useState<{ id: string; brand_name: string; branch: string } | null>(null);
   const [muRows, setMuRows] = useState<MonthlyUsageForm[]>([]);
   const [lookup, setLookup] = useState<Record<number, boolean>>({});
+
+  // ความกว้างคอลัมน์ (จำไว้ใน localStorage)
+  const [colW, setColW] = useState<Record<string, number>>(() => {
+    try {
+      const raw = localStorage.getItem(MU_COL_KEY);
+      if (raw) return { ...Object.fromEntries(MU_COLS.map((c) => [c.key, c.def])), ...JSON.parse(raw) };
+    } catch {}
+    return Object.fromEntries(MU_COLS.map((c) => [c.key, c.def]));
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(MU_COL_KEY, JSON.stringify(colW));
+    } catch {}
+  }, [colW]);
+
+  const startColResize = (key: string, minW: number, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startW = colW[key] ?? 100;
+    const onMove = (ev: MouseEvent) => {
+      const w = Math.max(minW, startW + ev.clientX - startX);
+      setColW((prev) => ({ ...prev, [key]: w }));
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  };
+
+  const muTotalW = MU_COLS.reduce((s, c) => s + (colW[c.key] ?? c.def), 0);
 
   const loadBrandOptions = async (): Promise<BrandRow[]> => {
     try {
@@ -581,7 +629,11 @@ export default function SRROrderB2BInternalPage() {
 
       {/* ============ List Brand dialog ============ */}
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent
+          className="max-w-2xl"
+          onInteractOutside={(e) => e.preventDefault()}
+          onEscapeKeyDown={(e) => e.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle>List Brand</DialogTitle>
           </DialogHeader>
@@ -680,7 +732,11 @@ export default function SRROrderB2BInternalPage() {
 
       {/* ============ Monthly usage dialog ============ */}
       <Dialog open={muOpen} onOpenChange={setMuOpen}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent
+          className="max-w-[96vw] w-[96vw]"
+          onInteractOutside={(e) => e.preventDefault()}
+          onEscapeKeyDown={(e) => e.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle>
               {editingDocId ? `Monthly usage — MU-${String(editingDocNo || 0).padStart(4, "0")}` : "Monthly usage (สร้างใหม่)"}
@@ -719,125 +775,157 @@ export default function SRROrderB2BInternalPage() {
                 </Select>
               </div>
 
-              {/* Item cards */}
-              {muRows.map((row, idx) => {
-                const daily = row.monthly_qty.trim() && !isNaN(Number(row.monthly_qty)) ? (Number(row.monthly_qty) / 30).toFixed(2) : "";
-                return (
-                  <div key={idx} className="border rounded-lg p-3 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-medium text-muted-foreground">#{idx + 1}</span>
-                      <div className="flex items-center gap-0.5">
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Duplicate" onClick={() => duplicateMuRow(idx)}>
-                          <Copy className="w-4 h-4 text-muted-foreground" />
-                        </Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title="ลบ" onClick={() => removeMuRow(idx)}>
-                          <Trash2 className="w-4 h-4 text-destructive" />
-                        </Button>
-                      </div>
-                    </div>
-
-                    <div className="flex gap-3">
-                      <div className="flex-1 grid grid-cols-2 gap-2">
-                        <div className="space-y-1">
-                          <Label className="text-[11px]">Barcode (คีย์เอง)</Label>
-                          <Input
-                            value={row.barcode}
-                            onChange={(e) => updateMuField(idx, "barcode", e.target.value)}
-                            onBlur={() => handleBarcodeLookup(idx)}
-                            onKeyDown={(e) => e.key === "Enter" && handleBarcodeLookup(idx)}
-                            className="h-8"
-                            placeholder="คีย์ barcode / รหัส"
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-[11px] flex items-center gap-1">
-                            ID (SKU) {lookup[idx] && <Loader2 className="w-3 h-3 animate-spin" />}
-                          </Label>
-                          <Input value={row.sku_code} readOnly className="h-8 bg-muted/50" placeholder="auto" />
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-[11px]">Barcode Unit</Label>
-                          <Input value={row.barcode_unit} readOnly className="h-8 bg-muted/50" placeholder="auto" />
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-[11px]">UOM</Label>
-                          <Input value={row.uom} readOnly className="h-8 bg-muted/50" placeholder="auto" />
-                        </div>
-                        <div className="space-y-1 col-span-2">
-                          <Label className="text-[11px]">Product name</Label>
-                          <Input
-                            value={row.product_name}
-                            readOnly
-                            className={`h-8 bg-muted/50 ${row.product_name === "ไม่พบข้อมูล" ? "text-destructive" : ""}`}
-                            placeholder="auto"
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-[11px]">Monthly qty</Label>
-                          <Input
-                            type="number"
-                            value={row.monthly_qty}
-                            onChange={(e) => updateMuField(idx, "monthly_qty", e.target.value)}
-                            className="h-8"
-                            placeholder="0"
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-[11px]">Daily qty (÷30)</Label>
-                          <Input value={daily} readOnly className="h-8 bg-muted/50" placeholder="auto" />
-                        </div>
-                        <div className="space-y-1 col-span-2">
-                          <Label className="text-[11px]">Remark</Label>
-                          <Textarea
-                            value={row.remark}
-                            onChange={(e) => updateMuField(idx, "remark", e.target.value)}
-                            className="min-h-[36px] text-sm"
-                            rows={1}
-                            placeholder="หมายเหตุ"
-                          />
-                        </div>
-                      </div>
-
-                      {/* Picture */}
-                      <div className="w-40 shrink-0 space-y-1.5">
-                        <Label className="text-[11px]">Picture</Label>
-                        <div
-                          tabIndex={0}
-                          onPaste={(e) => handleRowPaste(idx, e)}
-                          className="relative w-40 h-40 border rounded-md flex items-center justify-center bg-muted/30 overflow-hidden outline-none focus:ring-2 focus:ring-primary"
-                          title="คลิกแล้ว Ctrl+V เพื่อวางรูป"
-                        >
-                          {row.picture ? (
-                            <>
-                              <img src={row.picture} alt="picture" className="w-full h-full object-contain" />
-                              <button
-                                type="button"
-                                onClick={() => updateMuField(idx, "picture", "")}
-                                className="absolute top-1 right-1 bg-background/80 rounded-full p-0.5 hover:bg-background"
-                                title="ลบรูป"
-                              >
-                                <X className="w-4 h-4 text-destructive" />
-                              </button>
-                            </>
-                          ) : (
-                            <span className="text-[11px] text-muted-foreground px-2 text-center">คลิกแล้ว Ctrl+V<br />หรือเลือกด้านล่าง</span>
+              {/* Item table — 1 รายการ = 1 แถว, เลื่อนแนวนอน + ลากปรับความกว้างคอลัมน์ */}
+              <div className="overflow-x-auto border rounded-md">
+                <table className="text-sm border-collapse" style={{ width: muTotalW, tableLayout: "fixed" }}>
+                  <colgroup>
+                    {MU_COLS.map((c) => (
+                      <col key={c.key} style={{ width: colW[c.key] ?? c.def }} />
+                    ))}
+                  </colgroup>
+                  <thead>
+                    <tr className="bg-muted text-left">
+                      {MU_COLS.map((c) => (
+                        <th key={c.key} className="relative px-2 py-1.5 font-medium border-r last:border-r-0 select-none whitespace-nowrap">
+                          <span className="block truncate">{c.label}</span>
+                          {c.key !== "act" && (
+                            <span
+                              onMouseDown={(e) => startColResize(c.key, c.min, e)}
+                              className="absolute top-0 right-0 h-full w-1.5 cursor-col-resize hover:bg-primary/40"
+                            />
                           )}
-                        </div>
-                        <div className="flex gap-1">
-                          <label className="flex-1 inline-flex items-center justify-center gap-1 h-7 px-2 text-xs border rounded-md cursor-pointer hover:bg-muted">
-                            <Upload className="w-3.5 h-3.5" /> นำเข้า
-                            <input type="file" accept="image/*" className="hidden" onChange={(e) => handleRowFile(idx, e)} />
-                          </label>
-                          <label className="flex-1 inline-flex items-center justify-center gap-1 h-7 px-2 text-xs border rounded-md cursor-pointer hover:bg-muted">
-                            <Camera className="w-3.5 h-3.5" /> ถ่ายรูป
-                            <input type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => handleRowFile(idx, e)} />
-                          </label>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {muRows.map((row, idx) => {
+                      const daily =
+                        row.monthly_qty.trim() && !isNaN(Number(row.monthly_qty)) ? (Number(row.monthly_qty) / 30).toFixed(2) : "";
+                      return (
+                        <tr key={idx} className="border-t align-middle">
+                          <td className="px-2 py-1 text-center text-muted-foreground tabular-nums">{idx + 1}</td>
+                          <td className="px-1 py-1">
+                            <Input
+                              value={row.barcode}
+                              onChange={(e) => updateMuField(idx, "barcode", e.target.value)}
+                              onBlur={() => handleBarcodeLookup(idx)}
+                              onKeyDown={(e) => e.key === "Enter" && handleBarcodeLookup(idx)}
+                              className="h-8 w-full"
+                              placeholder="คีย์ barcode"
+                            />
+                          </td>
+                          <td className="px-1 py-1">
+                            <div className="relative">
+                              <Input value={row.sku_code} readOnly className="h-8 w-full bg-muted/50 pr-6" placeholder="auto" />
+                              {lookup[idx] && <Loader2 className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 animate-spin" />}
+                            </div>
+                          </td>
+                          <td className="px-1 py-1">
+                            <Input value={row.barcode_unit} readOnly className="h-8 w-full bg-muted/50" placeholder="auto" />
+                          </td>
+                          <td className="px-1 py-1">
+                            <Input value={row.uom} readOnly className="h-8 w-full bg-muted/50" placeholder="auto" />
+                          </td>
+                          <td className="px-1 py-1">
+                            <Input
+                              value={row.product_name}
+                              readOnly
+                              title={row.product_name}
+                              className={`h-8 w-full bg-muted/50 ${row.product_name === "ไม่พบข้อมูล" ? "text-destructive" : ""}`}
+                              placeholder="auto"
+                            />
+                          </td>
+                          <td className="px-1 py-1">
+                            <Input
+                              type="number"
+                              value={row.monthly_qty}
+                              onChange={(e) => updateMuField(idx, "monthly_qty", e.target.value)}
+                              className="h-8 w-full"
+                              placeholder="0"
+                            />
+                          </td>
+                          <td className="px-1 py-1">
+                            <Input value={daily} readOnly className="h-8 w-full bg-muted/50" placeholder="auto" />
+                          </td>
+                          <td className="px-1 py-1">
+                            <div className="flex items-center gap-1">
+                              <div
+                                tabIndex={0}
+                                onPaste={(e) => handleRowPaste(idx, e)}
+                                className="relative w-14 h-14 border rounded flex items-center justify-center bg-muted/30 overflow-hidden outline-none focus:ring-2 focus:ring-primary shrink-0"
+                                title="คลิกแล้ว Ctrl+V เพื่อวางรูป"
+                              >
+                                {row.picture ? (
+                                  <>
+                                    <img
+                                      src={row.picture}
+                                      alt="picture"
+                                      className="w-full h-full object-cover cursor-zoom-in"
+                                      onClick={() => window.open(row.picture, "_blank")}
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => updateMuField(idx, "picture", "")}
+                                      className="absolute -top-1 -right-1 bg-background rounded-full p-0.5 border hover:bg-muted"
+                                      title="ลบรูป"
+                                    >
+                                      <X className="w-3 h-3 text-destructive" />
+                                    </button>
+                                  </>
+                                ) : (
+                                  <span className="text-[9px] text-muted-foreground text-center leading-tight px-0.5">Ctrl+V</span>
+                                )}
+                              </div>
+                              <div className="flex flex-col gap-0.5">
+                                <label
+                                  className="inline-flex items-center justify-center h-6 w-6 border rounded cursor-pointer hover:bg-muted"
+                                  title="นำเข้ารูป"
+                                >
+                                  <Upload className="w-3.5 h-3.5" />
+                                  <input type="file" accept="image/*" className="hidden" onChange={(e) => handleRowFile(idx, e)} />
+                                </label>
+                                <label
+                                  className="inline-flex items-center justify-center h-6 w-6 border rounded cursor-pointer hover:bg-muted"
+                                  title="ถ่ายรูป"
+                                >
+                                  <Camera className="w-3.5 h-3.5" />
+                                  <input type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => handleRowFile(idx, e)} />
+                                </label>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-1 py-1">
+                            <Input
+                              value={row.remark}
+                              onChange={(e) => updateMuField(idx, "remark", e.target.value)}
+                              className="h-8 w-full"
+                              placeholder="หมายเหตุ"
+                            />
+                          </td>
+                          <td className="px-1 py-1">
+                            <div className="flex items-center justify-center gap-0.5">
+                              <Button variant="ghost" size="icon" className="h-7 w-7" title="Duplicate" onClick={() => duplicateMuRow(idx)}>
+                                <Copy className="w-4 h-4 text-muted-foreground" />
+                              </Button>
+                              <Button variant="ghost" size="icon" className="h-7 w-7" title="ลบ" onClick={() => removeMuRow(idx)}>
+                                <Trash2 className="w-4 h-4 text-destructive" />
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {muRows.length === 0 && (
+                      <tr>
+                        <td colSpan={MU_COLS.length} className="px-2 py-6 text-center text-muted-foreground">
+                          ยังไม่มีรายการ — กด "เพิ่มรายการ"
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
 
               <Button variant="outline" size="sm" onClick={addMuRow} className="gap-1.5">
                 <Plus className="w-4 h-4" /> เพิ่มรายการ
