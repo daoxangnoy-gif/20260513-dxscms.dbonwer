@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { Tag, Plus, Trash2, Loader2 } from "lucide-react";
+import { Tag, Plus, Trash2, Loader2, Search, Copy } from "lucide-react";
 
 type BrandRow = { id?: string; code: number; brand_name: string; branch: string };
 
@@ -16,11 +16,13 @@ export default function SRROrderB2BInternalPage() {
   // --- List Brand dialog ---
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<BrandRow[]>([]);
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const openDialog = async () => {
     setOpen(true);
+    setSearch("");
     setLoading(true);
     try {
       const { data, error } = await (supabase as any)
@@ -49,8 +51,29 @@ export default function SRROrderB2BInternalPage() {
 
   const removeRow = (idx: number) => setRows((prev) => prev.filter((_, i) => i !== idx));
 
+  const duplicateRow = (idx: number) =>
+    setRows((prev) => {
+      const src = prev[idx];
+      const newCode = prev.length ? Math.max(...prev.map((r) => r.code)) + 1 : 1;
+      const copy: BrandRow = { code: newCode, brand_name: src.brand_name, branch: src.branch };
+      const next = [...prev];
+      next.splice(idx + 1, 0, copy);
+      return next;
+    });
+
   const updateRow = (idx: number, field: "brand_name" | "branch", value: string) =>
     setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, [field]: value } : r)));
+
+  const q = search.trim().toLowerCase();
+  const visibleRows = rows
+    .map((row, idx) => ({ row, idx }))
+    .filter(
+      ({ row }) =>
+        !q ||
+        row.brand_name.toLowerCase().includes(q) ||
+        row.branch.toLowerCase().includes(q) ||
+        String(row.code).includes(q),
+    );
 
   const handleSave = async () => {
     setSaving(true);
@@ -97,17 +120,27 @@ export default function SRROrderB2BInternalPage() {
             </div>
           ) : (
             <div className="max-h-[55vh] overflow-auto">
+              <div className="relative mb-2">
+                <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="h-8 pl-8"
+                  placeholder="ค้นหา Code / Brand name / Branch"
+                />
+              </div>
+
               <table className="w-full text-sm">
                 <thead className="sticky top-0 bg-muted">
                   <tr className="text-left">
                     <th className="px-2 py-1.5 w-20 font-medium">Code</th>
                     <th className="px-2 py-1.5 font-medium">Brand name</th>
                     <th className="px-2 py-1.5 font-medium">Branch</th>
-                    <th className="px-2 py-1.5 w-10" />
+                    <th className="px-2 py-1.5 w-20" />
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((row, idx) => (
+                  {visibleRows.map(({ row, idx }) => (
                     <tr key={idx} className="border-b">
                       <td className="px-2 py-1 text-muted-foreground tabular-nums">{row.code}</td>
                       <td className="px-2 py-1">
@@ -127,9 +160,14 @@ export default function SRROrderB2BInternalPage() {
                         />
                       </td>
                       <td className="px-2 py-1">
-                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeRow(idx)}>
-                          <Trash2 className="w-4 h-4 text-destructive" />
-                        </Button>
+                        <div className="flex items-center gap-0.5">
+                          <Button variant="ghost" size="icon" className="h-7 w-7" title="Duplicate" onClick={() => duplicateRow(idx)}>
+                            <Copy className="w-4 h-4 text-muted-foreground" />
+                          </Button>
+                          <Button variant="ghost" size="icon" className="h-7 w-7" title="ลบ" onClick={() => removeRow(idx)}>
+                            <Trash2 className="w-4 h-4 text-destructive" />
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -137,6 +175,13 @@ export default function SRROrderB2BInternalPage() {
                     <tr>
                       <td colSpan={4} className="px-2 py-6 text-center text-muted-foreground">
                         ยังไม่มีข้อมูล กดปุ่ม + เพื่อเพิ่ม
+                      </td>
+                    </tr>
+                  )}
+                  {rows.length > 0 && visibleRows.length === 0 && (
+                    <tr>
+                      <td colSpan={4} className="px-2 py-6 text-center text-muted-foreground">
+                        ไม่พบรายการที่ค้นหา
                       </td>
                     </tr>
                   )}
