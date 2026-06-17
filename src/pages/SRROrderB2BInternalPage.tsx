@@ -531,6 +531,16 @@ export default function SRROrderB2BInternalPage() {
     }
     setMuSaving(true);
     try {
+      // 1) อัปรูปก่อน (data URL → public URL) — ถ้าพัง (เช่น bucket หาย) จะ throw ออกก่อน
+      //    ยังไม่สร้าง doc/items → ไม่เหลือ doc ขยะ
+      const pictureUrls = await Promise.all(
+        rowsToSave.map(async (r) => {
+          if (!r.picture) return null;
+          if (r.picture.startsWith("data:")) return await uploadPicture(r.picture);
+          return r.picture;
+        }),
+      );
+
       let docNo = editingDocNo;
       if (!editingDocId) {
         const { data: maxd } = await (supabase as any)
@@ -562,16 +572,6 @@ export default function SRROrderB2BInternalPage() {
         if (error) throw error;
         docId = ins?.[0]?.id;
       }
-
-      // อัปรูปที่เป็น data URL (รูปใหม่/วาง/ถ่าย) ขึ้น Storage → เก็บเป็น public URL
-      // รูปที่เป็น http(s) อยู่แล้ว (เปิดจาก doc เดิม) ใช้ URL เดิม
-      const pictureUrls = await Promise.all(
-        rowsToSave.map(async (r) => {
-          if (!r.picture) return null;
-          if (r.picture.startsWith("data:")) return await uploadPicture(r.picture);
-          return r.picture;
-        }),
-      );
 
       const itemsPayload = rowsToSave.map((r, i) => ({
         doc_id: docId,
