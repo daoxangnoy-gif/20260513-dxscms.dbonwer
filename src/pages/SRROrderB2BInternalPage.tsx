@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -80,6 +80,9 @@ const MU_COLS = [
   { key: "act", label: "", def: 74, min: 64 },
 ] as const;
 const MU_COL_KEY = "mu_col_widths_v1";
+
+// ลำดับคอลัมน์ที่ใช้ keyboard navigation (มี input) — index = data-c
+const MU_NAV_COLS = ["barcode", "sku", "bunit", "uom", "pname", "mqty", "dqty", "remark"] as const;
 
 export default function SRROrderB2BInternalPage() {
   const [activeTab, setActiveTab] = useState("brand");
@@ -293,6 +296,56 @@ export default function SRROrderB2BInternalPage() {
   };
 
   const muTotalW = MU_COLS.reduce((s, c) => s + (colW[c.key] ?? c.def), 0);
+
+  // ===== keyboard navigation ในตาราง (Enter / ลูกศร ขึ้น-ลง-ซ้าย-ขวา; Tab = default) =====
+  const muTableRef = useRef<HTMLDivElement>(null);
+
+  const focusCell = (r: number, c: number) => {
+    const cc = Math.max(0, Math.min(MU_NAV_COLS.length - 1, c));
+    const el = muTableRef.current?.querySelector<HTMLInputElement>(`input[data-r="${r}"][data-c="${cc}"]`);
+    if (el) {
+      el.focus();
+      try {
+        el.select();
+      } catch {}
+    }
+  };
+
+  const handleCellKey = (e: React.KeyboardEvent<HTMLInputElement>, r: number, c: number) => {
+    const el = e.currentTarget;
+    // ตำแหน่ง caret (input type=number เข้าถึง selectionStart ไม่ได้ → ถือว่าอยู่สุดขอบทั้งสองด้าน)
+    let atStart = true;
+    let atEnd = true;
+    try {
+      const ss = el.selectionStart;
+      if (ss !== null) {
+        atStart = ss <= 0;
+        atEnd = ss >= el.value.length;
+      }
+    } catch {}
+
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (c === 0) handleBarcodeLookup(r); // คอลัมน์ Barcode → resolve ก่อนเลื่อน
+      focusCell(r + 1, c);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      focusCell(r + 1, c);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      focusCell(r - 1, c);
+    } else if (e.key === "ArrowRight") {
+      if (atEnd) {
+        e.preventDefault();
+        focusCell(r, c + 1);
+      }
+    } else if (e.key === "ArrowLeft") {
+      if (atStart) {
+        e.preventDefault();
+        focusCell(r, c - 1);
+      }
+    }
+  };
 
   const loadBrandOptions = async (): Promise<BrandRow[]> => {
     try {
@@ -776,7 +829,7 @@ export default function SRROrderB2BInternalPage() {
               </div>
 
               {/* Item table — 1 รายการ = 1 แถว, เลื่อนแนวนอน + ลากปรับความกว้างคอลัมน์ */}
-              <div className="overflow-x-auto border rounded-md">
+              <div ref={muTableRef} className="overflow-x-auto border rounded-md">
                 <table className="text-sm border-collapse" style={{ width: muTotalW, tableLayout: "fixed" }}>
                   <colgroup>
                     {MU_COLS.map((c) => (
@@ -807,46 +860,86 @@ export default function SRROrderB2BInternalPage() {
                           <td className="px-2 py-1 text-center text-muted-foreground tabular-nums">{idx + 1}</td>
                           <td className="px-1 py-1">
                             <Input
+                              data-r={idx}
+                              data-c={0}
                               value={row.barcode}
                               onChange={(e) => updateMuField(idx, "barcode", e.target.value)}
                               onBlur={() => handleBarcodeLookup(idx)}
-                              onKeyDown={(e) => e.key === "Enter" && handleBarcodeLookup(idx)}
+                              onKeyDown={(e) => handleCellKey(e, idx, 0)}
                               className="h-8 w-full"
                               placeholder="คีย์ barcode"
                             />
                           </td>
                           <td className="px-1 py-1">
                             <div className="relative">
-                              <Input value={row.sku_code} readOnly className="h-8 w-full bg-muted/50 pr-6" placeholder="auto" />
+                              <Input
+                                data-r={idx}
+                                data-c={1}
+                                value={row.sku_code}
+                                readOnly
+                                onKeyDown={(e) => handleCellKey(e, idx, 1)}
+                                className="h-8 w-full bg-muted/50 pr-6"
+                                placeholder="auto"
+                              />
                               {lookup[idx] && <Loader2 className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 animate-spin" />}
                             </div>
                           </td>
                           <td className="px-1 py-1">
-                            <Input value={row.barcode_unit} readOnly className="h-8 w-full bg-muted/50" placeholder="auto" />
-                          </td>
-                          <td className="px-1 py-1">
-                            <Input value={row.uom} readOnly className="h-8 w-full bg-muted/50" placeholder="auto" />
+                            <Input
+                              data-r={idx}
+                              data-c={2}
+                              value={row.barcode_unit}
+                              readOnly
+                              onKeyDown={(e) => handleCellKey(e, idx, 2)}
+                              className="h-8 w-full bg-muted/50"
+                              placeholder="auto"
+                            />
                           </td>
                           <td className="px-1 py-1">
                             <Input
+                              data-r={idx}
+                              data-c={3}
+                              value={row.uom}
+                              readOnly
+                              onKeyDown={(e) => handleCellKey(e, idx, 3)}
+                              className="h-8 w-full bg-muted/50"
+                              placeholder="auto"
+                            />
+                          </td>
+                          <td className="px-1 py-1">
+                            <Input
+                              data-r={idx}
+                              data-c={4}
                               value={row.product_name}
                               readOnly
                               title={row.product_name}
+                              onKeyDown={(e) => handleCellKey(e, idx, 4)}
                               className={`h-8 w-full bg-muted/50 ${row.product_name === "ไม่พบข้อมูล" ? "text-destructive" : ""}`}
                               placeholder="auto"
                             />
                           </td>
                           <td className="px-1 py-1">
                             <Input
+                              data-r={idx}
+                              data-c={5}
                               type="number"
                               value={row.monthly_qty}
                               onChange={(e) => updateMuField(idx, "monthly_qty", e.target.value)}
+                              onKeyDown={(e) => handleCellKey(e, idx, 5)}
                               className="h-8 w-full"
                               placeholder="0"
                             />
                           </td>
                           <td className="px-1 py-1">
-                            <Input value={daily} readOnly className="h-8 w-full bg-muted/50" placeholder="auto" />
+                            <Input
+                              data-r={idx}
+                              data-c={6}
+                              value={daily}
+                              readOnly
+                              onKeyDown={(e) => handleCellKey(e, idx, 6)}
+                              className="h-8 w-full bg-muted/50"
+                              placeholder="auto"
+                            />
                           </td>
                           <td className="px-1 py-1">
                             <div className="flex items-center gap-1">
@@ -897,8 +990,11 @@ export default function SRROrderB2BInternalPage() {
                           </td>
                           <td className="px-1 py-1">
                             <Input
+                              data-r={idx}
+                              data-c={7}
                               value={row.remark}
                               onChange={(e) => updateMuField(idx, "remark", e.target.value)}
+                              onKeyDown={(e) => handleCellKey(e, idx, 7)}
                               className="h-8 w-full"
                               placeholder="หมายเหตุ"
                             />
