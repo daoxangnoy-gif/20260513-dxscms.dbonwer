@@ -8,7 +8,21 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye } from "lucide-react";
+import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download } from "lucide-react";
+import * as XLSX from "xlsx";
+
+const MU_BUCKET = "monthly-usage-pictures";
+
+// อัปรูป (data URL หรือ File) ขึ้น Storage → คืน public URL
+async function uploadPicture(dataUrl: string): Promise<string> {
+  const res = await fetch(dataUrl);
+  const blob = await res.blob();
+  const ext = (blob.type.split("/")[1] || "png").split("+")[0];
+  const path = `${crypto.randomUUID()}.${ext}`;
+  const { error } = await supabase.storage.from(MU_BUCKET).upload(path, blob, { contentType: blob.type, upsert: false });
+  if (error) throw error;
+  return supabase.storage.from(MU_BUCKET).getPublicUrl(path).data.publicUrl;
+}
 
 type BrandRow = { id?: string; code: number; brand_name: string; branch: string };
 
@@ -162,6 +176,65 @@ export default function SRROrderB2BInternalPage() {
     loadDocs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const deleteDoc = async (doc: MUDoc) => {
+    if (!window.confirm(`ลบเอกสาร "${doc.doc_label}" และรายการทั้งหมด?`)) return;
+    try {
+      const { error } = await (supabase as any).from("monthly_usage_doc").delete().eq("id", doc.id);
+      if (error) throw error;
+      toast({ title: "ลบเอกสารแล้ว", description: doc.doc_label });
+      loadDocs();
+    } catch (e: any) {
+      toast({ title: "ลบไม่สำเร็จ", description: e.message, variant: "destructive" });
+    }
+  };
+
+  const exportDoc = async (doc: MUDoc) => {
+    try {
+      const { data, error } = await (supabase as any)
+        .from("monthly_usage_item")
+        .select("*")
+        .eq("doc_id", doc.id)
+        .order("sort_order", { ascending: true });
+      if (error) throw error;
+      const items = data || [];
+      if (items.length === 0) {
+        toast({ title: "เอกสารว่าง ไม่มีรายการให้ export", variant: "destructive" });
+        return;
+      }
+      const rows = items.map((it: any, i: number) => ({
+        "#": i + 1,
+        "ID (SKU)": it.sku_code || "",
+        Barcode: it.barcode || "",
+        "Barcode Unit": it.barcode_unit || "",
+        "Product name": it.product_name || "",
+        UOM: it.uom || "",
+        "Monthly qty": it.monthly_qty ?? "",
+        "Daily qty": it.daily_qty != null ? Number(it.daily_qty).toFixed(2) : "",
+        Remark: it.remark || "",
+        "รูป (ลิงก์)": it.picture ? "เปิดรูป" : "",
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      // ใส่ hyperlink ในคอลัมน์รูป (คอลัมน์สุดท้าย index 9)
+      const picCol = 9;
+      items.forEach((it: any, i: number) => {
+        if (it.picture) {
+          const ref = XLSX.utils.encode_cell({ c: picCol, r: i + 1 });
+          if (ws[ref]) ws[ref].l = { Target: it.picture, Tooltip: "เปิดรูป" };
+        }
+      });
+      ws["!cols"] = [
+        { wch: 4 }, { wch: 14 }, { wch: 16 }, { wch: 16 }, { wch: 36 },
+        { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 30 }, { wch: 12 },
+      ];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Monthly usage");
+      const safeName = doc.doc_label.replace(/[\\/:*?"<>|]/g, "_");
+      XLSX.writeFile(wb, `${safeName}.xlsx`);
+    } catch (e: any) {
+      toast({ title: "Export ไม่สำเร็จ", description: e.message, variant: "destructive" });
+    }
+  };
 
   const [muOpen, setMuOpen] = useState(false);
   const [muLoading, setMuLoading] = useState(false);
@@ -389,6 +462,16 @@ export default function SRROrderB2BInternalPage() {
         docId = ins?.[0]?.id;
       }
 
+      // อัปรูปที่เป็น data URL (รูปใหม่/วาง/ถ่าย) ขึ้น Storage → เก็บเป็น public URL
+      // รูปที่เป็น http(s) อยู่แล้ว (เปิดจาก doc เดิม) ใช้ URL เดิม
+      const pictureUrls = await Promise.all(
+        rowsToSave.map(async (r) => {
+          if (!r.picture) return null;
+          if (r.picture.startsWith("data:")) return await uploadPicture(r.picture);
+          return r.picture;
+        }),
+      );
+
       const itemsPayload = rowsToSave.map((r, i) => ({
         doc_id: docId,
         sort_order: i,
@@ -399,7 +482,7 @@ export default function SRROrderB2BInternalPage() {
         uom: r.uom || null,
         monthly_qty: r.monthly_qty.trim() ? Number(r.monthly_qty) : null,
         daily_qty: r.monthly_qty.trim() ? Number(r.monthly_qty) / 30 : null,
-        picture: r.picture || null,
+        picture: pictureUrls[i],
         remark: r.remark.trim() || null,
       }));
       const { error: itErr } = await (supabase as any).from("monthly_usage_item").insert(itemsPayload);
@@ -457,7 +540,7 @@ export default function SRROrderB2BInternalPage() {
                   <th className="px-3 py-1.5 font-medium">Branch</th>
                   <th className="px-3 py-1.5 font-medium w-20 text-right">รายการ</th>
                   <th className="px-3 py-1.5 font-medium w-36">วันที่</th>
-                  <th className="px-3 py-1.5 font-medium w-20" />
+                  <th className="px-3 py-1.5 font-medium w-44" />
                 </tr>
               </thead>
               <tbody>
@@ -469,9 +552,17 @@ export default function SRROrderB2BInternalPage() {
                     <td className="px-3 py-1.5 text-right tabular-nums">{d.item_count}</td>
                     <td className="px-3 py-1.5 text-muted-foreground">{new Date(d.created_at).toLocaleString("th-TH")}</td>
                     <td className="px-3 py-1.5">
-                      <Button variant="outline" size="sm" className="h-7 gap-1" onClick={() => openMuView(d)}>
-                        <Eye className="w-3.5 h-3.5" /> View
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        <Button variant="outline" size="sm" className="h-7 gap-1" onClick={() => openMuView(d)}>
+                          <Eye className="w-3.5 h-3.5" /> View
+                        </Button>
+                        <Button variant="outline" size="icon" className="h-7 w-7" title="Export Excel" onClick={() => exportDoc(d)}>
+                          <Download className="w-3.5 h-3.5" />
+                        </Button>
+                        <Button variant="ghost" size="icon" className="h-7 w-7" title="ลบเอกสาร" onClick={() => deleteDoc(d)}>
+                          <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
