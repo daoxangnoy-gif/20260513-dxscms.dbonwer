@@ -165,6 +165,10 @@ export default function SRRPage({ activeSub = "dc_item" }: { activeSub?: string 
     const SRROrderB2BPage = React.lazy(() => import("@/pages/SRROrderB2BPage"));
     return <React.Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>}><SRROrderB2BPage /></React.Suspense>;
   }
+  if (activeSub === "order_b2b_internal") {
+    const SRROrderB2BInternalPage = React.lazy(() => import("@/pages/SRROrderB2BInternalPage"));
+    return <React.Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>}><SRROrderB2BInternalPage /></React.Suspense>;
+  }
   if (activeSub === "srr_payment_overdue") {
     const SRRPaymentOverduePage = React.lazy(() => import("@/pages/SRRPaymentOverduePage"));
     return <React.Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>}><SRRPaymentOverduePage /></React.Suspense>;
