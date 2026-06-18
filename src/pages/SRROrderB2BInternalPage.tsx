@@ -12,6 +12,11 @@ import * as XLSX from "xlsx";
 
 const MU_BUCKET = "monthly-usage-pictures";
 
+// ซ่อนคอลัมน์ Branch + ปุ่ม Duplicate ใน dialog List Brand ชั่วคราว
+// เปิดใช้ทีหลังได้ด้วยการเปลี่ยนเป็น true
+const SHOW_BRAND_BRANCH = false;
+const SHOW_BRAND_DUPLICATE = false;
+
 // อัปรูป (data URL หรือ File) ขึ้น Storage → คืน public URL
 async function uploadPicture(dataUrl: string): Promise<string> {
   const res = await fetch(dataUrl);
@@ -712,7 +717,7 @@ export default function SRROrderB2BInternalPage() {
                   <tr className="text-left">
                     <th className="px-2 py-1.5 w-20 font-medium">Code</th>
                     <th className="px-2 py-1.5 font-medium">Brand name</th>
-                    <th className="px-2 py-1.5 font-medium">Branch</th>
+                    {SHOW_BRAND_BRANCH && <th className="px-2 py-1.5 font-medium">Branch</th>}
                     <th className="px-2 py-1.5 w-20" />
                   </tr>
                 </thead>
@@ -728,19 +733,23 @@ export default function SRROrderB2BInternalPage() {
                           placeholder="Brand name"
                         />
                       </td>
-                      <td className="px-2 py-1">
-                        <Input
-                          value={row.branch}
-                          onChange={(e) => updateRow(idx, "branch", e.target.value)}
-                          className="h-8"
-                          placeholder="Branch"
-                        />
-                      </td>
+                      {SHOW_BRAND_BRANCH && (
+                        <td className="px-2 py-1">
+                          <Input
+                            value={row.branch}
+                            onChange={(e) => updateRow(idx, "branch", e.target.value)}
+                            className="h-8"
+                            placeholder="Branch"
+                          />
+                        </td>
+                      )}
                       <td className="px-2 py-1">
                         <div className="flex items-center gap-0.5">
-                          <Button variant="ghost" size="icon" className="h-7 w-7" title="Duplicate" onClick={() => duplicateRow(idx)}>
-                            <Copy className="w-4 h-4 text-muted-foreground" />
-                          </Button>
+                          {SHOW_BRAND_DUPLICATE && (
+                            <Button variant="ghost" size="icon" className="h-7 w-7" title="Duplicate" onClick={() => duplicateRow(idx)}>
+                              <Copy className="w-4 h-4 text-muted-foreground" />
+                            </Button>
+                          )}
                           <Button variant="ghost" size="icon" className="h-7 w-7" title="ลบ" onClick={() => removeRow(idx)}>
                             <Trash2 className="w-4 h-4 text-destructive" />
                           </Button>
@@ -750,14 +759,14 @@ export default function SRROrderB2BInternalPage() {
                   ))}
                   {rows.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="px-2 py-6 text-center text-muted-foreground">
+                      <td colSpan={SHOW_BRAND_BRANCH ? 4 : 3} className="px-2 py-6 text-center text-muted-foreground">
                         ยังไม่มีข้อมูล กดปุ่ม + เพื่อเพิ่ม
                       </td>
                     </tr>
                   )}
                   {rows.length > 0 && visibleRows.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="px-2 py-6 text-center text-muted-foreground">
+                      <td colSpan={SHOW_BRAND_BRANCH ? 4 : 3} className="px-2 py-6 text-center text-muted-foreground">
                         ไม่พบรายการที่ค้นหา
                       </td>
                     </tr>
