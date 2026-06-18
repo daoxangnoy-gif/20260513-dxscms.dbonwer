@@ -2089,6 +2089,7 @@ export default function SAROrderFromStoreTab() {
                         const filteredRows = search
                           ? allStoreRows.filter(r =>
                               r.store.toLowerCase().includes(search) ||
+                              (storeTypeMap[r.store] ?? "").toLowerCase().includes(search) ||
                               (r.po?.doc_name ?? "").toLowerCase().includes(search) ||
                               (r.ro?.doc_name ?? "").toLowerCase().includes(search)
                             )
