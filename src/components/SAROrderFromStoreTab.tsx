@@ -189,6 +189,7 @@ const CAL_PAGE_SIZE = 100;
 let _importDocsCache: OfsImportDoc[] = [];
 let _userProfileMapCache: Record<string, string> = {};
 let _resultDocsCache: OfsResultDoc[] = [];
+let _storeTypeMapCache: Record<string, string> = {}; // store_name -> type_store (ใช้ใน Result Docs)
 
 // --------------- Component ---------------
 export default function SAROrderFromStoreTab() {
@@ -305,6 +306,7 @@ export default function SAROrderFromStoreTab() {
   // ---- RESULT DOCS TAB ----
   const [resultDocs, setResultDocs] = useState<OfsResultDoc[]>(_resultDocsCache);
   const [resultDocsLoading, setResultDocsLoading] = useState(false);
+  const [storeTypeMap, setStoreTypeMap] = useState<Record<string, string>>(_storeTypeMapCache);
   const [selectedPoIds, setSelectedPoIds] = useState<Set<string>>(new Set());
   const [selectedRoIds, setSelectedRoIds] = useState<Set<string>>(new Set());
   // จำตำแหน่งคลิกล่าสุด (ต่อ batch + ต่อคอลัมน์) สำหรับ Shift+Click เลือกหลาย Doc แบบช่วง
@@ -955,6 +957,14 @@ export default function SAROrderFromStoreTab() {
       if (error) throw error;
       _resultDocsCache = data || [];
       setResultDocs(_resultDocsCache);
+      // โหลด type_store ของแต่ละสาขา (store_name -> type_store) สำหรับแสดงคอลัมน์ Store
+      if (!Object.keys(_storeTypeMapCache).length || force) {
+        const { data: stData } = await (supabase.from("store_type" as any) as any).select("store_name,type_store");
+        const m: Record<string, string> = {};
+        for (const r of (stData || []) as any[]) { if (r.store_name) m[r.store_name] = r.type_store || ""; }
+        _storeTypeMapCache = m;
+        setStoreTypeMap(m);
+      }
       // โหลดชื่อผู้คำนวณ (merge เข้า map เดิม)
       const userIds = [...new Set((data || []).map((d: any) => d.user_id).filter(Boolean))] as string[];
       if (userIds.length) {
@@ -2213,8 +2223,14 @@ export default function SAROrderFromStoreTab() {
                                             else if (idx >= 5 && idx <= 7 && ro) handleRoClick(ro.id, e.shiftKey);
                                           }}
                                         >
-                                          <td className="px-3 py-1.5 font-medium truncate max-w-[160px]" title={store}>
-                                            {rowIdx === 0 ? store.replace(/^\d+-/, "") : <span className="text-muted-foreground/40">↳</span>}
+                                          <td className="px-3 py-1.5 font-medium truncate max-w-[200px]" title={store}>
+                                            {rowIdx === 0
+                                              ? (() => {
+                                                  const cleanName = store.replace(/^\d+-/, "");
+                                                  const ts = storeTypeMap[store] || "";
+                                                  return ts ? `${ts} - ${cleanName}` : cleanName;
+                                                })()
+                                              : <span className="text-muted-foreground/40">↳</span>}
                                           </td>
                                           {/* PO side */}
                                           <td data-side="po" className={cn("px-2 py-1.5 border-l text-center cursor-pointer select-none", po && (poSelected ? "bg-blue-100" : "hover:bg-blue-50"))}>
