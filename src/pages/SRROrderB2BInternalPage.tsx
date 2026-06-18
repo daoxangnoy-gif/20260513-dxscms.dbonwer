@@ -4,10 +4,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@/components/ui/command";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download, Pencil } from "lucide-react";
+import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download, Pencil, ChevronsUpDown, Check, FileSpreadsheet } from "lucide-react";
+import { cn } from "@/lib/utils";
 import * as XLSX from "xlsx";
 
 const MU_BUCKET = "monthly-usage-pictures";
@@ -280,6 +282,8 @@ export default function SRROrderB2BInternalPage() {
   const [muOpen, setMuOpen] = useState(false);   // editor panel (in-app tab "แสดงข้อมูล") เปิดอยู่ไหม
   const [muReadOnly, setMuReadOnly] = useState(false); // true = โหมดดู, false = โหมดแก้ไข
   const [dupDocPrompt, setDupDocPrompt] = useState<MUDoc | null>(null); // เอกสารเดิมของ brand ที่เลือก (ถ้ามี)
+  const [brandPickerOpen, setBrandPickerOpen] = useState(false); // เปิด dropdown ค้นหา Brand
+  const [muImporting, setMuImporting] = useState(false); // กำลังนำเข้า Excel
   const [muLoading, setMuLoading] = useState(false);
   const [muSaving, setMuSaving] = useState(false);
   const [editingDocId, setEditingDocId] = useState<string | null>(null);
@@ -325,6 +329,7 @@ export default function SRROrderB2BInternalPage() {
 
   // ===== keyboard navigation ในตาราง (Enter / ลูกศร ขึ้น-ลง-ซ้าย-ขวา; Tab = default) =====
   const muTableRef = useRef<HTMLDivElement>(null);
+  const muImportRef = useRef<HTMLInputElement>(null);
 
   const focusCell = (r: number, c: number) => {
     const cc = Math.max(0, Math.min(MU_NAV_COLS.length - 1, c));
@@ -532,6 +537,63 @@ export default function SRROrderB2BInternalPage() {
     });
 
   const removeMuRow = (idx: number) => setMuRows((prev) => prev.filter((_, i) => i !== idx));
+
+  // ดาวน์โหลด template สำหรับนำเข้า Monthly usage
+  const downloadMuTemplate = () => {
+    const ws = XLSX.utils.json_to_sheet([
+      { Barcode: "8857000000001", "จำนวน/เดือน": 10, หมายเหตุ: "" },
+      { Barcode: "8857000000002", "จำนวน/เดือน": 5, หมายเหตุ: "" },
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Template");
+    XLSX.writeFile(wb, "MonthlyUsage_Template.xlsx");
+  };
+
+  // นำเข้ารายการจาก Excel → resolve barcode → เติมลงตาราง
+  const handleMuImport = async (file: File) => {
+    setMuImporting(true);
+    try {
+      const ab = await file.arrayBuffer();
+      const wb = XLSX.read(ab);
+      const raw: any[][] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
+      if (raw.length < 2) { toast({ title: "ไฟล์ว่าง", variant: "destructive" }); return; }
+      const headers = (raw[0] as string[]).map((h) => String(h ?? "").toLowerCase().trim());
+      const bIdx = headers.findIndex((h) => h.includes("barcode") || h.includes("sku") || h.includes("code"));
+      const qIdx = headers.findIndex((h) => h.includes("qty") || h.includes("quantity") || h.includes("จำนวน"));
+      const rIdx = headers.findIndex((h) => h.includes("remark") || h.includes("หมายเหตุ") || h.includes("note"));
+      if (bIdx < 0) { toast({ title: "ไม่พบคอลัมน์ Barcode", variant: "destructive" }); return; }
+      const dataRows = raw.slice(1).filter((r) => String(r[bIdx] ?? "").trim());
+      if (!dataRows.length) { toast({ title: "ไม่พบข้อมูล", variant: "destructive" }); return; }
+      const resolved: MonthlyUsageForm[] = await Promise.all(
+        dataRows.map(async (r) => {
+          const code = String(r[bIdx] ?? "").trim();
+          const qty = qIdx >= 0 ? String(r[qIdx] ?? "").trim() : "";
+          const remark = rIdx >= 0 ? String(r[rIdx] ?? "").trim() : "";
+          const res = await resolveBarcode(code);
+          return {
+            barcode: code,
+            sku_code: res.found ? res.sku_code : "",
+            barcode_unit: res.found ? res.barcode_unit : "",
+            uom: res.found ? res.uom : "",
+            product_name: res.found ? res.product_name : "ไม่พบข้อมูล",
+            monthly_qty: qty,
+            picture: "",
+            remark,
+          };
+        }),
+      );
+      setMuRows((prev) => {
+        const existing = prev.filter((r) => r.barcode.trim() || r.product_name.trim() || r.monthly_qty.trim());
+        return [...existing, ...resolved];
+      });
+      const notFound = resolved.filter((r) => r.product_name === "ไม่พบข้อมูล").length;
+      toast({ title: "นำเข้าสำเร็จ", description: `${resolved.length} รายการ${notFound ? ` (ไม่พบ ${notFound})` : ""}` });
+    } catch (e: any) {
+      toast({ title: "นำเข้าไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setMuImporting(false);
+    }
+  };
 
   const handleRowFile = async (idx: number, e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -899,31 +961,64 @@ export default function SRROrderB2BInternalPage() {
               {/* Brand selector */}
               <div className="space-y-1.5">
                 <Label className="text-xs">Brand</Label>
-                {muReadOnly ? (
+                {(muReadOnly || editingDocId) ? (
                   <div className="h-9 flex items-center px-3 border rounded-md bg-muted/40 text-sm">
                     {selectedBrand?.brand_name || "—"}
+                    {editingDocId && !muReadOnly && (
+                      <span className="ml-2 text-[11px] text-muted-foreground">(แก้ไขเอกสารเดิม — เปลี่ยน Brand ไม่ได้)</span>
+                    )}
                   </div>
                 ) : (
-                <Select
-                  value={selectedBrand?.id || ""}
-                  onValueChange={handleBrandSelect}
-                >
-                  <SelectTrigger className="h-9">
-                    <SelectValue placeholder="เลือก Brand" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {mergedBrandOptions.map((b) => (
-                      <SelectItem key={b.id} value={b.id!}>
-                        {b.brand_name}
-                      </SelectItem>
-                    ))}
-                    {mergedBrandOptions.length === 0 && (
-                      <div className="px-2 py-3 text-xs text-muted-foreground">ยังไม่มี Brand — เพิ่มใน List Brand ก่อน</div>
-                    )}
-                  </SelectContent>
-                </Select>
+                  <Popover open={brandPickerOpen} onOpenChange={setBrandPickerOpen}>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" role="combobox" className="h-9 w-full justify-between font-normal">
+                        {selectedBrand?.brand_name || "เลือก Brand"}
+                        <ChevronsUpDown className="ml-2 h-4 w-4 opacity-50 shrink-0" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="p-0 w-[var(--radix-popover-trigger-width)]" align="start">
+                      <Command>
+                        <CommandInput placeholder="ค้นหา Brand..." />
+                        <CommandList>
+                          <CommandEmpty>{mergedBrandOptions.length === 0 ? "ยังไม่มี Brand — เพิ่มใน List Brand ก่อน" : "ไม่พบ Brand"}</CommandEmpty>
+                          <CommandGroup>
+                            {mergedBrandOptions.map((b) => (
+                              <CommandItem key={b.id} value={b.brand_name} onSelect={() => { setBrandPickerOpen(false); handleBrandSelect(b.id!); }}>
+                                <Check className={cn("mr-2 h-4 w-4", selectedBrand?.id === b.id ? "opacity-100" : "opacity-0")} />
+                                {b.brand_name}
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
                 )}
               </div>
+
+              {(!muReadOnly && !selectedBrand) ? (
+                <div className="border rounded-md p-6 text-center text-sm text-muted-foreground bg-muted/20">
+                  เลือก Brand ก่อน จึงจะกรอก / นำเข้าข้อมูลได้
+                </div>
+              ) : (
+              <>
+              {!muReadOnly && (
+                <div className="flex items-center gap-2">
+                  <input
+                    ref={muImportRef}
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    className="hidden"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) handleMuImport(f); e.target.value = ""; }}
+                  />
+                  <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => muImportRef.current?.click()} disabled={muImporting}>
+                    {muImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />} นำเข้า Excel
+                  </Button>
+                  <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={downloadMuTemplate}>
+                    <FileSpreadsheet className="w-4 h-4" /> Template
+                  </Button>
+                </div>
+              )}
 
               {/* Item table — 1 รายการ = 1 แถว, เลื่อนแนวนอน + ลากปรับความกว้างคอลัมน์ */}
               <div ref={muTableRef} className="overflow-x-auto border rounded-md">
@@ -1137,6 +1232,8 @@ export default function SRROrderB2BInternalPage() {
                 <Button variant="outline" size="sm" onClick={addMuRow} className="gap-1.5">
                   <Plus className="w-4 h-4" /> เพิ่มรายการ
                 </Button>
+              )}
+              </>
               )}
             </div>
           )}
