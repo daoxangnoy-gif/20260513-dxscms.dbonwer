@@ -158,6 +158,14 @@ export default function SRROrderB2BInternalPage() {
     );
 
   const handleSave = async () => {
+    // กันชื่อ Brand ซ้ำ (ไม่สนตัวพิมพ์ใหญ่/เล็ก, ตัดช่องว่างหน้า-หลัง)
+    const names = rows.map((r) => r.brand_name.trim().toLowerCase());
+    const dupIdx = names.findIndex((n, i) => n !== "" && names.indexOf(n) !== i);
+    if (dupIdx !== -1) {
+      toast({ title: "มีชื่อ Brand ซ้ำ", description: `"${rows[dupIdx].brand_name.trim()}" ถูกใช้มากกว่า 1 ครั้ง — แก้ให้ไม่ซ้ำก่อนบันทึก`, variant: "destructive" });
+      return;
+    }
+
     setSaving(true);
     try {
       const payload = rows.map((r) => ({ code: r.code, brand_name: r.brand_name.trim(), branch: r.branch.trim() }));
