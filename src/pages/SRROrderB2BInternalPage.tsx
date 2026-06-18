@@ -197,6 +197,7 @@ export default function SRROrderB2BInternalPage() {
   // ============================================================
   const [docs, setDocs] = useState<MUDoc[]>([]);
   const [docsLoading, setDocsLoading] = useState(false);
+  const [noOdooMap, setNoOdooMap] = useState<Record<string, number>>({}); // doc_id -> จำนวน SKU ที่ resolve ไม่เจอ
 
   const loadDocs = async () => {
     setDocsLoading(true);
@@ -207,6 +208,21 @@ export default function SRROrderB2BInternalPage() {
         .order("doc_no", { ascending: false });
       if (error) throw error;
       setDocs(data || []);
+      // นับ SKU No Odoo (sku_code ว่าง) ต่อ doc
+      const ids = (data || []).map((d: any) => d.id);
+      if (ids.length) {
+        const { data: items } = await (supabase as any)
+          .from("monthly_usage_item")
+          .select("doc_id, sku_code")
+          .in("doc_id", ids);
+        const m: Record<string, number> = {};
+        for (const it of (items || []) as any[]) {
+          if (!String(it.sku_code ?? "").trim()) m[it.doc_id] = (m[it.doc_id] || 0) + 1;
+        }
+        setNoOdooMap(m);
+      } else {
+        setNoOdooMap({});
+      }
     } catch (e: any) {
       // ตารางยังไม่ถูกสร้าง / RLS — ไม่ขึ้น error รบกวน แค่ปล่อยว่าง
       setDocs([]);
@@ -792,7 +808,8 @@ export default function SRROrderB2BInternalPage() {
                 <tr className="text-left text-muted-foreground border-b">
                   <th className="px-3 py-1.5 font-medium">Doc</th>
                   <th className="px-3 py-1.5 font-medium">Brand</th>
-                  <th className="px-3 py-1.5 font-medium w-20 text-right">รายการ</th>
+                  <th className="px-3 py-1.5 font-medium w-24 text-right">Total SKU</th>
+                  <th className="px-3 py-1.5 font-medium w-28 text-right">SKU No Odoo</th>
                   <th className="px-3 py-1.5 font-medium w-36">วันที่</th>
                   <th className="px-3 py-1.5 font-medium w-44" />
                 </tr>
@@ -803,6 +820,11 @@ export default function SRROrderB2BInternalPage() {
                     <td className="px-3 py-1.5 font-medium">{d.doc_label}</td>
                     <td className="px-3 py-1.5">{d.brand_name}</td>
                     <td className="px-3 py-1.5 text-right tabular-nums">{d.item_count}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">
+                      {(noOdooMap[d.id] || 0) > 0
+                        ? <span className="text-destructive font-medium">{noOdooMap[d.id]}</span>
+                        : <span className="text-muted-foreground">0</span>}
+                    </td>
                     <td className="px-3 py-1.5 text-muted-foreground">{new Date(d.created_at).toLocaleString("th-TH")}</td>
                     <td className="px-3 py-1.5">
                       <div className="flex items-center gap-1">
@@ -821,7 +843,7 @@ export default function SRROrderB2BInternalPage() {
                 ))}
                 {docs.length === 0 && !docsLoading && (
                   <tr>
-                    <td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">
+                    <td colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
                       ยังไม่มีเอกสาร — กด "Monthly usage" เพื่อสร้างใหม่
                     </td>
                   </tr>
