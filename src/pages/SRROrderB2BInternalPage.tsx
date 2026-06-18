@@ -277,7 +277,8 @@ export default function SRROrderB2BInternalPage() {
     }
   };
 
-  const [muOpen, setMuOpen] = useState(false);
+  const [muOpen, setMuOpen] = useState(false);   // editor panel (in-app tab "แสดงข้อมูล") เปิดอยู่ไหม
+  const [muReadOnly, setMuReadOnly] = useState(false); // true = โหมดดู, false = โหมดแก้ไข
   const [muLoading, setMuLoading] = useState(false);
   const [muSaving, setMuSaving] = useState(false);
   const [editingDocId, setEditingDocId] = useState<string | null>(null);
@@ -397,12 +398,16 @@ export default function SRROrderB2BInternalPage() {
     setSelectedBrand(null);
     setMuRows([{ ...EMPTY_MU }]);
     setLookup({});
+    setMuReadOnly(false);
     setMuOpen(true);
+    setActiveTab("view");
     await loadBrandOptions();
   };
 
   const openMuView = async (doc: MUDoc) => {
     setMuOpen(true);
+    setMuReadOnly(true);
+    setActiveTab("view");
     setMuLoading(true);
     setEditingDocId(doc.id);
     setEditingDocNo(doc.doc_no);
@@ -436,60 +441,6 @@ export default function SRROrderB2BInternalPage() {
       setMuRows([{ ...EMPTY_MU }]);
     } finally {
       setMuLoading(false);
-    }
-  };
-
-  // เปิดดูเอกสาร (read-only) ในแท็บใหม่ ชื่อ "แสดงข้อมูล"
-  const openMuViewTab = async (doc: MUDoc) => {
-    const w = window.open("", "_blank");
-    if (!w) { toast({ title: "เปิดแท็บใหม่ไม่สำเร็จ", description: "กรุณาอนุญาต popup ของเว็บนี้", variant: "destructive" }); return; }
-    const esc = (s: any) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
-    w.document.write(`<!doctype html><meta charset="utf-8"><title>แสดงข้อมูล</title><p style="font-family:sans-serif;padding:20px">กำลังโหลด...</p>`);
-    try {
-      const { data, error } = await (supabase as any)
-        .from("monthly_usage_item")
-        .select("*")
-        .eq("doc_id", doc.id)
-        .order("sort_order", { ascending: true });
-      if (error) throw error;
-      const items = (data || []) as any[];
-      const rowsHtml = items.map((it, i) => `
-        <tr>
-          <td style="text-align:center">${i + 1}</td>
-          <td>${esc(it.barcode)}</td>
-          <td>${esc(it.sku_code)}</td>
-          <td>${esc(it.product_name)}</td>
-          <td>${esc(it.uom)}</td>
-          <td style="text-align:right">${esc(it.monthly_qty)}</td>
-          <td>${esc(it.remark)}</td>
-          <td style="text-align:center">${it.picture ? `<a href="${esc(it.picture)}" target="_blank"><img src="${esc(it.picture)}" style="max-height:64px;border-radius:4px"/></a>` : ""}</td>
-        </tr>`).join("");
-      const html = `<!doctype html><html lang="th"><head><meta charset="utf-8"><title>แสดงข้อมูล</title>
-        <style>
-          body{font-family:'Segoe UI',sans-serif;color:#111;margin:0;padding:24px;background:#fff}
-          h1{font-size:20px;margin:0 0 4px}
-          .meta{color:#374151;font-size:13px;margin-bottom:16px}
-          table{border-collapse:collapse;width:100%;font-size:13px}
-          th,td{border:1px solid #d1d5db;padding:6px 10px;text-align:left;vertical-align:middle}
-          th{background:#f3f4f6;white-space:nowrap}
-          tbody tr:nth-child(even){background:#fafafa}
-        </style></head><body>
-        <h1>${esc(doc.doc_label)}</h1>
-        <div class="meta">Brand: <b>${esc(doc.brand_name)}</b> &middot; Branch: <b>${esc(doc.branch)}</b> &middot; รายการทั้งหมด: <b>${items.length}</b></div>
-        <table>
-          <thead><tr>
-            <th>#</th><th>Barcode</th><th>SKU</th><th>ชื่อสินค้า</th><th>UOM</th><th>จำนวน/เดือน</th><th>หมายเหตุ</th><th>รูป</th>
-          </tr></thead>
-          <tbody>${rowsHtml || `<tr><td colspan="8" style="text-align:center;color:#6b7280;padding:24px">ไม่มีรายการ</td></tr>`}</tbody>
-        </table>
-        </body></html>`;
-      w.document.open();
-      w.document.write(html);
-      w.document.close();
-    } catch (e: any) {
-      w.document.open();
-      w.document.write(`<!doctype html><meta charset="utf-8"><title>แสดงข้อมูล</title><p style="font-family:sans-serif;padding:20px;color:#b91c1c">เปิดเอกสารไม่สำเร็จ: ${esc(e.message)}</p>`);
-      w.document.close();
     }
   };
 
@@ -683,6 +634,7 @@ export default function SRROrderB2BInternalPage() {
 
       toast({ title: "บันทึกสำเร็จ", description: `${label} (${rowsToSave.length} รายการ)` });
       setMuOpen(false);
+      setActiveTab("brand");
       loadDocs();
     } catch (e: any) {
       toast({ title: "บันทึกไม่สำเร็จ", description: e.message, variant: "destructive" });
@@ -705,6 +657,11 @@ export default function SRROrderB2BInternalPage() {
             <TabsTrigger value="brand" className="text-xs gap-1.5">
               <Tag className="w-3.5 h-3.5" /> Brand control
             </TabsTrigger>
+            {muOpen && (
+              <TabsTrigger value="view" className="text-xs gap-1.5">
+                <Eye className="w-3.5 h-3.5" /> แสดงข้อมูล
+              </TabsTrigger>
+            )}
           </TabsList>
         </div>
 
@@ -746,11 +703,8 @@ export default function SRROrderB2BInternalPage() {
                     <td className="px-3 py-1.5 text-muted-foreground">{new Date(d.created_at).toLocaleString("th-TH")}</td>
                     <td className="px-3 py-1.5">
                       <div className="flex items-center gap-1">
-                        <Button variant="outline" size="sm" className="h-7 gap-1" onClick={() => openMuViewTab(d)}>
+                        <Button variant="outline" size="sm" className="h-7 gap-1" onClick={() => openMuView(d)}>
                           <Eye className="w-3.5 h-3.5" /> View
-                        </Button>
-                        <Button variant="outline" size="icon" className="h-7 w-7" title="แก้ไขเอกสาร" onClick={() => openMuView(d)}>
-                          <Pencil className="w-3.5 h-3.5" />
                         </Button>
                         <Button variant="outline" size="icon" className="h-7 w-7" title="Export Excel" onClick={() => exportDoc(d)}>
                           <Download className="w-3.5 h-3.5" />
@@ -773,7 +727,6 @@ export default function SRROrderB2BInternalPage() {
             </table>
           </div>
         </TabsContent>
-      </Tabs>
 
       {/* ============ List Brand dialog ============ */}
       <Dialog open={open} onOpenChange={setOpen}>
@@ -882,28 +835,52 @@ export default function SRROrderB2BInternalPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ============ Monthly usage dialog ============ */}
-      <Dialog open={muOpen} onOpenChange={setMuOpen}>
-        <DialogContent
-          className="max-w-[96vw] w-[96vw]"
-          onInteractOutside={(e) => e.preventDefault()}
-          onEscapeKeyDown={(e) => e.preventDefault()}
-        >
-          <DialogHeader>
-            <DialogTitle>
+        {/* ============ แสดงข้อมูล / แก้ไข (in-app tab) ============ */}
+        <TabsContent value="view" className="flex-1 overflow-auto mt-0 p-4 bg-background space-y-3">
+          {/* header toolbar */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button variant="ghost" size="sm" className="h-8 gap-1" onClick={() => { setMuOpen(false); setActiveTab("brand"); }}>
+              <X className="w-4 h-4" /> ปิด
+            </Button>
+            <div className="text-sm font-semibold">
               {editingDocId ? `Monthly usage — MU-${String(editingDocNo || 0).padStart(4, "0")}` : "Monthly usage (สร้างใหม่)"}
-            </DialogTitle>
-          </DialogHeader>
+              {muReadOnly && <span className="ml-2 text-[11px] font-normal text-muted-foreground">(โหมดดู)</span>}
+            </div>
+            <div className="ml-auto flex items-center gap-2">
+              {muReadOnly ? (
+                <Button size="sm" className="h-8 gap-1.5" onClick={() => setMuReadOnly(false)}>
+                  <Pencil className="w-4 h-4" /> แก้ไข
+                </Button>
+              ) : (
+                <>
+                  {editingDocId && (
+                    <Button variant="outline" size="sm" className="h-8" onClick={() => setMuReadOnly(true)} disabled={muSaving}>
+                      ยกเลิก
+                    </Button>
+                  )}
+                  <Button size="sm" className="h-8 gap-1.5" onClick={saveMuDoc} disabled={muSaving || muLoading}>
+                    {muSaving && <Loader2 className="w-4 h-4 animate-spin" />}
+                    Save
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
 
           {muLoading ? (
             <div className="flex items-center justify-center py-10">
               <Loader2 className="w-6 h-6 animate-spin text-primary" />
             </div>
           ) : (
-            <div className="max-h-[60vh] overflow-auto space-y-3">
+            <div className="space-y-3">
               {/* Brand selector */}
               <div className="space-y-1.5">
                 <Label className="text-xs">Brand</Label>
+                {muReadOnly ? (
+                  <div className="h-9 flex items-center px-3 border rounded-md bg-muted/40 text-sm">
+                    {selectedBrand?.brand_name || "—"}
+                  </div>
+                ) : (
                 <Select
                   value={selectedBrand?.id || ""}
                   onValueChange={(id) => {
@@ -925,6 +902,7 @@ export default function SRROrderB2BInternalPage() {
                     )}
                   </SelectContent>
                 </Select>
+                )}
               </div>
 
               {/* Item table — 1 รายการ = 1 แถว, เลื่อนแนวนอน + ลากปรับความกว้างคอลัมน์ */}
@@ -962,10 +940,11 @@ export default function SRROrderB2BInternalPage() {
                               data-r={idx}
                               data-c={0}
                               value={row.barcode}
+                              readOnly={muReadOnly}
                               onChange={(e) => updateMuField(idx, "barcode", e.target.value)}
                               onBlur={() => handleBarcodeLookup(idx)}
                               onKeyDown={(e) => handleCellKey(e, idx, 0)}
-                              className="h-8 w-full"
+                              className={`h-8 w-full ${muReadOnly ? "bg-muted/50" : ""}`}
                               placeholder="คีย์ barcode"
                             />
                           </td>
@@ -1023,9 +1002,10 @@ export default function SRROrderB2BInternalPage() {
                               data-c={5}
                               type="number"
                               value={row.monthly_qty}
+                              readOnly={muReadOnly}
                               onChange={(e) => updateMuField(idx, "monthly_qty", e.target.value)}
                               onKeyDown={(e) => handleCellKey(e, idx, 5)}
-                              className="h-8 w-full"
+                              className={`h-8 w-full ${muReadOnly ? "bg-muted/50" : ""}`}
                               placeholder="0"
                             />
                           </td>
@@ -1041,6 +1021,13 @@ export default function SRROrderB2BInternalPage() {
                             />
                           </td>
                           <td className="px-1 py-1">
+                            {muReadOnly ? (
+                              <div className="w-14 h-14 border rounded flex items-center justify-center bg-muted/30 overflow-hidden">
+                                {row.picture
+                                  ? <img src={row.picture} alt="picture" className="w-full h-full object-cover cursor-zoom-in" onClick={() => window.open(row.picture, "_blank")} />
+                                  : <span className="text-[9px] text-muted-foreground">-</span>}
+                              </div>
+                            ) : (
                             <div className="flex items-center gap-1">
                               <div
                                 tabIndex={0}
@@ -1086,19 +1073,22 @@ export default function SRROrderB2BInternalPage() {
                                 </label>
                               </div>
                             </div>
+                            )}
                           </td>
                           <td className="px-1 py-1">
                             <Input
                               data-r={idx}
                               data-c={7}
                               value={row.remark}
+                              readOnly={muReadOnly}
                               onChange={(e) => updateMuField(idx, "remark", e.target.value)}
                               onKeyDown={(e) => handleCellKey(e, idx, 7)}
-                              className="h-8 w-full"
+                              className={`h-8 w-full ${muReadOnly ? "bg-muted/50" : ""}`}
                               placeholder="หมายเหตุ"
                             />
                           </td>
                           <td className="px-1 py-1">
+                            {!muReadOnly && (
                             <div className="flex items-center justify-center gap-0.5">
                               <Button variant="ghost" size="icon" className="h-7 w-7" title="Duplicate" onClick={() => duplicateMuRow(idx)}>
                                 <Copy className="w-4 h-4 text-muted-foreground" />
@@ -1107,6 +1097,7 @@ export default function SRROrderB2BInternalPage() {
                                 <Trash2 className="w-4 h-4 text-destructive" />
                               </Button>
                             </div>
+                            )}
                           </td>
                         </tr>
                       );
@@ -1122,23 +1113,15 @@ export default function SRROrderB2BInternalPage() {
                 </table>
               </div>
 
-              <Button variant="outline" size="sm" onClick={addMuRow} className="gap-1.5">
-                <Plus className="w-4 h-4" /> เพิ่มรายการ
-              </Button>
+              {!muReadOnly && (
+                <Button variant="outline" size="sm" onClick={addMuRow} className="gap-1.5">
+                  <Plus className="w-4 h-4" /> เพิ่มรายการ
+                </Button>
+              )}
             </div>
           )}
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setMuOpen(false)} disabled={muSaving}>
-              Cancel
-            </Button>
-            <Button onClick={saveMuDoc} disabled={muSaving || muLoading}>
-              {muSaving && <Loader2 className="w-4 h-4 animate-spin mr-1.5" />}
-              Save
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
