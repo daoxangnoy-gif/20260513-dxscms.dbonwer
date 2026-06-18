@@ -554,6 +554,21 @@ export default function SRROrderB2BInternalPage() {
     }
     setMuSaving(true);
     try {
+      // 0) กฎ 1 Brand = 1 Doc — ตอนสร้างใหม่ ถ้า brand นี้มีเอกสารแล้ว ห้ามสร้างซ้ำ (ให้แก้ไขเอกสารเดิมแทน)
+      if (!editingDocId) {
+        const { data: existing } = await (supabase as any)
+          .from("monthly_usage_doc")
+          .select("doc_label")
+          .eq("brand_name", selectedBrand.brand_name)
+          .eq("branch", selectedBrand.branch)
+          .limit(1);
+        if (existing && existing.length) {
+          toast({ title: "Brand นี้มีเอกสารแล้ว", description: `"${selectedBrand.brand_name}" มีเอกสาร ${existing[0].doc_label} อยู่แล้ว — 1 Brand สร้างได้ 1 Doc (ให้แก้ไขเอกสารเดิมแทน)`, variant: "destructive" });
+          setMuSaving(false);
+          return;
+        }
+      }
+
       // 1) อัปรูปก่อน (data URL → public URL) — ถ้าพัง (เช่น bucket หาย) จะ throw ออกก่อน
       //    ยังไม่สร้าง doc/items → ไม่เหลือ doc ขยะ
       const pictureUrls = await Promise.all(
