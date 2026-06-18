@@ -279,6 +279,7 @@ export default function SRROrderB2BInternalPage() {
 
   const [muOpen, setMuOpen] = useState(false);   // editor panel (in-app tab "แสดงข้อมูล") เปิดอยู่ไหม
   const [muReadOnly, setMuReadOnly] = useState(false); // true = โหมดดู, false = โหมดแก้ไข
+  const [dupDocPrompt, setDupDocPrompt] = useState<MUDoc | null>(null); // เอกสารเดิมของ brand ที่เลือก (ถ้ามี)
   const [muLoading, setMuLoading] = useState(false);
   const [muSaving, setMuSaving] = useState(false);
   const [editingDocId, setEditingDocId] = useState<string | null>(null);
@@ -404,9 +405,9 @@ export default function SRROrderB2BInternalPage() {
     await loadBrandOptions();
   };
 
-  const openMuView = async (doc: MUDoc) => {
+  const openMuView = async (doc: MUDoc, readOnly = true) => {
     setMuOpen(true);
-    setMuReadOnly(true);
+    setMuReadOnly(readOnly);
     setActiveTab("view");
     setMuLoading(true);
     setEditingDocId(doc.id);
@@ -442,6 +443,21 @@ export default function SRROrderB2BInternalPage() {
     } finally {
       setMuLoading(false);
     }
+  };
+
+  // เลือก Brand — ตอนสร้างใหม่ ถ้า brand นี้มี doc แล้ว เด้งถามให้เปิดแก้ไขเอกสารเดิม
+  const handleBrandSelect = async (id: string) => {
+    const o = mergedBrandOptions.find((b) => b.id === id);
+    if (!o) return;
+    setSelectedBrand({ id: o.id!, brand_name: o.brand_name, branch: o.branch });
+    if (editingDocId) return; // กำลังแก้ไขเอกสารเดิมอยู่ ไม่ต้องเช็ค
+    const { data } = await (supabase as any)
+      .from("monthly_usage_doc")
+      .select("id, doc_no, doc_label, brand_name, branch, item_count, created_at")
+      .eq("brand_name", o.brand_name)
+      .eq("branch", o.branch)
+      .limit(1);
+    if (data && data.length) setDupDocPrompt(data[0]);
   };
 
   // resolve barcode → data_master (main_barcode → sku_code → barcode)
@@ -883,10 +899,7 @@ export default function SRROrderB2BInternalPage() {
                 ) : (
                 <Select
                   value={selectedBrand?.id || ""}
-                  onValueChange={(id) => {
-                    const o = mergedBrandOptions.find((b) => b.id === id);
-                    if (o) setSelectedBrand({ id: o.id!, brand_name: o.brand_name, branch: o.branch });
-                  }}
+                  onValueChange={handleBrandSelect}
                 >
                   <SelectTrigger className="h-9">
                     <SelectValue placeholder="เลือก Brand" />
@@ -1122,6 +1135,27 @@ export default function SRROrderB2BInternalPage() {
           )}
         </TabsContent>
       </Tabs>
+
+      {/* ถาม: Brand นี้มีเอกสารแล้ว เปิดแก้ไขเอกสารเดิมไหม */}
+      <Dialog open={!!dupDocPrompt} onOpenChange={(o) => { if (!o) { setDupDocPrompt(null); setSelectedBrand(null); } }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Brand นี้มีเอกสารแล้ว</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            "{dupDocPrompt?.brand_name}" มีเอกสาร <b>{dupDocPrompt?.doc_label}</b> อยู่แล้ว (1 Brand ได้ 1 Doc)
+            <br />ต้องการเปิดแก้ไขเอกสารเดิมไหม?
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setDupDocPrompt(null); setSelectedBrand(null); }}>
+              ยกเลิก
+            </Button>
+            <Button onClick={() => { const d = dupDocPrompt; setDupDocPrompt(null); if (d) openMuView(d, false); }}>
+              <Pencil className="w-4 h-4 mr-1.5" /> เปิดแก้ไขเอกสารเดิม
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
