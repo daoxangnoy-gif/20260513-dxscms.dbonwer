@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download } from "lucide-react";
+import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download, Pencil } from "lucide-react";
 import * as XLSX from "xlsx";
 
 const MU_BUCKET = "monthly-usage-pictures";
@@ -439,6 +439,60 @@ export default function SRROrderB2BInternalPage() {
     }
   };
 
+  // เปิดดูเอกสาร (read-only) ในแท็บใหม่ ชื่อ "แสดงข้อมูล"
+  const openMuViewTab = async (doc: MUDoc) => {
+    const w = window.open("", "_blank");
+    if (!w) { toast({ title: "เปิดแท็บใหม่ไม่สำเร็จ", description: "กรุณาอนุญาต popup ของเว็บนี้", variant: "destructive" }); return; }
+    const esc = (s: any) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
+    w.document.write(`<!doctype html><meta charset="utf-8"><title>แสดงข้อมูล</title><p style="font-family:sans-serif;padding:20px">กำลังโหลด...</p>`);
+    try {
+      const { data, error } = await (supabase as any)
+        .from("monthly_usage_item")
+        .select("*")
+        .eq("doc_id", doc.id)
+        .order("sort_order", { ascending: true });
+      if (error) throw error;
+      const items = (data || []) as any[];
+      const rowsHtml = items.map((it, i) => `
+        <tr>
+          <td style="text-align:center">${i + 1}</td>
+          <td>${esc(it.barcode)}</td>
+          <td>${esc(it.sku_code)}</td>
+          <td>${esc(it.product_name)}</td>
+          <td>${esc(it.uom)}</td>
+          <td style="text-align:right">${esc(it.monthly_qty)}</td>
+          <td>${esc(it.remark)}</td>
+          <td style="text-align:center">${it.picture ? `<a href="${esc(it.picture)}" target="_blank"><img src="${esc(it.picture)}" style="max-height:64px;border-radius:4px"/></a>` : ""}</td>
+        </tr>`).join("");
+      const html = `<!doctype html><html lang="th"><head><meta charset="utf-8"><title>แสดงข้อมูล</title>
+        <style>
+          body{font-family:'Segoe UI',sans-serif;color:#111;margin:0;padding:24px;background:#fff}
+          h1{font-size:20px;margin:0 0 4px}
+          .meta{color:#374151;font-size:13px;margin-bottom:16px}
+          table{border-collapse:collapse;width:100%;font-size:13px}
+          th,td{border:1px solid #d1d5db;padding:6px 10px;text-align:left;vertical-align:middle}
+          th{background:#f3f4f6;white-space:nowrap}
+          tbody tr:nth-child(even){background:#fafafa}
+        </style></head><body>
+        <h1>${esc(doc.doc_label)}</h1>
+        <div class="meta">Brand: <b>${esc(doc.brand_name)}</b> &middot; Branch: <b>${esc(doc.branch)}</b> &middot; รายการทั้งหมด: <b>${items.length}</b></div>
+        <table>
+          <thead><tr>
+            <th>#</th><th>Barcode</th><th>SKU</th><th>ชื่อสินค้า</th><th>UOM</th><th>จำนวน/เดือน</th><th>หมายเหตุ</th><th>รูป</th>
+          </tr></thead>
+          <tbody>${rowsHtml || `<tr><td colspan="8" style="text-align:center;color:#6b7280;padding:24px">ไม่มีรายการ</td></tr>`}</tbody>
+        </table>
+        </body></html>`;
+      w.document.open();
+      w.document.write(html);
+      w.document.close();
+    } catch (e: any) {
+      w.document.open();
+      w.document.write(`<!doctype html><meta charset="utf-8"><title>แสดงข้อมูล</title><p style="font-family:sans-serif;padding:20px;color:#b91c1c">เปิดเอกสารไม่สำเร็จ: ${esc(e.message)}</p>`);
+      w.document.close();
+    }
+  };
+
   // resolve barcode → data_master (main_barcode → sku_code → barcode)
   const resolveBarcode = async (code: string) => {
     const c = code.trim();
@@ -692,8 +746,11 @@ export default function SRROrderB2BInternalPage() {
                     <td className="px-3 py-1.5 text-muted-foreground">{new Date(d.created_at).toLocaleString("th-TH")}</td>
                     <td className="px-3 py-1.5">
                       <div className="flex items-center gap-1">
-                        <Button variant="outline" size="sm" className="h-7 gap-1" onClick={() => openMuView(d)}>
+                        <Button variant="outline" size="sm" className="h-7 gap-1" onClick={() => openMuViewTab(d)}>
                           <Eye className="w-3.5 h-3.5" /> View
+                        </Button>
+                        <Button variant="outline" size="icon" className="h-7 w-7" title="แก้ไขเอกสาร" onClick={() => openMuView(d)}>
+                          <Pencil className="w-3.5 h-3.5" />
                         </Button>
                         <Button variant="outline" size="icon" className="h-7 w-7" title="Export Excel" onClick={() => exportDoc(d)}>
                           <Download className="w-3.5 h-3.5" />
