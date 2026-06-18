@@ -169,8 +169,18 @@ export default function SRROrderB2BInternalPage() {
     setSaving(true);
     try {
       const payload = rows.map((r) => ({ code: r.code, brand_name: r.brand_name.trim(), branch: r.branch.trim() }));
-      const { error } = await (supabase as any).from("brand").upsert(payload, { onConflict: "code" });
-      if (error) throw error;
+      // upsert แถวที่เหลือในจอ
+      if (payload.length) {
+        const { error } = await (supabase as any).from("brand").upsert(payload, { onConflict: "code" });
+        if (error) throw error;
+      }
+      // ลบ Brand ที่ถูกลบออกจากจอ (code ที่ไม่อยู่ในรายการปัจจุบัน) — ให้ DB ตรงกับจอ
+      const keepCodes = rows.map((r) => r.code);
+      const delQ = (supabase as any).from("brand").delete();
+      const { error: delErr } = await (keepCodes.length
+        ? delQ.not("code", "in", `(${keepCodes.join(",")})`)
+        : delQ.gte("code", -2147483648));
+      if (delErr) throw delErr;
       toast({ title: "บันทึกสำเร็จ", description: `บันทึก ${payload.length} Brand` });
       setOpen(false);
     } catch (e: any) {
