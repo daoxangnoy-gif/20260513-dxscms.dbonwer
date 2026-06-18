@@ -332,14 +332,9 @@ ${dueLine}
       // เปิดแอป WhatsApp บนเครื่อง (Desktop/Mobile native app)
       window.location.href = `whatsapp://send?phone=${p}&text=${encodeURIComponent(message)}`;
     } else {
-      // เปิด WhatsApp Web ในแท็บใหม่ (ไม่เด้งไปแอป)
-      const a = document.createElement("a");
-      a.href = `https://web.whatsapp.com/send?phone=${p}&text=${encodeURIComponent(message)}`;
-      a.target = "_blank";
-      a.rel = "noopener noreferrer";
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      // เปิด WhatsApp Web โดยใช้แท็บชื่อ "wa_web" ซ้ำ — ครั้งต่อไป navigate แท็บเดิมแทนเปิดใหม่
+      // (ห้ามใส่ noopener ไม่งั้น browser จะไม่ reuse แท็บตามชื่อ)
+      window.open(`https://web.whatsapp.com/send?phone=${p}&text=${encodeURIComponent(message)}`, "wa_web");
     }
     setWaChoice(null);
   };
