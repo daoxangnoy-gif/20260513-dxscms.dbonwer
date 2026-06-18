@@ -582,12 +582,30 @@ export default function SRROrderB2BInternalPage() {
           };
         }),
       );
-      setMuRows((prev) => {
-        const existing = prev.filter((r) => r.barcode.trim() || r.product_name.trim() || r.monthly_qty.trim());
-        return [...existing, ...resolved];
-      });
+      // upsert by barcode — barcode ที่มีอยู่แล้วให้อัปเดตแถวเดิม (ไม่เพิ่มแถวซ้ำ)
+      const result = muRows
+        .filter((r) => r.barcode.trim() || r.product_name.trim() || r.monthly_qty.trim())
+        .map((r) => ({ ...r }));
+      const byCode = new Map<string, number>();
+      result.forEach((r, i) => { const k = r.barcode.trim(); if (k) byCode.set(k, i); });
+      let updated = 0;
+      let added = 0;
+      for (const row of resolved) {
+        const k = row.barcode.trim();
+        const exIdx = k ? byCode.get(k) : undefined;
+        if (exIdx !== undefined) {
+          // อัปเดตแถวเดิม — เก็บรูปเดิมไว้ถ้าไฟล์ import ไม่มีรูป
+          result[exIdx] = { ...result[exIdx], ...row, picture: result[exIdx].picture || row.picture };
+          updated++;
+        } else {
+          result.push(row);
+          if (k) byCode.set(k, result.length - 1);
+          added++;
+        }
+      }
+      setMuRows(result.length ? result : [{ ...EMPTY_MU }]);
       const notFound = resolved.filter((r) => r.product_name === "ไม่พบข้อมูล").length;
-      toast({ title: "นำเข้าสำเร็จ", description: `${resolved.length} รายการ${notFound ? ` (ไม่พบ ${notFound})` : ""}` });
+      toast({ title: "นำเข้าสำเร็จ", description: `เพิ่ม ${added} · อัปเดต ${updated}${notFound ? ` · ไม่พบ ${notFound}` : ""}` });
     } catch (e: any) {
       toast({ title: "นำเข้าไม่สำเร็จ", description: e.message, variant: "destructive" });
     } finally {
