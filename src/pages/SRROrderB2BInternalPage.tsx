@@ -284,6 +284,7 @@ export default function SRROrderB2BInternalPage() {
   const [muSaving, setMuSaving] = useState(false);
   const [editingDocId, setEditingDocId] = useState<string | null>(null);
   const [editingDocNo, setEditingDocNo] = useState<number | null>(null);
+  const [editingDocLabel, setEditingDocLabel] = useState<string | null>(null); // เก็บชื่อ doc เดิมไว้ ตอนแก้ไขจะไม่เปลี่ยนชื่อ
   const [brandOptions, setBrandOptions] = useState<BrandRow[]>([]);
   const [selectedBrand, setSelectedBrand] = useState<{ id: string; brand_name: string; branch: string } | null>(null);
   const [muRows, setMuRows] = useState<MonthlyUsageForm[]>([]);
@@ -396,6 +397,7 @@ export default function SRROrderB2BInternalPage() {
   const openMuNew = async () => {
     setEditingDocId(null);
     setEditingDocNo(null);
+    setEditingDocLabel(null);
     setSelectedBrand(null);
     setMuRows([{ ...EMPTY_MU }]);
     setLookup({});
@@ -412,6 +414,7 @@ export default function SRROrderB2BInternalPage() {
     setMuLoading(true);
     setEditingDocId(doc.id);
     setEditingDocNo(doc.doc_no);
+    setEditingDocLabel(doc.doc_label);
     setLookup({});
     try {
       const opts = await loadBrandOptions();
@@ -609,7 +612,13 @@ export default function SRROrderB2BInternalPage() {
           .limit(1);
         docNo = (maxd?.[0]?.doc_no || 0) + 1;
       }
-      const label = `${selectedBrand.brand_name} ${selectedBrand.branch} MU-${String(docNo).padStart(4, "0")}`.trim();
+      // ชื่อ doc รูปแบบ yyyymmddhhmm - brandname (ตอนแก้ไขเอกสารเดิม ใช้ชื่อเดิม ไม่เปลี่ยน)
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const now = new Date();
+      const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`;
+      const label = editingDocId && editingDocLabel
+        ? editingDocLabel
+        : `${stamp} - ${selectedBrand.brand_name}`.trim();
       const docPayload: any = {
         doc_no: docNo,
         doc_label: label,
@@ -703,7 +712,6 @@ export default function SRROrderB2BInternalPage() {
                 <tr className="text-left text-muted-foreground border-b">
                   <th className="px-3 py-1.5 font-medium">Doc</th>
                   <th className="px-3 py-1.5 font-medium">Brand</th>
-                  <th className="px-3 py-1.5 font-medium">Branch</th>
                   <th className="px-3 py-1.5 font-medium w-20 text-right">รายการ</th>
                   <th className="px-3 py-1.5 font-medium w-36">วันที่</th>
                   <th className="px-3 py-1.5 font-medium w-44" />
@@ -714,7 +722,6 @@ export default function SRROrderB2BInternalPage() {
                   <tr key={d.id} className="border-b last:border-0 hover:bg-muted/40">
                     <td className="px-3 py-1.5 font-medium">{d.doc_label}</td>
                     <td className="px-3 py-1.5">{d.brand_name}</td>
-                    <td className="px-3 py-1.5">{d.branch}</td>
                     <td className="px-3 py-1.5 text-right tabular-nums">{d.item_count}</td>
                     <td className="px-3 py-1.5 text-muted-foreground">{new Date(d.created_at).toLocaleString("th-TH")}</td>
                     <td className="px-3 py-1.5">
@@ -734,7 +741,7 @@ export default function SRROrderB2BInternalPage() {
                 ))}
                 {docs.length === 0 && !docsLoading && (
                   <tr>
-                    <td colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
+                    <td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">
                       ยังไม่มีเอกสาร — กด "Monthly usage" เพื่อสร้างใหม่
                     </td>
                   </tr>
@@ -859,7 +866,7 @@ export default function SRROrderB2BInternalPage() {
               <X className="w-4 h-4" /> ปิด
             </Button>
             <div className="text-sm font-semibold">
-              {editingDocId ? `Monthly usage — MU-${String(editingDocNo || 0).padStart(4, "0")}` : "Monthly usage (สร้างใหม่)"}
+              {editingDocId ? `Monthly usage — ${editingDocLabel || ""}` : "Monthly usage (สร้างใหม่)"}
               {muReadOnly && <span className="ml-2 text-[11px] font-normal text-muted-foreground">(โหมดดู)</span>}
             </div>
             <div className="ml-auto flex items-center gap-2">
