@@ -917,7 +917,7 @@ export default function SRROrderB2BInternalPage() {
                   <SelectContent>
                     {mergedBrandOptions.map((b) => (
                       <SelectItem key={b.id} value={b.id!}>
-                        {b.brand_name} — {b.branch}
+                        {b.brand_name}
                       </SelectItem>
                     ))}
                     {mergedBrandOptions.length === 0 && (
