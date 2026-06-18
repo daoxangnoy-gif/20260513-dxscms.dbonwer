@@ -10,7 +10,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Loader2, Plus, Paperclip, Clipboard, MessageCircle, CheckCircle2, Trash2, FileText, Calendar, Pencil,
-  Clock, BellRing, Search,
+  Clock, BellRing, Search, Monitor, Globe,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
@@ -111,6 +111,9 @@ export default function SRRJobAssignPage() {
   const [file, setFile] = useState<File | null>(null);
   const [existingAttachment, setExistingAttachment] = useState<{ url: string; name: string; type: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // popup เลือกช่องทางส่ง WhatsApp (Desktop app / WhatsApp Web)
+  const [waChoice, setWaChoice] = useState<{ phone: string; message: string } | null>(null);
 
   const loadRows = async () => {
     setLoading(true);
@@ -314,24 +317,31 @@ ${dueLine}
     return s;
   };
 
+  // เปิด popup ให้ผู้ใช้เลือกช่องทางส่งทุกครั้ง (Desktop app / WhatsApp Web)
   const openWhatsApp = (toPhone: string, message: string) => {
     const p = normalizePhone(toPhone);
     if (!p) { toast.error("ไม่มีเบอร์โทรปลายทาง"); return; }
-    // เปิดแอป WhatsApp บนเครื่องโดยตรง (Desktop/Mobile native app)
-    const appUrl = `whatsapp://send?phone=${p}&text=${encodeURIComponent(message)}`;
-    const webUrl = `https://api.whatsapp.com/send?phone=${p}&text=${encodeURIComponent(message)}`;
-    // ลองเปิดแอปก่อน
-    window.location.href = appUrl;
-    // fallback ไปเว็บถ้าไม่มีแอป (รอ 800ms)
-    setTimeout(() => {
+    setWaChoice({ phone: toPhone, message });
+  };
+
+  // ยิงเปิดจริงตามช่องทางที่เลือก
+  const launchWhatsApp = (mode: "app" | "web", toPhone: string, message: string) => {
+    const p = normalizePhone(toPhone);
+    if (!p) { toast.error("ไม่มีเบอร์โทรปลายทาง"); return; }
+    if (mode === "app") {
+      // เปิดแอป WhatsApp บนเครื่อง (Desktop/Mobile native app)
+      window.location.href = `whatsapp://send?phone=${p}&text=${encodeURIComponent(message)}`;
+    } else {
+      // เปิด WhatsApp Web ในแท็บใหม่ (ไม่เด้งไปแอป)
       const a = document.createElement("a");
-      a.href = webUrl;
+      a.href = `https://web.whatsapp.com/send?phone=${p}&text=${encodeURIComponent(message)}`;
       a.target = "_blank";
       a.rel = "noopener noreferrer";
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-    }, 800);
+    }
+    setWaChoice(null);
   };
 
   const handleSave = async () => {
@@ -390,7 +400,7 @@ ${dueLine}
           fileLink,
         });
         openWhatsApp(targetPhone, msg);
-        toast.success("บันทึกและเปิด WhatsApp แล้ว");
+        toast.success("บันทึกแล้ว — เลือกช่องทางส่ง WhatsApp");
       }
 
       setOpenCreate(false);
@@ -752,6 +762,43 @@ ${dueLine}
               {saving ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : editingId ? <CheckCircle2 className="w-4 h-4 mr-1" /> : <MessageCircle className="w-4 h-4 mr-1" />}
               {editingId ? "บันทึกการแก้ไข" : "Save & ส่ง WhatsApp"}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* เลือกช่องทางส่ง WhatsApp */}
+      <Dialog open={!!waChoice} onOpenChange={(o) => { if (!o) setWaChoice(null); }}>
+        <DialogContent className="max-w-xs">
+          <DialogHeader>
+            <DialogTitle>ส่งผ่าน WhatsApp</DialogTitle>
+            <DialogDescription>เลือกช่องทางที่จะเปิด</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-2">
+            <Button
+              variant="outline"
+              className="justify-start h-auto py-3"
+              onClick={() => waChoice && launchWhatsApp("app", waChoice.phone, waChoice.message)}
+            >
+              <Monitor className="w-5 h-5 mr-2 text-emerald-600" />
+              <div className="text-left">
+                <div className="font-medium">แอป Desktop / มือถือ</div>
+                <div className="text-[11px] text-muted-foreground">เปิดแอป WhatsApp ที่ติดตั้งบนเครื่อง</div>
+              </div>
+            </Button>
+            <Button
+              variant="outline"
+              className="justify-start h-auto py-3"
+              onClick={() => waChoice && launchWhatsApp("web", waChoice.phone, waChoice.message)}
+            >
+              <Globe className="w-5 h-5 mr-2 text-blue-600" />
+              <div className="text-left">
+                <div className="font-medium">WhatsApp Web</div>
+                <div className="text-[11px] text-muted-foreground">เปิด web.whatsapp.com ในแท็บใหม่</div>
+              </div>
+            </Button>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setWaChoice(null)}>ยกเลิก</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
