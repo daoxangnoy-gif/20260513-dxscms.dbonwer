@@ -78,7 +78,7 @@ export const HIGHLIGHT_COLS = new Set([
 ]);
 export const TRUNCATE_COLS = new Set(["product_name_la", "product_name_en", "vendor_display"]);
 
-export const SRR_COLUMNS: { key: keyof SRRRow | "pack_size" | "ranking" | "core_item"; label: string; group?: string }[] = [
+export const SRR_COLUMNS: { key: keyof SRRRow | "pack_size" | "ranking" | "core_item" | "amount"; label: string; group?: string }[] = [
   { key: "vendor_display", label: "Vendor" },
   { key: "po_group", label: "PO Group" },
   { key: "division_group", label: "Division Group" },
@@ -140,6 +140,7 @@ export const SRR_COLUMNS: { key: keyof SRRRow | "pack_size" | "ranking" | "core_
   { key: "order_uom_edit", label: "Order UOM EDIT" },
   { key: "doh_asis", label: "DOH ASIS" },
   { key: "doh_tobe", label: "DOH TOBE" },
+  { key: "amount", label: "Amount" }, // = po_cost_unit × final_suggest_qty
 ];
 
 export const ALL_COL_KEYS = SRR_COLUMNS.map(c => c.key);
@@ -168,6 +169,7 @@ export const DEFAULT_SRR_VISIBLE = new Set<string>([
   "order_uom_edit",
   "doh_asis",
   "doh_tobe",
+  "amount",
 ]);
 export const EDITABLE_COLS = new Set(["order_uom_edit", "safety"]);
 
@@ -196,6 +198,7 @@ export function getDefaultWidth(key: string): number {
   if (key === "sku_code" || key === "barcode_unit") return 120;
   if (key === "order_uom_edit") return 110;
   if (key === "doh_asis" || key === "doh_tobe") return 90;
+  if (key === "amount") return 110;
   return 90;
 }
 

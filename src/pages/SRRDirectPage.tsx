@@ -594,7 +594,7 @@ function buildD2SRows(rawRows: any[]): D2SRow[] {
 }
 
 // --- Columns (Spec A→AJ exact order) ---
-const D2S_COLUMNS: { key: keyof D2SRow | "ranking" | "core_item"; label: string; group?: string }[] = [
+const D2S_COLUMNS: { key: keyof D2SRow | "ranking" | "core_item" | "amount"; label: string; group?: string }[] = [
   { key: "store_name", label: "Store Name" }, // A
   { key: "type_store", label: "Type Store" }, // B
   { key: "division_group", label: "Division Group" }, // C
@@ -637,6 +637,7 @@ const D2S_COLUMNS: { key: keyof D2SRow | "ranking" | "core_item"; label: string;
   { key: "doh_asis", label: "AsIs DOH" }, // AH
   { key: "doh_tobe", label: "ToBe DOH" }, // AI
   { key: "po_cost_unit", label: "PO Cost Unit" }, // AJ
+  { key: "amount", label: "Amount" }, // = po_cost_unit × (final_order_uom_div × moq)
 ];
 
 const ALL_D2S_KEYS = D2S_COLUMNS.map((c) => c.key);
@@ -662,6 +663,7 @@ const DEFAULT_D2S_VISIBLE = new Set<string>([
   "doh_asis",
   "doh_tobe",
   "po_cost_unit",
+  "amount",
 ]);
 const HIGHLIGHT_D2S = new Set([
   "srr_suggest",
@@ -701,6 +703,7 @@ function getDefaultWidth(key: string): number {
   if (key === "store_name") return 140;
   if (key === "sku_code" || key === "main_barcode" || key === "barcode_unit") return 120;
   if (key === "order_uom_edit") return 110;
+  if (key === "amount") return 110;
   return 90;
 }
 
@@ -3101,9 +3104,11 @@ export default function SRRDirectPage() {
     const exportRows = rows.map((r) => {
       const mapped: Record<string, any> = {};
       for (const col of displayColumns) {
-        mapped[col.label] = (col.key === "core_item" || col.key === "ranking")
-          ? deriveCoreVal(r, col.key)
-          : (r as any)[col.key];
+        mapped[col.label] = col.key === "amount"
+          ? (Number(r.po_cost_unit) || 0) * ((Number(r.final_order_uom_div) || 0) * (Number(r.moq) || 0))
+          : (col.key === "core_item" || col.key === "ranking")
+            ? deriveCoreVal(r, col.key)
+            : (r as any)[col.key];
       }
       return mapped;
     });
@@ -3589,9 +3594,11 @@ export default function SRRDirectPage() {
                   </td>
                 )}
                 {displayColumns.map((col, colIdx) => {
-                  const val = (col.key === "core_item" || col.key === "ranking")
-                    ? deriveCoreVal(row, col.key)
-                    : row[col.key as keyof D2SRow];
+                  const val = col.key === "amount"
+                    ? (Number(row.po_cost_unit) || 0) * ((Number(row.final_order_uom_div) || 0) * (Number(row.moq) || 0))
+                    : (col.key === "core_item" || col.key === "ranking")
+                      ? deriveCoreVal(row, col.key)
+                      : row[col.key as keyof D2SRow];
                   const displayVal = formatCellValue(val, col.key);
                   const isTruncate = TRUNCATE_D2S.has(col.key);
                   const isHighlight = HIGHLIGHT_D2S.has(col.key);

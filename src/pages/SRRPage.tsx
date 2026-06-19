@@ -2458,9 +2458,11 @@ function SRRDCItemPage() {
       for (const col of displayColumns) {
         mapped[col.label] = col.key === "pack_size"
           ? (Number(r.moq) === 1 ? "Unit" : `1x${Number(r.moq) || 0}`)
-          : (col.key === "core_item" || col.key === "ranking")
-            ? deriveCoreVal(r, col.key)
-            : (r as any)[col.key];
+          : col.key === "amount"
+            ? (Number(r.po_cost_unit) || 0) * (Number(r.final_suggest_qty) || 0)
+            : (col.key === "core_item" || col.key === "ranking")
+              ? deriveCoreVal(r, col.key)
+              : (r as any)[col.key];
       }
       return mapped;
     });
@@ -2917,9 +2919,11 @@ function SRRDCItemPage() {
                   const isCellActive = activeCell?.row === idx && activeCell?.col === colIdx;
                   const val = col.key === "pack_size"
                     ? (Number(row.moq) === 1 ? "Unit" : `1x${Number(row.moq) || 0}`)
-                    : (col.key === "core_item" || col.key === "ranking")
-                      ? deriveCoreVal(row, col.key)
-                      : row[col.key as keyof SRRRow];
+                    : col.key === "amount"
+                      ? (Number(row.po_cost_unit) || 0) * (Number(row.final_suggest_qty) || 0)
+                      : (col.key === "core_item" || col.key === "ranking")
+                        ? deriveCoreVal(row, col.key)
+                        : row[col.key as keyof SRRRow];
                   const displayVal = formatCellValue(val, col.key);
                   const isEditable = showEditColumns && EDITABLE_COLS.has(col.key);
                   const isTruncate = TRUNCATE_COLS.has(col.key);
