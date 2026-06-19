@@ -41,6 +41,12 @@ type MonthlyUsageForm = {
   monthly_qty: string;
   picture: string;
   remark: string;
+  // คอลัมน์อ้างอิงจาก data_master / vendor_master (derive ตอนแสดงผล ไม่ได้เก็บลง DB)
+  division_group: string;
+  division: string;
+  department: string;
+  buying_status: string;
+  vendor_origin: string;
 };
 
 type MUDoc = {
@@ -62,6 +68,11 @@ const EMPTY_MU: MonthlyUsageForm = {
   monthly_qty: "",
   picture: "",
   remark: "",
+  division_group: "",
+  division: "",
+  department: "",
+  buying_status: "",
+  vendor_origin: "",
 };
 
 const fileToDataUrl = (file: File): Promise<string> =>
@@ -84,6 +95,11 @@ const MU_COLS = [
   { key: "dqty", label: "Daily qty (÷30)", def: 110, min: 70 },
   { key: "pic", label: "Picture", def: 150, min: 120 },
   { key: "remark", label: "Remark", def: 200, min: 100 },
+  { key: "dgroup", label: "Division Group", def: 130, min: 90 },
+  { key: "division", label: "Division", def: 120, min: 90 },
+  { key: "dept", label: "Department", def: 130, min: 90 },
+  { key: "bstatus", label: "Buying Status", def: 120, min: 90 },
+  { key: "vorigin", label: "Vendor Origin", def: 180, min: 100 },
   { key: "act", label: "", def: 74, min: 64 },
 ] as const;
 const MU_COL_KEY = "mu_col_widths_v1";
@@ -198,6 +214,25 @@ export default function SRROrderB2BInternalPage() {
   const [docs, setDocs] = useState<MUDoc[]>([]);
   const [docsLoading, setDocsLoading] = useState(false);
   const [noOdooMap, setNoOdooMap] = useState<Record<string, number>>({}); // doc_id -> จำนวน SKU ที่ resolve ไม่เจอ
+  const vendorNameMapRef = useRef<Record<string, string>>({}); // vendor_code -> ชื่อ vendor (จาก vendor_master) สำหรับคอลัมน์ Vendor Origin
+
+  // โหลดชื่อ vendor จาก vendor_master ครั้งเดียว (vendor_code -> ชื่อ)
+  useEffect(() => {
+    (async () => {
+      const m: Record<string, string> = {};
+      const PAGE = 1000;
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await (supabase as any)
+          .from("vendor_master")
+          .select("vendor_code, vendor_name_la, vendor_name_en")
+          .range(from, from + PAGE - 1);
+        if (error || !data || data.length === 0) break;
+        for (const v of data as any[]) { if (v.vendor_code) m[String(v.vendor_code)] = v.vendor_name_la || v.vendor_name_en || ""; }
+        if (data.length < PAGE) break;
+      }
+      vendorNameMapRef.current = m;
+    })();
+  }, []);
 
   const loadDocs = async () => {
     setDocsLoading(true);
@@ -261,18 +296,37 @@ export default function SRROrderB2BInternalPage() {
         toast({ title: "เอกสารว่าง ไม่มีรายการให้ export", variant: "destructive" });
         return;
       }
-      const rows = items.map((it: any, i: number) => ({
-        "#": i + 1,
-        "ID (SKU)": it.sku_code || "",
-        Barcode: it.barcode || "",
-        "Barcode Unit": it.barcode_unit || "",
-        "Product name": it.product_name || "",
-        UOM: it.uom || "",
-        "Monthly qty": it.monthly_qty ?? "",
-        "Daily qty": it.daily_qty != null ? Number(it.daily_qty).toFixed(2) : "",
-        Remark: it.remark || "",
-        "รูป (ลิงก์)": it.picture ? "เปิดรูป" : "",
-      }));
+      // enrich ข้อมูลอ้างอิงจาก data_master ตาม sku_code
+      const skus = [...new Set(items.map((it: any) => it.sku_code).filter(Boolean))] as string[];
+      const dmMap: Record<string, any> = {};
+      if (skus.length) {
+        const { data: dm } = await (supabase as any)
+          .from("data_master")
+          .select("sku_code, division_group, division, department, buying_status, vendor_code, vendor_display_name")
+          .in("sku_code", skus);
+        for (const d of (dm || []) as any[]) { if (d.sku_code && !dmMap[d.sku_code]) dmMap[d.sku_code] = d; }
+      }
+      const rows = items.map((it: any, i: number) => {
+        const d = dmMap[it.sku_code] || {};
+        const vendorOrigin = (d.vendor_code && vendorNameMapRef.current[d.vendor_code]) || d.vendor_display_name || d.vendor_code || "";
+        return {
+          "#": i + 1,
+          "ID (SKU)": it.sku_code || "",
+          Barcode: it.barcode || "",
+          "Barcode Unit": it.barcode_unit || "",
+          "Product name": it.product_name || "",
+          UOM: it.uom || "",
+          "Monthly qty": it.monthly_qty ?? "",
+          "Daily qty": it.daily_qty != null ? Number(it.daily_qty).toFixed(2) : "",
+          Remark: it.remark || "",
+          "รูป (ลิงก์)": it.picture ? "เปิดรูป" : "",
+          "Division Group": d.division_group || "",
+          Division: d.division || "",
+          Department: d.department || "",
+          "Buying Status": d.buying_status || "",
+          "Vendor Origin": vendorOrigin,
+        };
+      });
       const ws = XLSX.utils.json_to_sheet(rows);
       // ใส่ hyperlink ในคอลัมน์รูป (คอลัมน์สุดท้าย index 9)
       const picCol = 9;
@@ -285,6 +339,7 @@ export default function SRROrderB2BInternalPage() {
       ws["!cols"] = [
         { wch: 4 }, { wch: 14 }, { wch: 16 }, { wch: 16 }, { wch: 36 },
         { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 30 }, { wch: 12 },
+        { wch: 16 }, { wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 22 },
       ];
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Monthly usage");
@@ -449,17 +504,36 @@ export default function SRROrderB2BInternalPage() {
         .eq("doc_id", doc.id)
         .order("sort_order", { ascending: true });
       if (error) throw error;
+      // เติมคอลัมน์อ้างอิงจาก data_master (Division/Department/Buying Status/Vendor Origin) ตาม sku_code
+      const skus = [...new Set((data || []).map((it: any) => it.sku_code).filter(Boolean))] as string[];
+      const dmMap: Record<string, any> = {};
+      if (skus.length) {
+        const { data: dm } = await (supabase as any)
+          .from("data_master")
+          .select("sku_code, division_group, division, department, buying_status, vendor_code, vendor_display_name")
+          .in("sku_code", skus);
+        for (const d of (dm || []) as any[]) { if (d.sku_code && !dmMap[d.sku_code]) dmMap[d.sku_code] = d; }
+      }
       setMuRows(
-        (data || []).map((it: any) => ({
-          barcode: it.barcode ?? "",
-          sku_code: it.sku_code ?? "",
-          barcode_unit: it.barcode_unit ?? "",
-          product_name: it.product_name ?? "",
-          uom: it.uom ?? "",
-          monthly_qty: it.monthly_qty != null ? String(it.monthly_qty) : "",
-          picture: it.picture ?? "",
-          remark: it.remark ?? "",
-        })),
+        (data || []).map((it: any) => {
+          const d = dmMap[it.sku_code] || {};
+          const vendorOrigin = (d.vendor_code && vendorNameMapRef.current[d.vendor_code]) || d.vendor_display_name || d.vendor_code || "";
+          return {
+            barcode: it.barcode ?? "",
+            sku_code: it.sku_code ?? "",
+            barcode_unit: it.barcode_unit ?? "",
+            product_name: it.product_name ?? "",
+            uom: it.uom ?? "",
+            monthly_qty: it.monthly_qty != null ? String(it.monthly_qty) : "",
+            picture: it.picture ?? "",
+            remark: it.remark ?? "",
+            division_group: d.division_group ?? "",
+            division: d.division ?? "",
+            department: d.department ?? "",
+            buying_status: d.buying_status ?? "",
+            vendor_origin: vendorOrigin,
+          };
+        }),
       );
     } catch (e: any) {
       toast({ title: "เปิดเอกสารไม่สำเร็จ", description: e.message, variant: "destructive" });
@@ -497,7 +571,7 @@ export default function SRROrderB2BInternalPage() {
       }
     }
     if (!sku) return { found: false } as any;
-    const sel = "sku_code, main_barcode, unit_of_measure, product_name_la, product_name_en, product_name_th";
+    const sel = "sku_code, main_barcode, unit_of_measure, product_name_la, product_name_en, product_name_th, division_group, division, department, buying_status, vendor_code, vendor_display_name";
     let { data: base } = await (supabase as any).from("data_master").select(sel).eq("sku_code", sku).eq("packing_size_qty", 1).limit(1);
     let rec = base?.[0];
     if (!rec) {
@@ -505,12 +579,18 @@ export default function SRROrderB2BInternalPage() {
       rec = any1?.[0];
     }
     const name = rec?.product_name_la || rec?.product_name_en || rec?.product_name_th || "";
+    const vendorOrigin = (rec?.vendor_code && vendorNameMapRef.current[rec.vendor_code]) || rec?.vendor_display_name || rec?.vendor_code || "";
     return {
       found: true,
       sku_code: rec?.sku_code || sku,
       barcode_unit: rec?.main_barcode || "",
       uom: rec?.unit_of_measure || "",
       product_name: name,
+      division_group: rec?.division_group || "",
+      division: rec?.division || "",
+      department: rec?.department || "",
+      buying_status: rec?.buying_status || "",
+      vendor_origin: vendorOrigin,
     };
   };
 
@@ -535,6 +615,11 @@ export default function SRROrderB2BInternalPage() {
                 barcode_unit: res.found ? res.barcode_unit : "",
                 uom: res.found ? res.uom : "",
                 product_name: res.found ? res.product_name : "ไม่พบข้อมูล",
+                division_group: res.found ? res.division_group : "",
+                division: res.found ? res.division : "",
+                department: res.found ? res.department : "",
+                buying_status: res.found ? res.buying_status : "",
+                vendor_origin: res.found ? res.vendor_origin : "",
               }
             : r,
         ),
@@ -601,6 +686,11 @@ export default function SRROrderB2BInternalPage() {
             monthly_qty: qty,
             picture: "",
             remark,
+            division_group: res.found ? res.division_group : "",
+            division: res.found ? res.division : "",
+            department: res.found ? res.department : "",
+            buying_status: res.found ? res.buying_status : "",
+            vendor_origin: res.found ? res.vendor_origin : "",
           };
         }),
       );
@@ -1250,6 +1340,11 @@ export default function SRROrderB2BInternalPage() {
                               placeholder="หมายเหตุ"
                             />
                           </td>
+                          <td className="px-2 py-1 text-xs text-muted-foreground truncate" title={row.division_group}>{row.division_group || "-"}</td>
+                          <td className="px-2 py-1 text-xs text-muted-foreground truncate" title={row.division}>{row.division || "-"}</td>
+                          <td className="px-2 py-1 text-xs text-muted-foreground truncate" title={row.department}>{row.department || "-"}</td>
+                          <td className="px-2 py-1 text-xs truncate" title={row.buying_status}>{row.buying_status || "-"}</td>
+                          <td className="px-2 py-1 text-xs text-muted-foreground truncate" title={row.vendor_origin}>{row.vendor_origin || "-"}</td>
                           <td className="px-1 py-1">
                             {!muReadOnly && (
                             <div className="flex items-center justify-center gap-0.5">
