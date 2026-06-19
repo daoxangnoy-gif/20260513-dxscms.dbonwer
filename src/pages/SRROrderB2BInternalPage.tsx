@@ -103,7 +103,7 @@ const MU_COLS = [
   { key: "act", label: "", def: 74, min: 64 },
 ] as const;
 const MU_COL_KEY = "mu_col_widths_v1";
-const MU_VIS_KEY = "mu_col_visible_v2";
+const MU_VIS_KEY = "mu_col_visible_v3";
 // คอลัมน์ที่ติกซ่อน/แสดงได้ (ยกเว้น # และ action)
 const MU_TOGGLE_COLS = MU_COLS.filter((c) => c.key !== "idx" && c.key !== "act");
 // คอลัมน์อ้างอิงที่ default ซ่อนไว้ (อยากดูค่อยติกเอง)
