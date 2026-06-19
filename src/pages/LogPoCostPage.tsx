@@ -63,12 +63,20 @@ export default function LogPoCostPage() {
   const rThb = useMemo(() => { const n = parseFloat(localStorage.getItem("po_cost_rate_thb") || ""); return Number.isFinite(n) && n > 0 ? n : null; }, []);
   const rUsd = useMemo(() => { const n = parseFloat(localStorage.getItem("po_cost_rate_usd") || ""); return Number.isFinite(n) && n > 0 ? n : null; }, []);
 
-  // โหลดสกุลเงินของ vendor (vendor_code -> currency)
+  // โหลดสกุลเงินของ vendor ให้ครบทุกตัว (Supabase ดึงทีละ 1000 → ต้องวนหน้า)
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.from("vendor_master").select("vendor_code, supplier_currency");
       const m: Record<string, string> = {};
-      for (const v of (data || []) as any[]) { if (v.vendor_code) m[String(v.vendor_code)] = String(v.supplier_currency || "").toUpperCase(); }
+      const PAGE = 1000;
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await supabase
+          .from("vendor_master")
+          .select("vendor_code, supplier_currency")
+          .range(from, from + PAGE - 1);
+        if (error || !data || data.length === 0) break;
+        for (const v of data as any[]) { if (v.vendor_code) m[String(v.vendor_code)] = String(v.supplier_currency || "").toUpperCase(); }
+        if (data.length < PAGE) break;
+      }
       setCurrencyMap(m);
     })();
   }, []);
@@ -164,6 +172,7 @@ export default function LogPoCostPage() {
         Goodcode: r.goodcode || "",
         ProductName: r.product_name || "",
         Vendor: r.vendor || "",
+        Currency: currencyMap[r.vendor || ""] || "",
         MOQ: r.moq ?? "",
         POCost: r.po_cost ?? "",
         POCostUnit: r.po_cost_unit ?? "",
@@ -238,6 +247,7 @@ export default function LogPoCostPage() {
               <th className="px-2 py-1.5 border-b border-border">Goodcode</th>
               <th className="px-2 py-1.5 border-b border-border">Product Name</th>
               <th className="px-2 py-1.5 border-b border-border">Vendor</th>
+              <th className="px-2 py-1.5 border-b border-border">Currency</th>
               <th className="px-2 py-1.5 border-b border-border text-right">MOQ</th>
               <th className="px-2 py-1.5 border-b border-border text-right">PO Cost</th>
               <th className="px-2 py-1.5 border-b border-border text-right">PO Cost/Unit</th>
@@ -248,10 +258,10 @@ export default function LogPoCostPage() {
           </thead>
           <tbody>
             {loading && (
-              <tr><td colSpan={13} className="text-center py-8"><Loader2 className="w-5 h-5 animate-spin inline" /></td></tr>
+              <tr><td colSpan={14} className="text-center py-8"><Loader2 className="w-5 h-5 animate-spin inline" /></td></tr>
             )}
             {!loading && rows.length === 0 && (
-              <tr><td colSpan={13} className="text-center py-8 text-muted-foreground">ไม่มีข้อมูล Log</td></tr>
+              <tr><td colSpan={14} className="text-center py-8 text-muted-foreground">ไม่มีข้อมูล Log</td></tr>
             )}
             {!loading && rows.map(r => {
               const ch = renderChanges(r.changes);
@@ -268,6 +278,7 @@ export default function LogPoCostPage() {
                   <td className="px-2 py-1 font-mono">{r.goodcode || "-"}</td>
                   <td className="px-2 py-1 max-w-[260px] truncate" title={r.product_name || ""}>{r.product_name || "-"}</td>
                   <td className="px-2 py-1">{r.vendor || "-"}</td>
+                  <td className="px-2 py-1">{currencyMap[r.vendor || ""] || <span className="text-muted-foreground">-</span>}</td>
                   <td className="px-2 py-1 text-right">{r.moq ?? "-"}</td>
                   <td className="px-2 py-1 text-right">{r.po_cost ?? "-"}</td>
                   <td className="px-2 py-1 text-right">{r.po_cost_unit != null ? Number(r.po_cost_unit).toFixed(4) : "-"}</td>
