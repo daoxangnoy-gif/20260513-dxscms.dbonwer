@@ -2364,7 +2364,9 @@ export default function SRRDirectPage() {
         setSelectedBatchValuesByMode((prev) => ({ ...prev, [importMode]: [latestBatchValue] }));
       }
       setLatestImportedDocIds(newDocs.map((d) => d.id));
-      if (tab2Mode === importMode) {
+      // หลัง Cal: สลับ Tab 2 ให้ตรง mode ที่เพิ่งคำนวณ + populate showData เสมอ (เดิมไม่ทำถ้า tab2Mode ไม่ตรง → ตารางว่าง)
+      setTab2Mode(importMode);
+      {
         let merged = newDocs.flatMap((d) => d.data);
         merged.sort((a, b) => {
           const p = ((a as any).product_name_en || "").localeCompare((b as any).product_name_en || "");
