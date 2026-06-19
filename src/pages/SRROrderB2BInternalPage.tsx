@@ -520,6 +520,12 @@ export default function SRROrderB2BInternalPage() {
     setLookup((p) => ({ ...p, [idx]: true }));
     try {
       const res = await resolveBarcode(code);
+      // กัน SKU (ID) ซ้ำกับแถวอื่น — ถ้าซ้ำ ไม่ให้เพิ่ม (ล้างแถวนี้)
+      if (res.found && muRows.some((r, i) => i !== idx && r.sku_code && r.sku_code === res.sku_code)) {
+        toast({ title: "SKU ซ้ำ", description: `${res.product_name} (ID ${res.sku_code}) มีอยู่ในรายการแล้ว`, variant: "destructive" });
+        setMuRows((prev) => prev.map((r, i) => (i === idx ? { ...EMPTY_MU } : r)));
+        return;
+      }
       setMuRows((prev) =>
         prev.map((r, i) =>
           i === idx
@@ -598,24 +604,26 @@ export default function SRROrderB2BInternalPage() {
           };
         }),
       );
-      // upsert by barcode — barcode ที่มีอยู่แล้วให้อัปเดตแถวเดิม (ไม่เพิ่มแถวซ้ำ)
+      // upsert by SKU (ID) — SKU เดียวกันให้อัปเดตแถวเดิม ไม่เพิ่มซ้ำ (ถ้าไม่มี SKU ใช้ barcode แทน)
+      const keyOf = (r: MonthlyUsageForm) =>
+        r.sku_code?.trim() ? `sku:${r.sku_code.trim()}` : (r.barcode.trim() ? `bc:${r.barcode.trim()}` : "");
       const result = muRows
         .filter((r) => r.barcode.trim() || r.product_name.trim() || r.monthly_qty.trim())
         .map((r) => ({ ...r }));
-      const byCode = new Map<string, number>();
-      result.forEach((r, i) => { const k = r.barcode.trim(); if (k) byCode.set(k, i); });
+      const byKey = new Map<string, number>();
+      result.forEach((r, i) => { const k = keyOf(r); if (k) byKey.set(k, i); });
       let updated = 0;
       let added = 0;
       for (const row of resolved) {
-        const k = row.barcode.trim();
-        const exIdx = k ? byCode.get(k) : undefined;
+        const k = keyOf(row);
+        const exIdx = k ? byKey.get(k) : undefined;
         if (exIdx !== undefined) {
           // อัปเดตแถวเดิม — เก็บรูปเดิมไว้ถ้าไฟล์ import ไม่มีรูป
           result[exIdx] = { ...result[exIdx], ...row, picture: result[exIdx].picture || row.picture };
           updated++;
         } else {
           result.push(row);
-          if (k) byCode.set(k, result.length - 1);
+          if (k) byKey.set(k, result.length - 1);
           added++;
         }
       }
