@@ -3024,7 +3024,8 @@ export default function SRRDirectPage() {
   // Paged
   const filteredShowData = useMemo(() => {
     let base = showOnlyFinalGt0 ? showData.filter((r) => r.final_order_qty > 0) : showData;
-    if (showOnlyMinGt0) base = base.filter((r) => (Number(r.min_store) || 0) > 0);
+    // แถวที่ import มา (is_import_row) แสดงเสมอ ไม่โดน "Show Min > 0" ตัด (ผู้ใช้เลือก SKU เองเจาะจง)
+    if (showOnlyMinGt0) base = base.filter((r) => (Number(r.min_store) || 0) > 0 || (r as any).is_import_row);
     if (itemTypeFilter.length > 0) base = base.filter((r) => itemTypeFilter.includes(r.item_type));
     const patched = base.map(r => ({
       ...r,
