@@ -8,7 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@/components/ui/command";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download, Pencil, ChevronsUpDown, Check, FileSpreadsheet } from "lucide-react";
+import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download, Pencil, ChevronsUpDown, Check, FileSpreadsheet, Columns3 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import * as XLSX from "xlsx";
 
@@ -86,6 +86,11 @@ const fileToDataUrl = (file: File): Promise<string> =>
 // คอลัมน์ของตาราง Monthly usage (1 item = 1 แถว) + ความกว้างเริ่มต้น (px) — ลากปรับได้
 const MU_COLS = [
   { key: "idx", label: "#", def: 44, min: 36 },
+  { key: "dgroup", label: "Division Group", def: 130, min: 90 },
+  { key: "division", label: "Division", def: 120, min: 90 },
+  { key: "dept", label: "Department", def: 130, min: 90 },
+  { key: "bstatus", label: "Buying Status", def: 120, min: 90 },
+  { key: "vorigin", label: "Vendor Origin", def: 180, min: 100 },
   { key: "barcode", label: "Barcode (คีย์เอง)", def: 150, min: 90 },
   { key: "sku", label: "ID (SKU)", def: 120, min: 80 },
   { key: "bunit", label: "Barcode Unit", def: 140, min: 90 },
@@ -95,14 +100,12 @@ const MU_COLS = [
   { key: "dqty", label: "Daily qty (÷30)", def: 110, min: 70 },
   { key: "pic", label: "Picture", def: 150, min: 120 },
   { key: "remark", label: "Remark", def: 200, min: 100 },
-  { key: "dgroup", label: "Division Group", def: 130, min: 90 },
-  { key: "division", label: "Division", def: 120, min: 90 },
-  { key: "dept", label: "Department", def: 130, min: 90 },
-  { key: "bstatus", label: "Buying Status", def: 120, min: 90 },
-  { key: "vorigin", label: "Vendor Origin", def: 180, min: 100 },
   { key: "act", label: "", def: 74, min: 64 },
 ] as const;
 const MU_COL_KEY = "mu_col_widths_v1";
+const MU_VIS_KEY = "mu_col_visible_v1";
+// คอลัมน์ที่ติกซ่อน/แสดงได้ (ยกเว้น # และ action)
+const MU_TOGGLE_COLS = MU_COLS.filter((c) => c.key !== "idx" && c.key !== "act");
 
 // ลำดับคอลัมน์ที่ใช้ keyboard navigation (มี input) — index = data-c
 const MU_NAV_COLS = ["barcode", "sku", "bunit", "uom", "pname", "mqty", "dqty", "remark"] as const;
@@ -379,6 +382,24 @@ export default function SRROrderB2BInternalPage() {
     } catch {}
   }, [colW]);
 
+  // คอลัมน์ที่แสดง (ติกเลือกได้แบบ SRR) — จำค่าใน localStorage
+  const [visibleMuCols, setVisibleMuCols] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(MU_VIS_KEY);
+      if (raw) return new Set(JSON.parse(raw));
+    } catch {}
+    return new Set(MU_TOGGLE_COLS.map((c) => c.key)); // ค่าเริ่มต้น: แสดงทุกคอลัมน์
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(MU_VIS_KEY, JSON.stringify([...visibleMuCols]));
+    } catch {}
+  }, [visibleMuCols]);
+  const [colMenuOpen, setColMenuOpen] = useState(false);
+  // คอลัมน์ที่จะ render จริง (idx + act แสดงเสมอ)
+  const muShownCols = MU_COLS.filter((c) => c.key === "idx" || c.key === "act" || visibleMuCols.has(c.key));
+  const isColShown = (key: string) => key === "idx" || key === "act" || visibleMuCols.has(key);
+
   const startColResize = (key: string, minW: number, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -396,7 +417,7 @@ export default function SRROrderB2BInternalPage() {
     document.addEventListener("mouseup", onUp);
   };
 
-  const muTotalW = MU_COLS.reduce((s, c) => s + (colW[c.key] ?? c.def), 0);
+  const muTotalW = muShownCols.reduce((s, c) => s + (colW[c.key] ?? c.def), 0);
 
   // ===== keyboard navigation ในตาราง (Enter / ลูกศร ขึ้น-ลง-ซ้าย-ขวา; Tab = default) =====
   const muTableRef = useRef<HTMLDivElement>(null);
@@ -1070,6 +1091,31 @@ export default function SRROrderB2BInternalPage() {
               {muReadOnly && <span className="ml-2 text-[11px] font-normal text-muted-foreground">(โหมดดู)</span>}
             </div>
             <div className="ml-auto flex items-center gap-2">
+              <Popover open={colMenuOpen} onOpenChange={setColMenuOpen}>
+                <PopoverTrigger asChild>
+                  <Button size="sm" variant="outline" className="h-8 gap-1.5">
+                    <Columns3 className="w-4 h-4" /> คอลัมน์ ({visibleMuCols.size}/{MU_TOGGLE_COLS.length})
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-56 p-2" align="end">
+                  <div className="flex items-center justify-between mb-1.5 px-1">
+                    <span className="text-xs font-medium">แสดงคอลัมน์</span>
+                    <button className="text-[11px] text-primary hover:underline" onClick={() => setVisibleMuCols(new Set(MU_TOGGLE_COLS.map((c) => c.key)))}>เลือกทั้งหมด</button>
+                  </div>
+                  <div className="max-h-72 overflow-auto space-y-0.5">
+                    {MU_TOGGLE_COLS.map((c) => (
+                      <label key={c.key} className="flex items-center gap-2 px-1 py-1 rounded hover:bg-muted cursor-pointer text-sm">
+                        <input
+                          type="checkbox"
+                          checked={visibleMuCols.has(c.key)}
+                          onChange={() => setVisibleMuCols((prev) => { const n = new Set(prev); n.has(c.key) ? n.delete(c.key) : n.add(c.key); return n; })}
+                        />
+                        {c.label}
+                      </label>
+                    ))}
+                  </div>
+                </PopoverContent>
+              </Popover>
               {muReadOnly ? (
                 <Button size="sm" className="h-8 gap-1.5" onClick={() => setMuReadOnly(false)}>
                   <Pencil className="w-4 h-4" /> แก้ไข
@@ -1162,13 +1208,13 @@ export default function SRROrderB2BInternalPage() {
               <div ref={muTableRef} className="overflow-x-auto border rounded-md">
                 <table className="text-sm border-collapse" style={{ width: muTotalW, tableLayout: "fixed" }}>
                   <colgroup>
-                    {MU_COLS.map((c) => (
+                    {muShownCols.map((c) => (
                       <col key={c.key} style={{ width: colW[c.key] ?? c.def }} />
                     ))}
                   </colgroup>
                   <thead>
                     <tr className="bg-muted text-left">
-                      {MU_COLS.map((c) => (
+                      {muShownCols.map((c) => (
                         <th key={c.key} className="relative px-2 py-1.5 font-medium border-r last:border-r-0 select-none whitespace-nowrap">
                           <span className="block truncate">{c.label}</span>
                           {c.key !== "act" && (
@@ -1188,7 +1234,12 @@ export default function SRROrderB2BInternalPage() {
                       return (
                         <tr key={idx} className="border-t align-middle">
                           <td className="px-2 py-1 text-center text-muted-foreground tabular-nums">{idx + 1}</td>
-                          <td className="px-1 py-1">
+                          {isColShown("dgroup") && <td className="px-2 py-1 text-xs text-muted-foreground truncate" title={row.division_group}>{row.division_group || "-"}</td>}
+                          {isColShown("division") && <td className="px-2 py-1 text-xs text-muted-foreground truncate" title={row.division}>{row.division || "-"}</td>}
+                          {isColShown("dept") && <td className="px-2 py-1 text-xs text-muted-foreground truncate" title={row.department}>{row.department || "-"}</td>}
+                          {isColShown("bstatus") && <td className="px-2 py-1 text-xs truncate" title={row.buying_status}>{row.buying_status || "-"}</td>}
+                          {isColShown("vorigin") && <td className="px-2 py-1 text-xs text-muted-foreground truncate" title={row.vendor_origin}>{row.vendor_origin || "-"}</td>}
+                          {isColShown("barcode") && <td className="px-1 py-1">
                             <Input
                               data-r={idx}
                               data-c={0}
@@ -1200,8 +1251,8 @@ export default function SRROrderB2BInternalPage() {
                               className={`h-8 w-full ${muReadOnly ? "bg-muted/50" : ""}`}
                               placeholder="คีย์ barcode"
                             />
-                          </td>
-                          <td className="px-1 py-1">
+                          </td>}
+                          {isColShown("sku") && <td className="px-1 py-1">
                             <div className="relative">
                               <Input
                                 data-r={idx}
@@ -1214,8 +1265,8 @@ export default function SRROrderB2BInternalPage() {
                               />
                               {lookup[idx] && <Loader2 className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 animate-spin" />}
                             </div>
-                          </td>
-                          <td className="px-1 py-1">
+                          </td>}
+                          {isColShown("bunit") && <td className="px-1 py-1">
                             <Input
                               data-r={idx}
                               data-c={2}
@@ -1225,8 +1276,8 @@ export default function SRROrderB2BInternalPage() {
                               className="h-8 w-full bg-muted/50"
                               placeholder="auto"
                             />
-                          </td>
-                          <td className="px-1 py-1">
+                          </td>}
+                          {isColShown("uom") && <td className="px-1 py-1">
                             <Input
                               data-r={idx}
                               data-c={3}
@@ -1236,8 +1287,8 @@ export default function SRROrderB2BInternalPage() {
                               className="h-8 w-full bg-muted/50"
                               placeholder="auto"
                             />
-                          </td>
-                          <td className="px-1 py-1">
+                          </td>}
+                          {isColShown("pname") && <td className="px-1 py-1">
                             <Input
                               data-r={idx}
                               data-c={4}
@@ -1248,8 +1299,8 @@ export default function SRROrderB2BInternalPage() {
                               className={`h-8 w-full bg-muted/50 ${row.product_name === "ไม่พบข้อมูล" ? "text-destructive" : ""}`}
                               placeholder="auto"
                             />
-                          </td>
-                          <td className="px-1 py-1">
+                          </td>}
+                          {isColShown("mqty") && <td className="px-1 py-1">
                             <Input
                               data-r={idx}
                               data-c={5}
@@ -1261,8 +1312,8 @@ export default function SRROrderB2BInternalPage() {
                               className={`h-8 w-full ${muReadOnly ? "bg-muted/50" : ""}`}
                               placeholder="0"
                             />
-                          </td>
-                          <td className="px-1 py-1">
+                          </td>}
+                          {isColShown("dqty") && <td className="px-1 py-1">
                             <Input
                               data-r={idx}
                               data-c={6}
@@ -1272,8 +1323,8 @@ export default function SRROrderB2BInternalPage() {
                               className="h-8 w-full bg-muted/50"
                               placeholder="auto"
                             />
-                          </td>
-                          <td className="px-1 py-1">
+                          </td>}
+                          {isColShown("pic") && <td className="px-1 py-1">
                             {muReadOnly ? (
                               <div className="w-14 h-14 border rounded flex items-center justify-center bg-muted/30 overflow-hidden">
                                 {row.picture
@@ -1327,8 +1378,8 @@ export default function SRROrderB2BInternalPage() {
                               </div>
                             </div>
                             )}
-                          </td>
-                          <td className="px-1 py-1">
+                          </td>}
+                          {isColShown("remark") && <td className="px-1 py-1">
                             <Input
                               data-r={idx}
                               data-c={7}
@@ -1339,12 +1390,7 @@ export default function SRROrderB2BInternalPage() {
                               className={`h-8 w-full ${muReadOnly ? "bg-muted/50" : ""}`}
                               placeholder="หมายเหตุ"
                             />
-                          </td>
-                          <td className="px-2 py-1 text-xs text-muted-foreground truncate" title={row.division_group}>{row.division_group || "-"}</td>
-                          <td className="px-2 py-1 text-xs text-muted-foreground truncate" title={row.division}>{row.division || "-"}</td>
-                          <td className="px-2 py-1 text-xs text-muted-foreground truncate" title={row.department}>{row.department || "-"}</td>
-                          <td className="px-2 py-1 text-xs truncate" title={row.buying_status}>{row.buying_status || "-"}</td>
-                          <td className="px-2 py-1 text-xs text-muted-foreground truncate" title={row.vendor_origin}>{row.vendor_origin || "-"}</td>
+                          </td>}
                           <td className="px-1 py-1">
                             {!muReadOnly && (
                             <div className="flex items-center justify-center gap-0.5">
@@ -1362,7 +1408,7 @@ export default function SRROrderB2BInternalPage() {
                     })}
                     {muRows.length === 0 && (
                       <tr>
-                        <td colSpan={MU_COLS.length} className="px-2 py-6 text-center text-muted-foreground">
+                        <td colSpan={muShownCols.length} className="px-2 py-6 text-center text-muted-foreground">
                           ยังไม่มีรายการ — กด "เพิ่มรายการ"
                         </td>
                       </tr>
