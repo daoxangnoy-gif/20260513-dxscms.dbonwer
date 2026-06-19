@@ -219,9 +219,9 @@ export default function SRROrderB2BInternalPage() {
   const [docs, setDocs] = useState<MUDoc[]>([]);
   const [docsLoading, setDocsLoading] = useState(false);
   const [noOdooMap, setNoOdooMap] = useState<Record<string, number>>({}); // doc_id -> จำนวน SKU ที่ resolve ไม่เจอ
-  const vendorNameMapRef = useRef<Record<string, string>>({}); // vendor_code -> ชื่อ vendor (จาก vendor_master) สำหรับคอลัมน์ Vendor Origin
+  const vendorOriginMapRef = useRef<Record<string, string>>({}); // vendor_code -> vendor_origin (Laos/Thailand) จาก vendor_master
 
-  // โหลดชื่อ vendor จาก vendor_master ครั้งเดียว (vendor_code -> ชื่อ)
+  // โหลด vendor_origin จาก vendor_master ครั้งเดียว (vendor_code -> origin)
   useEffect(() => {
     (async () => {
       const m: Record<string, string> = {};
@@ -229,13 +229,13 @@ export default function SRROrderB2BInternalPage() {
       for (let from = 0; ; from += PAGE) {
         const { data, error } = await (supabase as any)
           .from("vendor_master")
-          .select("vendor_code, vendor_name_la, vendor_name_en")
+          .select("vendor_code, vendor_origin")
           .range(from, from + PAGE - 1);
         if (error || !data || data.length === 0) break;
-        for (const v of data as any[]) { if (v.vendor_code) m[String(v.vendor_code)] = v.vendor_name_la || v.vendor_name_en || ""; }
+        for (const v of data as any[]) { if (v.vendor_code) m[String(v.vendor_code)] = v.vendor_origin || ""; }
         if (data.length < PAGE) break;
       }
-      vendorNameMapRef.current = m;
+      vendorOriginMapRef.current = m;
     })();
   }, []);
 
@@ -313,7 +313,7 @@ export default function SRROrderB2BInternalPage() {
       }
       const rows = items.map((it: any, i: number) => {
         const d = dmMap[it.sku_code] || {};
-        const vendorOrigin = (d.vendor_code && vendorNameMapRef.current[d.vendor_code]) || d.vendor_display_name || d.vendor_code || "";
+        const vendorOrigin = (d.vendor_code && vendorOriginMapRef.current[d.vendor_code]) || "";
         return {
           "#": i + 1,
           "ID (SKU)": it.sku_code || "",
@@ -541,7 +541,7 @@ export default function SRROrderB2BInternalPage() {
       setMuRows(
         (data || []).map((it: any) => {
           const d = dmMap[it.sku_code] || {};
-          const vendorOrigin = (d.vendor_code && vendorNameMapRef.current[d.vendor_code]) || d.vendor_display_name || d.vendor_code || "";
+          const vendorOrigin = (d.vendor_code && vendorOriginMapRef.current[d.vendor_code]) || "";
           return {
             barcode: it.barcode ?? "",
             sku_code: it.sku_code ?? "",
@@ -603,7 +603,7 @@ export default function SRROrderB2BInternalPage() {
       rec = any1?.[0];
     }
     const name = rec?.product_name_la || rec?.product_name_en || rec?.product_name_th || "";
-    const vendorOrigin = (rec?.vendor_code && vendorNameMapRef.current[rec.vendor_code]) || rec?.vendor_display_name || rec?.vendor_code || "";
+    const vendorOrigin = (rec?.vendor_code && vendorOriginMapRef.current[rec.vendor_code]) || "";
     return {
       found: true,
       sku_code: rec?.sku_code || sku,
