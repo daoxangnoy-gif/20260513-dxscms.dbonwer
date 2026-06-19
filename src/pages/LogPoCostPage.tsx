@@ -57,6 +57,34 @@ export default function LogPoCostPage() {
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState("");
   const [activityFilter, setActivityFilter] = useState<string>("ALL");
+  const [currencyMap, setCurrencyMap] = useState<Record<string, string>>({}); // vendor_code -> currency
+
+  // เรทแลกเปลี่ยน (ตัวเดียวกับหน้า PO Cost import เก็บใน localStorage)
+  const rThb = useMemo(() => { const n = parseFloat(localStorage.getItem("po_cost_rate_thb") || ""); return Number.isFinite(n) && n > 0 ? n : null; }, []);
+  const rUsd = useMemo(() => { const n = parseFloat(localStorage.getItem("po_cost_rate_usd") || ""); return Number.isFinite(n) && n > 0 ? n : null; }, []);
+
+  // โหลดสกุลเงินของ vendor (vendor_code -> currency)
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.from("vendor_master").select("vendor_code, supplier_currency");
+      const m: Record<string, string> = {};
+      for (const v of (data || []) as any[]) { if (v.vendor_code) m[String(v.vendor_code)] = String(v.supplier_currency || "").toUpperCase(); }
+      setCurrencyMap(m);
+    })();
+  }, []);
+
+  // Ex rate ของ vendor (LAK/ไม่ระบุ = 1, THB/USD ใช้เรทจาก localStorage)
+  const exRateOf = (vendor: string | null): number | null => {
+    const cur = currencyMap[vendor || ""] || "";
+    if (cur === "" || cur === "LAK") return 1;
+    if (cur === "THB") return rThb;
+    if (cur === "USD") return rUsd;
+    return 1; // สกุลอื่น ถือเป็น 1 (เหมือน logic import)
+  };
+  const lakOf = (po: number | null, vendor: string | null): number | null => {
+    const rate = exRateOf(vendor);
+    return po != null && rate != null ? po * rate : null;
+  };
 
   const load = async () => {
     setLoading(true);
@@ -139,6 +167,8 @@ export default function LogPoCostPage() {
         MOQ: r.moq ?? "",
         POCost: r.po_cost ?? "",
         POCostUnit: r.po_cost_unit ?? "",
+        ExRate: exRateOf(r.vendor) ?? "",
+        POCostLAK: lakOf(r.po_cost, r.vendor) ?? "",
         "MOQ_Old": moqCh?.old ?? "",
         "MOQ_New": moqCh?.new ?? "",
         "POCost_Old": costCh?.old ?? "",
@@ -211,15 +241,17 @@ export default function LogPoCostPage() {
               <th className="px-2 py-1.5 border-b border-border text-right">MOQ</th>
               <th className="px-2 py-1.5 border-b border-border text-right">PO Cost</th>
               <th className="px-2 py-1.5 border-b border-border text-right">PO Cost/Unit</th>
+              <th className="px-2 py-1.5 border-b border-border text-right">Ex Rate</th>
+              <th className="px-2 py-1.5 border-b border-border text-right">PO Cost (LAK)</th>
               <th className="px-2 py-1.5 border-b border-border">Changes (old → new)</th>
             </tr>
           </thead>
           <tbody>
             {loading && (
-              <tr><td colSpan={11} className="text-center py-8"><Loader2 className="w-5 h-5 animate-spin inline" /></td></tr>
+              <tr><td colSpan={13} className="text-center py-8"><Loader2 className="w-5 h-5 animate-spin inline" /></td></tr>
             )}
             {!loading && rows.length === 0 && (
-              <tr><td colSpan={11} className="text-center py-8 text-muted-foreground">ไม่มีข้อมูล Log</td></tr>
+              <tr><td colSpan={13} className="text-center py-8 text-muted-foreground">ไม่มีข้อมูล Log</td></tr>
             )}
             {!loading && rows.map(r => {
               const ch = renderChanges(r.changes);
@@ -239,6 +271,20 @@ export default function LogPoCostPage() {
                   <td className="px-2 py-1 text-right">{r.moq ?? "-"}</td>
                   <td className="px-2 py-1 text-right">{r.po_cost ?? "-"}</td>
                   <td className="px-2 py-1 text-right">{r.po_cost_unit != null ? Number(r.po_cost_unit).toFixed(4) : "-"}</td>
+                  <td className="px-2 py-1 text-right">
+                    {(() => {
+                      const cur = currencyMap[r.vendor || ""] || "";
+                      const rate = exRateOf(r.vendor);
+                      if (rate == null) return <span className="text-muted-foreground">-</span>;
+                      return <span>{cur && cur !== "LAK" && <span className="text-muted-foreground mr-1">{cur}</span>}{rate.toLocaleString()}</span>;
+                    })()}
+                  </td>
+                  <td className="px-2 py-1 text-right">
+                    {(() => {
+                      const lak = lakOf(r.po_cost, r.vendor);
+                      return lak != null ? Math.round(lak).toLocaleString() : <span className="text-muted-foreground">-</span>;
+                    })()}
+                  </td>
                   <td className="px-2 py-1">
                     {ch.length === 0 ? <span className="text-muted-foreground">-</span> : (
                       <div className="flex flex-col gap-0.5">
