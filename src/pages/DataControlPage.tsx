@@ -10,6 +10,7 @@ import {
 } from "@/lib/poCostImport";
 import { useToast } from "@/hooks/use-toast";
 import { TableSkeleton } from "@/components/AppSkeleton";
+import VendorQuotationTab from "@/components/VendorQuotationTab";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -38,6 +39,22 @@ interface DataControlPageProps {
 }
 
 const ALL_OPERATORS: FilterOperator[] = ["contains", "=", "!=", "starts_with", "ends_with", "is_set", "is_not_set"];
+
+// ตัวจับเวลาเรียลไทม์ (ss.ss วินาที) — แยกเป็น component เล็ก ๆ เพื่อ tick เฉพาะตัวเอง
+// ไม่ re-render ทั้งหน้า. นับใหม่ทุกครั้งที่ active เปลี่ยนจาก false → true
+function ImportElapsed({ active }: { active: boolean }) {
+  const [ms, setMs] = useState(0);
+  const startRef = useRef(0);
+  useEffect(() => {
+    if (!active) return;
+    startRef.current = performance.now();
+    setMs(0);
+    const id = setInterval(() => setMs(performance.now() - startRef.current), 50);
+    return () => clearInterval(id);
+  }, [active]);
+  if (!active) return null;
+  return <span className="tabular-nums ml-1 opacity-80">· {(ms / 1000).toFixed(2)}s</span>;
+}
 
 export default function DataControlPage({ activeTable }: DataControlPageProps) {
   const { isAdmin, canDo, allowedDivisions, divisionAllowed, anyDivisionAllowed } = useAuth();
@@ -193,7 +210,7 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
   // PO Cost view mode: data / report; and column filter
   type MarginOp = "" | ">" | "<" | "=" | "!=" | ">=" | "<=" | "between" | "contains" | "starts_with" | "ends_with" | "is_set" | "is_not_set";
   type PoLoadFilter = { column: string; operator: MarginOp; value: string; value2?: string };
-  const [poCostView, setPoCostView] = useState<"data" | "report">("data");
+  const [poCostView, setPoCostView] = useState<"data" | "report" | "vendor_quotation">("data");
   const [filterColPo, setFilterColPo] = useState<string>("__margin_pct"); // default Margin%
   const [marginOp, setMarginOp] = useState<MarginOp>("");
   const [marginV1, setMarginV1] = useState<string>("");
@@ -1613,8 +1630,10 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
     if (!file) return;
     e.target.value = "";
 
-    const BATCH = 2000;       // แถวต่อ 1 invoke
-    const CONCURRENCY = 4;    // จำนวน insert ที่ส่งพร้อมกัน
+    const BATCH = 2000;       // แถวต่อ 1 insert
+    const CONCURRENCY = 6;    // จำนวน insert ที่ส่งพร้อมกัน (เท่าลิมิต connection ของเบราว์เซอร์ต่อ host)
+    const startedAt = performance.now();
+    let parsedAt = 0;         // เวลาเมื่อ parse เสร็จ (แยกเวลา parse vs insert)
     setBigImportProgress({ current: 0, total: 0, phase: "กำลังอ่านไฟล์ (ไม่ค้างจอ)..." });
 
     console.log("[BigImport] start", { name: file.name, sizeMB: (file.size / 1048576).toFixed(1) });
@@ -1641,11 +1660,21 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
     worker.onerror = (err) => failWith(`Worker error: ${err.message || "ไฟล์อาจใหญ่เกินหน่วยความจำเบราว์เซอร์"}`);
     worker.onmessageerror = () => failWith("Worker message error (ส่งข้อมูลกลับไม่ได้)");
 
-    const insertBatch = async (rows: Record<string, any>[]) => {
-      const { data, error } = await supabase.functions.invoke("data-master-bulk-import", { body: { rows } });
-      if (error || (data && (data as any).error)) {
-        throw new Error(error?.message || (data as any)?.error || "insert failed");
+    // insert ตรงเข้า DB ผ่าน PostgREST (เหมือน import ปกติ) — ไม่ผ่าน Edge Function อีกต่อไป
+    // เพราะ data_master ไม่มี RLS/unique key → ยิงตรงได้ และเลี่ยงเพดาน RAM 256MB ของ function
+    const insertBatch = async (rows: Record<string, any>[], attempt = 1): Promise<void> => {
+      const { error } = await supabase.from(activeTable as any).insert(rows as any);
+      if (!error) return;
+      const msg = (error.message || "") + (error.code || "");
+      const transient = /fetch|network|timeout|503|504|ECONN|gateway|reset|abort/i.test(msg);
+      if (transient && attempt <= 6) {
+        const delay = Math.min(1000 * 2 ** (attempt - 1), 30000); // 1s→2s→4s→8s→16s→30s
+        console.warn(`[BigImport] batch fail (transient) retry ${attempt}/6 in ${delay}ms:`, error.message);
+        await new Promise((r) => setTimeout(r, delay));
+        return insertBatch(rows, attempt + 1);
       }
+      console.error("[BigImport] insert error (final):", error.message);
+      throw new Error(error.message);
     };
 
     const maybeFinish = () => {
@@ -1655,9 +1684,12 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
     worker.onmessage = (ev: MessageEvent<any>) => {
       const m = ev.data;
       if (failed) return;
-      if (m.type === "parsed") {
+      if (m.type === "status") {
+        setBigImportProgress((prev) => ({ current: prev?.current ?? 0, total: prev?.total ?? 0, phase: m.phase }));
+      } else if (m.type === "parsed") {
         total = m.total;
-        console.log("[BigImport] parsed rows:", total);
+        parsedAt = performance.now();
+        console.log(`[BigImport] parsed rows: ${total} (อ่าน+แปลงไฟล์ใช้ ${((parsedAt - startedAt) / 1000).toFixed(1)}s)`);
         setBigImportProgress({ current: 0, total, phase: "กำลังบันทึกเข้าฐานข้อมูล" });
         for (let k = 0; k < CONCURRENCY; k++) worker.postMessage({ type: "pull" }); // เปิด credit เริ่มต้น
       } else if (m.type === "batch") {
@@ -1690,7 +1722,14 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
     await finished;
     worker.terminate();
     if (!failed && total > 0) {
-      toast({ title: "Import สำเร็จ", description: `บันทึก ${inserted.toLocaleString()} แถว` });
+      const now = performance.now();
+      const sec = (now - startedAt) / 1000;
+      const parseSec = parsedAt ? (parsedAt - startedAt) / 1000 : 0;
+      const insertSec = parsedAt ? (now - parsedAt) / 1000 : sec;
+      const timeStr = sec >= 60 ? `${Math.floor(sec / 60)} นาที ${(sec % 60).toFixed(0)} วินาที` : `${sec.toFixed(1)} วินาที`;
+      const rate = Math.round(inserted / Math.max(sec, 0.001));
+      console.log(`[BigImport] DONE: ${inserted} rows in ${sec.toFixed(1)}s = parse ${parseSec.toFixed(1)}s + insert ${insertSec.toFixed(1)}s (${rate} rows/s)`);
+      toast({ title: "Import สำเร็จ 🎉", description: `บันทึก ${inserted.toLocaleString()} แถว · ใช้เวลา ${timeStr} (${rate.toLocaleString()} แถว/วินาที)` });
       setBigImportProgress(null);
       await fetchData();
     }
@@ -2060,6 +2099,7 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
                     if (!p) return "Import";
                     return `${p.phase}${p.total ? ` · ${p.current.toLocaleString()}/${p.total.toLocaleString()} (${Math.floor((p.current / Math.max(p.total, 1)) * 100)}%)` : ""}`;
                   })()}
+                  <ImportElapsed active={!!(bigImportProgress || importProgress || poCostImportProgress)} />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent>
@@ -2296,6 +2336,12 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
               className="text-xs h-7"
               onClick={() => setPoCostView("report")}
             >Report</Button>
+            <Button
+              size="sm"
+              variant={poCostView === "vendor_quotation" ? "default" : "outline"}
+              className="text-xs h-7"
+              onClick={() => setPoCostView("vendor_quotation")}
+            >Vendor Quotation</Button>
           </div>
           {poCostView === "data" && (() => {
             const NUMERIC_COLS = new Set([
@@ -2509,7 +2555,8 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
         </div>
       )}
 
-      {/* Odoo-style Search Bar */}
+      {/* Odoo-style Search Bar (ซ่อนตอนอยู่แท็บ Vendor Quotation) */}
+      {!(activeTable === "po_cost" && poCostView === "vendor_quotation") && (
       <div className="flex items-center gap-2 px-6 py-2.5 bg-card border-b border-border flex-wrap">
         <Search className="w-4 h-4 text-muted-foreground flex-shrink-0" />
         {/* Active filter chips */}
@@ -2568,9 +2615,13 @@ export default function DataControlPage({ activeTable }: DataControlPageProps) {
           </Button>
         )}
       </div>
+      )}
 
-      {/* PO Cost Report view */}
-      {activeTable === "po_cost" && poCostView === "report" ? (
+      {/* PO Cost: Vendor Quotation view */}
+      {activeTable === "po_cost" && poCostView === "vendor_quotation" ? (
+        <VendorQuotationTab />
+      ) : /* PO Cost Report view */
+      activeTable === "po_cost" && poCostView === "report" ? (
         <div className="flex-1 overflow-auto p-4">
           <div className="grid grid-cols-3 gap-3 mb-3">
             {[0, 1, 2].map((i) => (
