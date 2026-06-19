@@ -404,10 +404,9 @@ async function fetchD2SDataRPCFast(
   hierarchy?: D2SHierarchyFilter,
   onProgress?: (loaded: number) => void,
   skuCodes?: string[] | null,
-  forceSkipDefaults?: boolean,
 ): Promise<any[]> {
   const { hasActiveFilterTemplates } = await import("@/lib/filterTemplates");
-  const skipDefaults = forceSkipDefaults || await hasActiveFilterTemplates("srr_direct");
+  const skipDefaults = await hasActiveFilterTemplates("srr_direct");
   const params: any = {
     p_vendor_codes: vendorCodes,
     p_spc_names: spcNames,
@@ -2102,7 +2101,6 @@ export default function SRRDirectPage() {
           setCalcProgress(Math.min(50, 5 + Math.round((loaded / 5000) * 10)));
         },
         skuFilter,
-        isImportMode, // Import mode: ข้าม default filter (product_owner/buying_status) เพราะผู้ใช้เลือก SKU เองเจาะจง
       );
 
       if (cancelCalcRef.current) {
