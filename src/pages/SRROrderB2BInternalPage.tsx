@@ -103,7 +103,7 @@ const MU_COLS = [
   { key: "act", label: "", def: 74, min: 64 },
 ] as const;
 const MU_COL_KEY = "mu_col_widths_v1";
-const MU_VIS_KEY = "mu_col_visible_v3";
+const MU_VIS_KEY = "mu_col_visible_v4";
 // คอลัมน์ที่ติกซ่อน/แสดงได้ (ยกเว้น # และ action)
 const MU_TOGGLE_COLS = MU_COLS.filter((c) => c.key !== "idx" && c.key !== "act");
 // คอลัมน์อ้างอิงที่ default ซ่อนไว้ (อยากดูค่อยติกเอง)
@@ -393,11 +393,11 @@ export default function SRROrderB2BInternalPage() {
     // ค่าเริ่มต้น: แสดงทุกคอลัมน์ ยกเว้น 5 คอลัมน์อ้างอิงใหม่ (อยากดูค่อยติกเอง)
     return new Set(MU_TOGGLE_COLS.filter((c) => !MU_DEFAULT_HIDDEN.has(c.key)).map((c) => c.key));
   });
-  useEffect(() => {
-    try {
-      localStorage.setItem(MU_VIS_KEY, JSON.stringify([...visibleMuCols]));
-    } catch {}
-  }, [visibleMuCols]);
+  // บันทึก localStorage เฉพาะตอนผู้ใช้เปลี่ยนเอง (ไม่ auto-save ตอนโหลด → default ไม่ถูกทับ)
+  const setVisCols = (next: Set<string>) => {
+    setVisibleMuCols(next);
+    try { localStorage.setItem(MU_VIS_KEY, JSON.stringify([...next])); } catch {}
+  };
   const [colMenuOpen, setColMenuOpen] = useState(false);
   // คอลัมน์ที่จะ render จริง (idx + act แสดงเสมอ)
   const muShownCols = MU_COLS.filter((c) => c.key === "idx" || c.key === "act" || visibleMuCols.has(c.key));
@@ -1103,7 +1103,7 @@ export default function SRROrderB2BInternalPage() {
                 <PopoverContent className="w-56 p-2" align="end">
                   <div className="flex items-center justify-between mb-1.5 px-1">
                     <span className="text-xs font-medium">แสดงคอลัมน์</span>
-                    <button className="text-[11px] text-primary hover:underline" onClick={() => setVisibleMuCols(new Set(MU_TOGGLE_COLS.map((c) => c.key)))}>เลือกทั้งหมด</button>
+                    <button className="text-[11px] text-primary hover:underline" onClick={() => setVisCols(new Set(MU_TOGGLE_COLS.map((c) => c.key)))}>เลือกทั้งหมด</button>
                   </div>
                   <div className="max-h-72 overflow-auto space-y-0.5">
                     {MU_TOGGLE_COLS.map((c) => (
@@ -1111,7 +1111,7 @@ export default function SRROrderB2BInternalPage() {
                         <input
                           type="checkbox"
                           checked={visibleMuCols.has(c.key)}
-                          onChange={() => setVisibleMuCols((prev) => { const n = new Set(prev); n.has(c.key) ? n.delete(c.key) : n.add(c.key); return n; })}
+                          onChange={() => { const n = new Set(visibleMuCols); n.has(c.key) ? n.delete(c.key) : n.add(c.key); setVisCols(n); }}
                         />
                         {c.label}
                       </label>
