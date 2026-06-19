@@ -103,9 +103,11 @@ const MU_COLS = [
   { key: "act", label: "", def: 74, min: 64 },
 ] as const;
 const MU_COL_KEY = "mu_col_widths_v1";
-const MU_VIS_KEY = "mu_col_visible_v1";
+const MU_VIS_KEY = "mu_col_visible_v2";
 // คอลัมน์ที่ติกซ่อน/แสดงได้ (ยกเว้น # และ action)
 const MU_TOGGLE_COLS = MU_COLS.filter((c) => c.key !== "idx" && c.key !== "act");
+// คอลัมน์อ้างอิงที่ default ซ่อนไว้ (อยากดูค่อยติกเอง)
+const MU_DEFAULT_HIDDEN = new Set(["dgroup", "division", "dept", "bstatus", "vorigin"]);
 
 // ลำดับคอลัมน์ที่ใช้ keyboard navigation (มี input) — index = data-c
 const MU_NAV_COLS = ["barcode", "sku", "bunit", "uom", "pname", "mqty", "dqty", "remark"] as const;
@@ -388,7 +390,8 @@ export default function SRROrderB2BInternalPage() {
       const raw = localStorage.getItem(MU_VIS_KEY);
       if (raw) return new Set(JSON.parse(raw));
     } catch {}
-    return new Set(MU_TOGGLE_COLS.map((c) => c.key)); // ค่าเริ่มต้น: แสดงทุกคอลัมน์
+    // ค่าเริ่มต้น: แสดงทุกคอลัมน์ ยกเว้น 5 คอลัมน์อ้างอิงใหม่ (อยากดูค่อยติกเอง)
+    return new Set(MU_TOGGLE_COLS.filter((c) => !MU_DEFAULT_HIDDEN.has(c.key)).map((c) => c.key));
   });
   useEffect(() => {
     try {
