@@ -3029,14 +3029,21 @@ export default function SRRDirectPage() {
   // Paged
   const filteredShowData = useMemo(() => {
     let base = showOnlyFinalGt0 ? showData.filter((r) => r.final_order_qty > 0) : showData;
+    const _c0 = base.length;
     if (showOnlyMinGt0) base = base.filter((r) => (Number(r.min_store) || 0) > 0);
+    const _c1 = base.length;
     if (itemTypeFilter.length > 0) base = base.filter((r) => itemTypeFilter.includes(r.item_type));
+    const _c2 = base.length;
     const patched = base.map(r => ({
       ...r,
       orig_on_order_store: r.orig_on_order_store ?? r.on_order_store,
       orig_stock_store: r.orig_stock_store ?? r.stock_store,
     }));
     const filtered = applyChipFilter(patched, tableSearchChips, TABLE_SEARCH_KEYS);
+    // [DEBUG ชั่วคราว] ดูว่าแถวลดที่ขั้นไหน
+    if (showData.length > 0) {
+      console.log(`[FILTER DBG] showData=${showData.length} afterFinalGt0=${_c0} afterMinGt0=${_c1} afterItemType=${_c2} afterChip=${filtered.length} || finalGt0=${showOnlyFinalGt0} minGt0=${showOnlyMinGt0} itemTypeFilter=${JSON.stringify(itemTypeFilter)} chips=${tableSearchChips.length} | sample item_type=${JSON.stringify(showData.slice(0,3).map((r:any)=>r.item_type))} final_order_qty=${JSON.stringify(showData.slice(0,3).map((r:any)=>r.final_order_qty))}`);
+    }
     // Sort by Product Name (EN) A-Z → แล้วเรียง Store ตามรหัสสาขา (store_name ขึ้นต้นด้วย store code)
     return [...filtered].sort((a, b) => {
       const p = ((a as any).product_name_en || "").localeCompare((b as any).product_name_en || "");
