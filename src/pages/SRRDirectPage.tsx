@@ -2654,8 +2654,10 @@ export default function SRRDirectPage() {
       return;
     }
     let docs = docsForTab2;
-    if (selectedDocSpc.length > 0) docs = docs.filter((d) => selectedDocSpc.includes(d.spc_name));
-    if (vendorFilter.length > 0) docs = docs.filter((d) => vendorFilter.includes(d.vendor_code));
+    // โหมด import/vendor: doc ถูกขับด้วยไฟล์ที่ import (vendor/spc อาจ override) → ไม่เอา filter ของ Tab 1 มากรอง
+    const applyTab1Filters = tab2Mode === "filter";
+    if (applyTab1Filters && selectedDocSpc.length > 0) docs = docs.filter((d) => selectedDocSpc.includes(d.spc_name));
+    if (applyTab1Filters && vendorFilter.length > 0) docs = docs.filter((d) => vendorFilter.includes(d.vendor_code));
 
     // Lazy-load data for docs that haven't been fetched yet
     const unloaded = docs.filter((d) => d.data.length === 0 && d.item_count > 0);
@@ -2669,12 +2671,14 @@ export default function SRRDirectPage() {
     }
 
     let merged = docs.flatMap((d) => d.data);
-    if (orderDayFilter.length > 0) merged = merged.filter((r) => orderDayFilter.includes(r.order_day));
-    if (itemTypeFilter.length > 0) merged = merged.filter((r) => itemTypeFilter.includes(r.item_type));
-    if (storeFilter.length > 0) merged = merged.filter((r) => storeFilter.includes(r.store_name));
-    if (typeStoreFilter.length > 0) merged = merged.filter((r) => typeStoreFilter.includes(r.type_store));
-    if (buyingStatusFilter.length > 0) merged = merged.filter((r) => buyingStatusFilter.includes(r.buying_status));
-    if (poGroupFilter.length > 0) merged = merged.filter((r) => poGroupFilter.includes(r.po_group));
+    if (applyTab1Filters) {
+      if (orderDayFilter.length > 0) merged = merged.filter((r) => orderDayFilter.includes(r.order_day));
+      if (itemTypeFilter.length > 0) merged = merged.filter((r) => itemTypeFilter.includes(r.item_type));
+      if (storeFilter.length > 0) merged = merged.filter((r) => storeFilter.includes(r.store_name));
+      if (typeStoreFilter.length > 0) merged = merged.filter((r) => typeStoreFilter.includes(r.type_store));
+      if (buyingStatusFilter.length > 0) merged = merged.filter((r) => buyingStatusFilter.includes(r.buying_status));
+      if (poGroupFilter.length > 0) merged = merged.filter((r) => poGroupFilter.includes(r.po_group));
+    }
     // Sort: Product Name (EN) > Sub-Department > Department > PO Group > Vendor > Store Name (asc)
     merged.sort((a, b) => {
       const p = ((a as any).product_name_en || "").localeCompare((b as any).product_name_en || "");
@@ -3024,9 +3028,10 @@ export default function SRRDirectPage() {
   // Paged
   const filteredShowData = useMemo(() => {
     let base = showOnlyFinalGt0 ? showData.filter((r) => r.final_order_qty > 0) : showData;
-    // แถวที่ import มา (is_import_row) แสดงเสมอ ไม่โดน "Show Min > 0" ตัด (ผู้ใช้เลือก SKU เองเจาะจง)
-    if (showOnlyMinGt0) base = base.filter((r) => (Number(r.min_store) || 0) > 0 || (r as any).is_import_row);
-    if (itemTypeFilter.length > 0) base = base.filter((r) => itemTypeFilter.includes(r.item_type));
+    // โหมด import/vendor: แสดงทุกแถวที่ import มา ไม่กรองด้วย Show Min > 0 / Item Type (เป็น filter ของ Mode Filter)
+    const applyFilterModeOnly = tab2Mode === "filter";
+    if (showOnlyMinGt0 && applyFilterModeOnly) base = base.filter((r) => (Number(r.min_store) || 0) > 0);
+    if (itemTypeFilter.length > 0 && applyFilterModeOnly) base = base.filter((r) => itemTypeFilter.includes(r.item_type));
     const patched = base.map(r => ({
       ...r,
       orig_on_order_store: r.orig_on_order_store ?? r.on_order_store,
@@ -3039,7 +3044,7 @@ export default function SRRDirectPage() {
       if (p !== 0) return p;
       return (a.store_name || "").localeCompare(b.store_name || "", undefined, { numeric: true });
     });
-  }, [showData, tableSearchChips, TABLE_SEARCH_KEYS, showOnlyFinalGt0, showOnlyMinGt0, itemTypeFilter]);
+  }, [showData, tableSearchChips, TABLE_SEARCH_KEYS, showOnlyFinalGt0, showOnlyMinGt0, itemTypeFilter, tab2Mode]);
   const pagedData = filteredShowData.slice(page * pageSize, (page + 1) * pageSize);
   const totalPages = Math.ceil(filteredShowData.length / pageSize);
 
