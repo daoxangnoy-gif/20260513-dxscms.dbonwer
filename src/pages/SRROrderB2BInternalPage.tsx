@@ -8,7 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@/components/ui/command";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download, Pencil, ChevronsUpDown, Check, FileSpreadsheet, Columns3, Image as ImageIcon } from "lucide-react";
+import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download, Pencil, ChevronsUpDown, Check, FileSpreadsheet, Columns3, Image as ImageIcon, Printer, FileSignature } from "lucide-react";
 import { cn } from "@/lib/utils";
 import * as XLSX from "xlsx";
 
@@ -59,6 +59,9 @@ type MUDoc = {
   created_at: string;
   need_date: string | null; // วันที่คาดว่าจะเบิก (DATE Need) — ใช้ออกฟอร์ม
   logo_url: string | null;  // โลโก้มุมซ้ายบนของฟอร์ม
+  signed_pdf_url: string | null;     // ไฟล์ PDF ที่เซ็นแล้ว (ล่าสุด)
+  signed_uploaded_at: string | null; // วันที่/เวลาอัปล่าสุด
+  signed_count: number | null;       // จำนวนครั้งที่อัป
 };
 
 const EMPTY_MU: MonthlyUsageForm = {
@@ -246,7 +249,7 @@ export default function SRROrderB2BInternalPage() {
     try {
       const { data, error } = await (supabase as any)
         .from("monthly_usage_doc")
-        .select("id, doc_no, doc_label, brand_name, branch, item_count, created_at, need_date, logo_url")
+        .select("id, doc_no, doc_label, brand_name, branch, item_count, created_at, need_date, logo_url, signed_pdf_url, signed_uploaded_at, signed_count")
         .order("doc_no", { ascending: false });
       if (error) throw error;
       setDocs(data || []);
@@ -394,6 +397,8 @@ export default function SRROrderB2BInternalPage() {
   const [editNeedDate, setEditNeedDate] = useState(""); // need_date เดิมของเอกสารที่กำลังแก้ (prefill)
   const [editLogoUrl, setEditLogoUrl] = useState(""); // logo_url เดิมของเอกสารที่กำลังแก้ (คงไว้ตอน save + ใช้ออกฟอร์ม)
   const [logoUploadingId, setLogoUploadingId] = useState<string | null>(null); // doc_id ที่กำลังอัปโลโก้
+  const [signedUploadingId, setSignedUploadingId] = useState<string | null>(null); // doc_id ที่กำลังอัปไฟล์เซ็น
+  const [printingId, setPrintingId] = useState<string | null>(null); // doc_id ที่กำลังเตรียมพิมพ์
 
   // ความกว้างคอลัมน์ (จำไว้ใน localStorage)
   const [colW, setColW] = useState<Record<string, number>>(() => {
@@ -954,6 +959,64 @@ export default function SRROrderB2BInternalPage() {
     w.document.close();
   };
 
+  // พิมพ์ฟอร์มเอกสารเดิมซ้ำ (ดึงรายการ + need_date + logo จาก DB โดยไม่ต้องเข้าไปแก้ไข)
+  const printDoc = async (doc: MUDoc) => {
+    setPrintingId(doc.id);
+    try {
+      const { data, error } = await (supabase as any)
+        .from("monthly_usage_item")
+        .select("*")
+        .eq("doc_id", doc.id)
+        .order("sort_order", { ascending: true });
+      if (error) throw error;
+      const items = data || [];
+      if (items.length === 0) {
+        toast({ title: "เอกสารว่าง ไม่มีรายการให้พิมพ์", variant: "destructive" });
+        return;
+      }
+      const formRows: MonthlyUsageForm[] = items.map((it: any) => ({
+        ...EMPTY_MU,
+        barcode: it.barcode ?? "",
+        sku_code: it.sku_code ?? "",
+        barcode_unit: it.barcode_unit ?? "",
+        product_name: it.product_name ?? "",
+        uom: it.uom ?? "",
+        monthly_qty: it.monthly_qty != null ? String(it.monthly_qty) : "",
+        picture: it.picture ?? "",
+        remark: it.remark ?? "",
+      }));
+      openPrintForm(formRows, doc.brand_name, doc.need_date || "", doc.logo_url || "");
+    } catch (e: any) {
+      toast({ title: "พิมพ์ไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setPrintingId(null);
+    }
+  };
+
+  // อัปไฟล์ PDF ที่เซ็นแล้ว → เก็บลิงก์ + เวลา + นับจำนวนครั้ง
+  const handleSignedUpload = async (doc: MUDoc, file: File) => {
+    setSignedUploadingId(doc.id);
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      const url = await uploadPicture(dataUrl); // bucket เดียวกัน รองรับ pdf
+      const { error } = await (supabase as any)
+        .from("monthly_usage_doc")
+        .update({
+          signed_pdf_url: url,
+          signed_uploaded_at: new Date().toISOString(),
+          signed_count: (doc.signed_count || 0) + 1,
+        })
+        .eq("id", doc.id);
+      if (error) throw error;
+      toast({ title: "อัปไฟล์เซ็นแล้ว", description: doc.doc_label });
+      loadDocs();
+    } catch (e: any) {
+      toast({ title: "อัปไฟล์ไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setSignedUploadingId(null);
+    }
+  };
+
   const saveMuDoc = async (needDateISO: string) => {
     if (!selectedBrand || (!selectedBrand.id && !selectedBrand.brand_name)) {
       toast({ title: "กรุณาเลือก Brand ก่อน", variant: "destructive" });
@@ -1072,7 +1135,7 @@ export default function SRROrderB2BInternalPage() {
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
-        <div className="border-b px-4 pt-3">
+        <div className="border-b px-4 pt-3 flex items-end justify-between">
           <TabsList className="h-8">
             <TabsTrigger value="brand" className="text-xs gap-1.5">
               <Tag className="w-3.5 h-3.5" /> Brand control
@@ -1083,18 +1146,27 @@ export default function SRROrderB2BInternalPage() {
               </TabsTrigger>
             )}
           </TabsList>
+          <div className="flex items-center gap-2 pb-1">
+            <button
+              onClick={openDialog}
+              title="List Brand"
+              className="flex flex-col items-center justify-center gap-0.5 w-16 py-1 rounded-md border hover:bg-muted text-foreground"
+            >
+              <Tag className="w-4 h-4" />
+              <span className="text-[10px] leading-none">List Brand</span>
+            </button>
+            <button
+              onClick={openMuNew}
+              title="Monthly usage (สร้างใหม่)"
+              className="flex flex-col items-center justify-center gap-0.5 w-16 py-1 rounded-md border hover:bg-muted text-foreground"
+            >
+              <BarChart3 className="w-4 h-4" />
+              <span className="text-[10px] leading-none">Monthly</span>
+            </button>
+          </div>
         </div>
 
         <TabsContent value="brand" className="flex-1 overflow-auto mt-0 p-4 bg-background space-y-4">
-          <div className="flex gap-2">
-            <Button size="sm" onClick={openDialog} className="gap-1.5">
-              <Tag className="w-4 h-4" /> List Brand
-            </Button>
-            <Button size="sm" variant="secondary" onClick={openMuNew} className="gap-1.5">
-              <BarChart3 className="w-4 h-4" /> Monthly usage
-            </Button>
-          </div>
-
           {/* Monthly usage docs */}
           <div className="border rounded-lg">
             <div className="px-3 py-2 border-b flex items-center gap-2 bg-muted/50">
@@ -1110,7 +1182,8 @@ export default function SRROrderB2BInternalPage() {
                   <th className="px-3 py-1.5 font-medium w-24 text-right">Total SKU</th>
                   <th className="px-3 py-1.5 font-medium w-28 text-right">SKU No Odoo</th>
                   <th className="px-3 py-1.5 font-medium w-36">วันที่</th>
-                  <th className="px-3 py-1.5 font-medium w-44" />
+                  <th className="px-3 py-1.5 font-medium w-52">ไฟล์เซ็น (PDF)</th>
+                  <th className="px-3 py-1.5 font-medium w-52" />
                 </tr>
               </thead>
               <tbody>
@@ -1126,9 +1199,43 @@ export default function SRROrderB2BInternalPage() {
                     </td>
                     <td className="px-3 py-1.5 text-muted-foreground">{new Date(d.created_at).toLocaleString("th-TH")}</td>
                     <td className="px-3 py-1.5">
+                      <div className="flex items-center gap-2">
+                        <label
+                          className="inline-flex items-center justify-center h-7 w-7 border rounded cursor-pointer hover:bg-muted shrink-0"
+                          title="แนบไฟล์ PDF ที่เซ็นแล้ว"
+                        >
+                          {signedUploadingId === d.id ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <FileSignature className="w-3.5 h-3.5 text-muted-foreground" />
+                          )}
+                          <input
+                            type="file"
+                            accept="application/pdf,.pdf"
+                            className="hidden"
+                            disabled={signedUploadingId === d.id}
+                            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleSignedUpload(d, f); e.target.value = ""; }}
+                          />
+                        </label>
+                        {d.signed_uploaded_at ? (
+                          <div className="text-[11px] leading-tight">
+                            <a href={d.signed_pdf_url || "#"} target="_blank" rel="noreferrer" className="text-primary hover:underline">ดูไฟล์ล่าสุด</a>
+                            <div className="text-muted-foreground">
+                              {new Date(d.signed_uploaded_at).toLocaleString("th-TH")} · {d.signed_count || 0} ครั้ง
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-[11px] text-muted-foreground">ยังไม่อัป</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-3 py-1.5">
                       <div className="flex items-center gap-1">
                         <Button variant="outline" size="sm" className="h-7 gap-1" onClick={() => openMuView(d)}>
                           <Eye className="w-3.5 h-3.5" /> View
+                        </Button>
+                        <Button variant="outline" size="icon" className="h-7 w-7" title="พิมพ์ฟอร์ม" onClick={() => printDoc(d)} disabled={printingId === d.id}>
+                          {printingId === d.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Printer className="w-3.5 h-3.5" />}
                         </Button>
                         <label
                           className={cn(
@@ -1164,7 +1271,7 @@ export default function SRROrderB2BInternalPage() {
                 ))}
                 {docs.length === 0 && !docsLoading && (
                   <tr>
-                    <td colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
+                    <td colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
                       ยังไม่มีเอกสาร — กด "Monthly usage" เพื่อสร้างใหม่
                     </td>
                   </tr>
