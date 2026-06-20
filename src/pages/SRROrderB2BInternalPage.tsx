@@ -873,16 +873,16 @@ export default function SRROrderB2BInternalPage() {
   @page { size: A4; margin: 12mm; }
   * { box-sizing: border-box; }
   body { font-family: "Segoe UI", "Leelawadee UI", "Phetsarath OT", Tahoma, sans-serif; color: #111; margin: 0; }
-  .logobar { width: 100%; margin-bottom: 8px; }
+  .logobar { width: 100%; padding-bottom: 8px; margin-bottom: 10px; border-bottom: 2px solid #333; }   /* เส้นคั่นใต้หัวโลโก้ */
   .logobar img { width: 100%; height: auto; max-height: 120px; object-fit: contain; object-position: left; display: block; }
   .hd { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
   .title { font-size: 20px; font-weight: 700; display: inline-block; background: #d4ebff; padding: 4px 12px; border-radius: 3px; }
   .meta { font-size: 12px; line-height: 1.7; }
   .meta b { display: inline-block; min-width: 92px; }
-  table { width: 100%; border-collapse: collapse; border: 1px solid #333; }   /* ใส่ขอบตัว table กันเส้นขอบนอกขวา/ล่างหายตอนพิมพ์ */
+  table { width: 100%; border-collapse: collapse; border: 1px solid #333; table-layout: fixed; }   /* fixed = ตารางเต็มความกว้างพอดี เส้นขอบขวา/ล่างไม่หลุด */
   thead { display: table-header-group; }   /* ทำซ้ำหัวตารางทุกหน้าเมื่อเอกสารเกิน 1 หน้า */
   tr { page-break-inside: avoid; }
-  th, td { border: 1px solid #333; padding: 5px 7px; font-size: 12px; vertical-align: middle; }
+  th, td { border: 1px solid #333; padding: 5px 7px; font-size: 12px; vertical-align: middle; word-break: break-word; overflow-wrap: anywhere; }
   th { background: #f0f0f0; text-align: center; }
   td.c { text-align: center; }
   td.pic { text-align: center; padding: 3px; }
