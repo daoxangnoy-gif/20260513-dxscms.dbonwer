@@ -57,6 +57,7 @@ type MUDoc = {
   branch: string;
   item_count: number;
   created_at: string;
+  need_date: string | null; // วันที่คาดว่าจะเบิก (DATE Need) — ใช้ออกฟอร์ม
 };
 
 const EMPTY_MU: MonthlyUsageForm = {
@@ -244,7 +245,7 @@ export default function SRROrderB2BInternalPage() {
     try {
       const { data, error } = await (supabase as any)
         .from("monthly_usage_doc")
-        .select("id, doc_no, doc_label, brand_name, branch, item_count, created_at")
+        .select("id, doc_no, doc_label, brand_name, branch, item_count, created_at, need_date")
         .order("doc_no", { ascending: false });
       if (error) throw error;
       setDocs(data || []);
@@ -369,6 +370,10 @@ export default function SRROrderB2BInternalPage() {
   const [selectedBrand, setSelectedBrand] = useState<{ id: string; brand_name: string; branch: string } | null>(null);
   const [muRows, setMuRows] = useState<MonthlyUsageForm[]>([]);
   const [lookup, setLookup] = useState<Record<number, boolean>>({});
+  // popup ถาม "วันที่คาดว่าจะเบิก" (DATE Need) ก่อน Save → ออกฟอร์ม
+  const [needDateOpen, setNeedDateOpen] = useState(false);
+  const [needDate, setNeedDate] = useState(""); // yyyy-mm-dd
+  const [editNeedDate, setEditNeedDate] = useState(""); // need_date เดิมของเอกสารที่กำลังแก้ (prefill)
 
   // ความกว้างคอลัมน์ (จำไว้ใน localStorage)
   const [colW, setColW] = useState<Record<string, number>>(() => {
@@ -501,6 +506,7 @@ export default function SRROrderB2BInternalPage() {
     setSelectedBrand(null);
     setMuRows([{ ...EMPTY_MU }]);
     setLookup({});
+    setEditNeedDate("");
     setMuReadOnly(false);
     setMuOpen(true);
     setActiveTab("view");
@@ -515,6 +521,7 @@ export default function SRROrderB2BInternalPage() {
     setEditingDocId(doc.id);
     setEditingDocNo(doc.doc_no);
     setEditingDocLabel(doc.doc_label);
+    setEditNeedDate(doc.need_date || "");
     setLookup({});
     try {
       const opts = await loadBrandOptions();
@@ -784,7 +791,133 @@ export default function SRROrderB2BInternalPage() {
     }
   };
 
-  const saveMuDoc = async () => {
+  // กด Save → ตรวจความถูกต้องก่อน แล้วเปิด popup ถาม "วันที่คาดว่าจะเบิก"
+  const openNeedDatePopup = () => {
+    if (!selectedBrand || (!selectedBrand.id && !selectedBrand.brand_name)) {
+      toast({ title: "กรุณาเลือก Brand ก่อน", variant: "destructive" });
+      return;
+    }
+    const hasRows = muRows.some((r) => r.barcode.trim() || r.product_name.trim() || r.monthly_qty.trim());
+    if (!hasRows) {
+      toast({ title: "ไม่มีรายการให้บันทึก", variant: "destructive" });
+      return;
+    }
+    setNeedDate(editNeedDate || "");
+    setNeedDateOpen(true);
+  };
+
+  // dd-mm-yyyy
+  const fmtDMY = (iso: string) => {
+    if (!iso) return "-";
+    const [y, m, d] = iso.split("-");
+    return y && m && d ? `${d}-${m}-${y}` : iso;
+  };
+
+  // สร้างหน้าพิมพ์ฟอร์ม Monthly Usage Request → เปิด tab ใหม่ + เรียก print (Save as PDF)
+  const openPrintForm = (rows: MonthlyUsageForm[], brandName: string, needDateISO: string) => {
+    const w = window.open("", "_blank");
+    if (!w) {
+      toast({ title: "เบราว์เซอร์บล็อก popup", description: "อนุญาต popup ของเว็บนี้แล้วบันทึกใหม่อีกครั้งเพื่อออกฟอร์ม", variant: "destructive" });
+      return;
+    }
+    const esc = (s: any) =>
+      String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const reqStr = `${pad(now.getDate())}-${pad(now.getMonth() + 1)}-${now.getFullYear()}`;
+    const needStr = fmtDMY(needDateISO);
+
+    const rowsHtml = rows
+      .map(
+        (r, i) => `
+        <tr>
+          <td class="c">${i + 1}</td>
+          <td>${esc(r.barcode || r.barcode_unit)}</td>
+          <td>${esc(r.product_name)}</td>
+          <td class="pic">${r.picture ? `<img src="${esc(r.picture)}" />` : ""}</td>
+          <td class="c">${esc(r.uom)}</td>
+          <td class="c">${esc(r.monthly_qty)}</td>
+          <td>${esc(r.remark)}</td>
+        </tr>`,
+      )
+      .join("");
+
+    const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Monthly Usage Request - ${esc(brandName)}</title>
+<style>
+  @page { size: A4; margin: 12mm; }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", "Leelawadee UI", "Phetsarath OT", Tahoma, sans-serif; color: #111; margin: 0; }
+  .hd { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
+  .title { font-size: 20px; font-weight: 700; }
+  .meta { font-size: 12px; line-height: 1.7; }
+  .meta b { display: inline-block; min-width: 92px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { border: 1px solid #333; padding: 5px 7px; font-size: 12px; vertical-align: middle; }
+  th { background: #f0f0f0; text-align: center; }
+  td.c { text-align: center; }
+  td.pic { text-align: center; padding: 3px; }
+  td.pic img { max-width: 90px; max-height: 70px; object-fit: contain; }
+  .sign { display: flex; justify-content: space-between; margin-top: 40px; gap: 20px; }
+  .sign .box { flex: 1; text-align: center; font-size: 12px; }
+  .sign .role { font-weight: 600; margin-bottom: 26px; }
+  .sign .line { border-top: 1px dotted #333; margin: 4px 12px; }
+  .sign .lbl { text-align: left; padding: 0 12px; margin-bottom: 18px; }
+  @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+</style>
+</head>
+<body>
+  <div class="hd">
+    <div class="title">Monthly Usage Request</div>
+    <div class="meta">
+      <div><b>Brand</b>: ${esc(brandName)}</div>
+      <div><b>DATE Request</b>: ${reqStr}</div>
+      <div><b>DATE Need</b>: ${needStr}</div>
+    </div>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th style="width:36px">No.</th>
+        <th style="width:120px">Barcode</th>
+        <th>Product Name</th>
+        <th style="width:110px">Product Picture</th>
+        <th style="width:60px">UOM</th>
+        <th style="width:55px">Qty</th>
+        <th style="width:140px">Remarks</th>
+      </tr>
+    </thead>
+    <tbody>${rowsHtml}</tbody>
+  </table>
+  <div class="sign">
+    <div class="box"><div class="role">Requestor</div><div class="lbl">Date :</div><div class="line"></div><div class="lbl">Name :</div></div>
+    <div class="box"><div class="role">Head Of Brand</div><div class="lbl">Date :</div><div class="line"></div><div class="lbl">Name :</div></div>
+    <div class="box"><div class="role">General Manager</div><div class="lbl">Date :</div><div class="line"></div><div class="lbl">Name :</div></div>
+  </div>
+  <script>
+    (function () {
+      function go() { try { window.focus(); window.print(); } catch (e) {} }
+      window.onload = function () {
+        var imgs = document.images, n = imgs.length, c = 0;
+        if (!n) return go();
+        for (var i = 0; i < n; i++) {
+          if (imgs[i].complete) { if (++c === n) go(); }
+          else { imgs[i].onload = imgs[i].onerror = function () { if (++c === n) go(); }; }
+        }
+      };
+    })();
+  </script>
+</body>
+</html>`;
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  };
+
+  const saveMuDoc = async (needDateISO: string) => {
     if (!selectedBrand || (!selectedBrand.id && !selectedBrand.brand_name)) {
       toast({ title: "กรุณาเลือก Brand ก่อน", variant: "destructive" });
       return;
@@ -844,6 +977,7 @@ export default function SRROrderB2BInternalPage() {
         brand_name: selectedBrand.brand_name,
         branch: selectedBrand.branch,
         item_count: rowsToSave.length,
+        need_date: needDateISO || null,
         updated_at: new Date().toISOString(),
       };
 
@@ -875,7 +1009,12 @@ export default function SRROrderB2BInternalPage() {
       const { error: itErr } = await (supabase as any).from("monthly_usage_item").insert(itemsPayload);
       if (itErr) throw itErr;
 
+      // ออกฟอร์ม Monthly Usage Request (หน้าพิมพ์ → Save as PDF) ด้วยข้อมูลที่เพิ่งบันทึก
+      const formRows = rowsToSave.map((r, i) => ({ ...r, picture: pictureUrls[i] || "" }));
+      openPrintForm(formRows, selectedBrand.brand_name, needDateISO);
+
       toast({ title: "บันทึกสำเร็จ", description: `${label} (${rowsToSave.length} รายการ)` });
+      setNeedDateOpen(false);
       setMuOpen(false);
       setActiveTab("brand");
       loadDocs();
@@ -1130,7 +1269,7 @@ export default function SRROrderB2BInternalPage() {
                       ยกเลิก
                     </Button>
                   )}
-                  <Button size="sm" className="h-8 gap-1.5" onClick={saveMuDoc} disabled={muSaving || muLoading}>
+                  <Button size="sm" className="h-8 gap-1.5" onClick={openNeedDatePopup} disabled={muSaving || muLoading}>
                     {muSaving && <Loader2 className="w-4 h-4 animate-spin" />}
                     Save
                   </Button>
@@ -1448,6 +1587,40 @@ export default function SRROrderB2BInternalPage() {
             </Button>
             <Button onClick={() => { const d = dupDocPrompt; setDupDocPrompt(null); if (d) openMuView(d, false); }}>
               <Pencil className="w-4 h-4 mr-1.5" /> เปิดแก้ไขเอกสารเดิม
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ถาม "วันที่คาดว่าจะเบิก" (DATE Need) ก่อนบันทึก → ออกฟอร์ม */}
+      <Dialog open={needDateOpen} onOpenChange={(o) => { if (!muSaving) setNeedDateOpen(o); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>วันที่คาดว่าจะเบิก (DATE Need)</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label className="text-xs">เลือกวันที่ที่คาดว่าจะเบิกสินค้า</Label>
+            <Input
+              type="date"
+              value={needDate}
+              onChange={(e) => setNeedDate(e.target.value)}
+              className="h-9"
+            />
+            <p className="text-[11px] text-muted-foreground">บันทึกแล้วระบบจะเปิดหน้าฟอร์มให้พิมพ์ / Save as PDF อัตโนมัติ</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setNeedDateOpen(false)} disabled={muSaving}>
+              ยกเลิก
+            </Button>
+            <Button
+              onClick={() => {
+                if (!needDate) { toast({ title: "กรุณาเลือกวันที่คาดว่าจะเบิก", variant: "destructive" }); return; }
+                saveMuDoc(needDate);
+              }}
+              disabled={muSaving}
+            >
+              {muSaving && <Loader2 className="w-4 h-4 animate-spin mr-1.5" />}
+              บันทึก & ออกฟอร์ม
             </Button>
           </DialogFooter>
         </DialogContent>
