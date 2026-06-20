@@ -876,10 +876,12 @@ export default function SRROrderB2BInternalPage() {
   .logobar { width: 100%; margin-bottom: 8px; }
   .logobar img { width: 100%; height: auto; max-height: 120px; object-fit: contain; object-position: left; display: block; }
   .hd { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
-  .title { font-size: 20px; font-weight: 700; }
+  .title { font-size: 20px; font-weight: 700; display: inline-block; background: #d4ebff; padding: 4px 12px; border-radius: 3px; }
   .meta { font-size: 12px; line-height: 1.7; }
   .meta b { display: inline-block; min-width: 92px; }
   table { width: 100%; border-collapse: collapse; }
+  thead { display: table-header-group; }   /* ทำซ้ำหัวตารางทุกหน้าเมื่อเอกสารเกิน 1 หน้า */
+  tr { page-break-inside: avoid; }
   th, td { border: 1px solid #333; padding: 5px 7px; font-size: 12px; vertical-align: middle; }
   th { background: #f0f0f0; text-align: center; }
   td.c { text-align: center; }
