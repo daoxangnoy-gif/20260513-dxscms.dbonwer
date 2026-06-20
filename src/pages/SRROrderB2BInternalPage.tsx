@@ -399,6 +399,10 @@ export default function SRROrderB2BInternalPage() {
   const [logoUploadingId, setLogoUploadingId] = useState<string | null>(null); // doc_id ที่กำลังอัปโลโก้
   const [signedUploadingId, setSignedUploadingId] = useState<string | null>(null); // doc_id ที่กำลังอัปไฟล์เซ็น
   const [printingId, setPrintingId] = useState<string | null>(null); // doc_id ที่กำลังเตรียมพิมพ์
+  // Import Monthly Excel หลายแบรนด์พร้อมกัน
+  const [multiImporting, setMultiImporting] = useState(false);
+  const [importSkips, setImportSkips] = useState<{ brand: string; reason: string; count: number }[]>([]);
+  const [importSkipOpen, setImportSkipOpen] = useState(false);
 
   // ความกว้างคอลัมน์ (จำไว้ใน localStorage)
   const [colW, setColW] = useState<Record<string, number>>(() => {
@@ -1033,6 +1037,136 @@ export default function SRROrderB2BInternalPage() {
     }
   };
 
+  // นำเข้า Excel หลายแบรนด์พร้อมกัน (ชีตเดียว มีคอลัมน์ Brand) → แบรนด์ละ 1 Doc
+  // กฎ: แบรนด์ที่มี Doc อยู่แล้ว / ไม่พบใน List Brand → Skip (ขึ้น Skiplist)
+  const handleMultiImport = async (file: File) => {
+    setMultiImporting(true);
+    try {
+      const ab = await file.arrayBuffer();
+      const wb = XLSX.read(ab);
+      const raw: any[][] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
+      if (raw.length < 2) { toast({ title: "ไฟล์ว่าง", variant: "destructive" }); return; }
+      const headers = (raw[0] as string[]).map((h) => String(h ?? "").toLowerCase().trim());
+      const brIdx = headers.findIndex((h) => h.includes("brand") || h.includes("แบรน"));
+      const bIdx = headers.findIndex((h) => h.includes("barcode") || h.includes("sku") || h.includes("code"));
+      const qIdx = headers.findIndex((h) => h.includes("qty") || h.includes("quantity") || h.includes("จำนวน"));
+      const rIdx = headers.findIndex((h) => h.includes("remark") || h.includes("หมายเหตุ") || h.includes("note"));
+      if (brIdx < 0) { toast({ title: "ไม่พบคอลัมน์ Brand", variant: "destructive" }); return; }
+      if (bIdx < 0) { toast({ title: "ไม่พบคอลัมน์ Barcode", variant: "destructive" }); return; }
+
+      // จัดกลุ่มแถวตาม Brand
+      const groups = new Map<string, { brand: string; rows: { code: string; qty: string; remark: string }[] }>();
+      for (const r of raw.slice(1)) {
+        const brand = String(r[brIdx] ?? "").trim();
+        const code = String(r[bIdx] ?? "").trim();
+        if (!brand || !code) continue;
+        const key = brand.toLowerCase();
+        if (!groups.has(key)) groups.set(key, { brand, rows: [] });
+        groups.get(key)!.rows.push({
+          code,
+          qty: qIdx >= 0 ? String(r[qIdx] ?? "").trim() : "",
+          remark: rIdx >= 0 ? String(r[rIdx] ?? "").trim() : "",
+        });
+      }
+      if (groups.size === 0) { toast({ title: "ไม่พบข้อมูล", variant: "destructive" }); return; }
+
+      // master Brand (List Brand) + เอกสารที่มีอยู่แล้ว
+      const brandOpts = await loadBrandOptions();
+      const brandByName = new Map<string, BrandRow>();
+      for (const b of brandOpts) if (b.brand_name) brandByName.set(b.brand_name.trim().toLowerCase(), b);
+      const { data: existDocs } = await (supabase as any).from("monthly_usage_doc").select("brand_name");
+      const existSet = new Set<string>();
+      for (const d of (existDocs || []) as any[]) existSet.add(String(d.brand_name ?? "").trim().toLowerCase());
+
+      // เลข doc_no เริ่มต้น
+      const { data: maxd } = await (supabase as any).from("monthly_usage_doc").select("doc_no").order("doc_no", { ascending: false }).limit(1);
+      let nextDocNo = (maxd?.[0]?.doc_no || 0) + 1;
+
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const now = new Date();
+      const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`;
+
+      const skips: { brand: string; reason: string; count: number }[] = [];
+      let createdDocs = 0, createdItems = 0;
+
+      for (const { brand, rows } of groups.values()) {
+        const lc = brand.trim().toLowerCase();
+        const master = brandByName.get(lc);
+        if (!master) { skips.push({ brand, reason: "ไม่พบใน List Brand", count: rows.length }); continue; }
+        if (existSet.has(lc)) { skips.push({ brand, reason: "มี Doc อยู่แล้ว — ไปแก้ใน Doc เดิม", count: rows.length }); continue; }
+
+        // resolve barcode → data_master
+        const resolved = await Promise.all(
+          rows.map(async (rr) => {
+            const res = await resolveBarcode(rr.code);
+            return {
+              barcode: rr.code,
+              sku_code: res.found ? res.sku_code : "",
+              barcode_unit: res.found ? res.barcode_unit : "",
+              uom: res.found ? res.uom : "",
+              product_name: res.found ? res.product_name : "ไม่พบข้อมูล",
+              monthly_qty: rr.qty,
+              remark: rr.remark,
+            };
+          }),
+        );
+        // dedup ภายในแบรนด์: SKU ซ้ำเอาแถวหลังสุด (ถ้าไม่มี SKU ใช้ barcode)
+        const keyOf = (x: any) => (x.sku_code?.trim() ? `sku:${x.sku_code.trim()}` : `bc:${x.barcode.trim()}`);
+        const map = new Map<string, any>();
+        for (const x of resolved) map.set(keyOf(x), x);
+        const items = [...map.values()];
+        if (items.length === 0) { skips.push({ brand, reason: "ไม่มีรายการ", count: 0 }); continue; }
+
+        const label = `${stamp} - ${master.brand_name}`.trim();
+        const { data: ins, error } = await (supabase as any)
+          .from("monthly_usage_doc")
+          .insert({
+            doc_no: nextDocNo,
+            doc_label: label,
+            brand_id: master.id || null,
+            brand_name: master.brand_name,
+            branch: master.branch || "",
+            item_count: items.length,
+            need_date: null,
+            updated_at: new Date().toISOString(),
+          })
+          .select("id")
+          .limit(1);
+        if (error) { skips.push({ brand, reason: "สร้าง Doc ไม่สำเร็จ: " + error.message, count: rows.length }); continue; }
+        const docId = ins?.[0]?.id;
+        nextDocNo++;
+        existSet.add(lc); // กันแบรนด์ซ้ำในไฟล์เดียวกัน
+
+        const itemsPayload = items.map((x, i) => ({
+          doc_id: docId,
+          sort_order: i,
+          sku_code: x.sku_code || null,
+          barcode: x.barcode || null,
+          barcode_unit: x.barcode_unit || null,
+          product_name: x.product_name || null,
+          uom: x.uom || null,
+          monthly_qty: x.monthly_qty.trim() ? Number(x.monthly_qty) : null,
+          daily_qty: x.monthly_qty.trim() ? Number(x.monthly_qty) / 30 : null,
+          picture: null,
+          remark: x.remark.trim() || null,
+        }));
+        const { error: itErr } = await (supabase as any).from("monthly_usage_item").insert(itemsPayload);
+        if (itErr) { skips.push({ brand, reason: "บันทึกรายการไม่สำเร็จ: " + itErr.message, count: items.length }); continue; }
+        createdDocs++;
+        createdItems += items.length;
+      }
+
+      setImportSkips(skips);
+      if (skips.length) setImportSkipOpen(true);
+      toast({ title: "นำเข้าเสร็จ", description: `สร้าง ${createdDocs} Doc · ${createdItems} รายการ${skips.length ? ` · ข้าม ${skips.length} แบรนด์` : ""}` });
+      loadDocs();
+    } catch (e: any) {
+      toast({ title: "นำเข้าไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setMultiImporting(false);
+    }
+  };
+
   const saveMuDoc = async (needDateISO: string) => {
     if (!selectedBrand || (!selectedBrand.id && !selectedBrand.brand_name)) {
       toast({ title: "กรุณาเลือก Brand ก่อน", variant: "destructive" });
@@ -1179,6 +1313,20 @@ export default function SRROrderB2BInternalPage() {
               <BarChart3 className="w-4 h-4" />
               <span className="text-[10px] leading-none">Monthly</span>
             </button>
+            <label
+              title="Import Monthly Excel (หลายแบรนด์ในไฟล์เดียว)"
+              className="flex flex-col items-center justify-center gap-0.5 w-16 py-1 rounded-md border hover:bg-muted text-foreground cursor-pointer"
+            >
+              {multiImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              <span className="text-[10px] leading-none">Import</span>
+              <input
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                className="hidden"
+                disabled={multiImporting}
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) handleMultiImport(f); e.target.value = ""; }}
+              />
+            </label>
           </div>
         </div>
 
@@ -1805,6 +1953,38 @@ export default function SRROrderB2BInternalPage() {
               {muSaving && <Loader2 className="w-4 h-4 animate-spin mr-1.5" />}
               บันทึก & ออกฟอร์ม
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Skiplist — แบรนด์ที่ข้ามตอน Import Monthly Excel */}
+      <Dialog open={importSkipOpen} onOpenChange={setImportSkipOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>แบรนด์ที่ข้าม (Skiplist) — {importSkips.length} แบรนด์</DialogTitle>
+          </DialogHeader>
+          <div className="max-h-[55vh] overflow-auto">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-muted">
+                <tr className="text-left">
+                  <th className="px-2 py-1.5 font-medium">Brand</th>
+                  <th className="px-2 py-1.5 font-medium">เหตุผล</th>
+                  <th className="px-2 py-1.5 font-medium text-right w-16">รายการ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {importSkips.map((s, i) => (
+                  <tr key={i} className="border-b last:border-0">
+                    <td className="px-2 py-1.5 font-medium">{s.brand}</td>
+                    <td className="px-2 py-1.5 text-muted-foreground">{s.reason}</td>
+                    <td className="px-2 py-1.5 text-right tabular-nums">{s.count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <DialogFooter>
+            <Button onClick={() => setImportSkipOpen(false)}>ปิด</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
