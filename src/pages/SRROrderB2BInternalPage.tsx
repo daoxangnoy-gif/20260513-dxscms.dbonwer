@@ -8,7 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@/components/ui/command";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download, Pencil, ChevronsUpDown, Check, FileSpreadsheet, Columns3, Image as ImageIcon, Printer, FileSignature } from "lucide-react";
+import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download, Pencil, ChevronsUpDown, Check, FileSpreadsheet, Columns3, Image as ImageIcon, Printer, FileSignature, ShoppingCart } from "lucide-react";
 import { cn } from "@/lib/utils";
 import * as XLSX from "xlsx";
 
@@ -116,6 +116,46 @@ const MU_DEFAULT_HIDDEN = new Set(["dgroup", "division", "dept", "bstatus", "vor
 
 // ลำดับคอลัมน์ที่ใช้ keyboard navigation (มี input) — index = data-c
 const MU_NAV_COLS = ["barcode", "sku", "bunit", "uom", "pname", "mqty", "dqty", "remark"] as const;
+
+// ===== Order (ปุ่ม Order) =====
+// 1 แถว = 1 รายการจาก Monthly Usage (read-only) + คอลัมน์ Order Qty ที่คีย์ได้
+type OrderRow = {
+  sku_code: string;
+  barcode: string;
+  barcode_unit: string;
+  product_name: string;
+  uom: string;
+  monthly_qty: string; // snapshot อ้างอิง
+  order_qty: string;   // คีย์เอง
+  picture: string;
+  remark: string;
+};
+
+type OrderDoc = {
+  id: string;
+  doc_no: number;
+  doc_label: string;
+  brand_name: string;
+  branch: string;
+  source_doc_id: string | null;
+  item_count: number;
+  created_at: string;
+};
+
+// คอลัมน์ตาราง Order (หน้าตาคล้าย Monthly usage; ทุกคอลัมน์ read-only ยกเว้น Order Qty)
+const ORDER_COLS = [
+  { key: "idx", label: "#", w: 44 },
+  { key: "barcode", label: "Barcode", w: 150 },
+  { key: "sku", label: "ID (SKU)", w: 120 },
+  { key: "bunit", label: "Barcode Unit", w: 140 },
+  { key: "uom", label: "UOM", w: 70 },
+  { key: "pname", label: "Product name", w: 240 },
+  { key: "mqty", label: "Monthly qty", w: 100 },
+  { key: "pic", label: "Picture", w: 90 },
+  { key: "remark", label: "Remark", w: 180 },
+  { key: "oqty", label: "Order Qty", w: 120 },
+] as const;
+const ORDER_TOTAL_W = ORDER_COLS.reduce((s, c) => s + c.w, 0);
 
 export default function SRROrderB2BInternalPage() {
   const [activeTab, setActiveTab] = useState("brand");
@@ -278,6 +318,7 @@ export default function SRROrderB2BInternalPage() {
 
   useEffect(() => {
     loadDocs();
+    loadOrderDocs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -403,6 +444,25 @@ export default function SRROrderB2BInternalPage() {
   const [multiImporting, setMultiImporting] = useState(false);
   const [importSkips, setImportSkips] = useState<{ brand: string; reason: string; count: number }[]>([]);
   const [importSkipOpen, setImportSkipOpen] = useState(false);
+
+  // ============================================================
+  // Order (ปุ่ม Order) — docs list + editor
+  // ============================================================
+  const [orderDocs, setOrderDocs] = useState<OrderDoc[]>([]);
+  const [orderDocsLoading, setOrderDocsLoading] = useState(false);
+  const [orderOpen, setOrderOpen] = useState(false);       // editor เปิดอยู่ไหม (แท็บ Order edit)
+  const [orderReadOnly, setOrderReadOnly] = useState(false);
+  const [orderLoading, setOrderLoading] = useState(false);
+  const [orderSaving, setOrderSaving] = useState(false);
+  const [orderEditingDocId, setOrderEditingDocId] = useState<string | null>(null);
+  const [orderEditingDocNo, setOrderEditingDocNo] = useState<number | null>(null);
+  const [orderEditingDocLabel, setOrderEditingDocLabel] = useState<string | null>(null);
+  const [orderBrand, setOrderBrand] = useState<{ id: string; brand_name: string; branch: string } | null>(null);
+  const [orderSourceDocId, setOrderSourceDocId] = useState<string | null>(null);
+  const [orderRows, setOrderRows] = useState<OrderRow[]>([]);
+  const [orderBrandPickOpen, setOrderBrandPickOpen] = useState(false); // popup เลือก Brand ก่อนเข้า Order
+  const [orderBrandLoading, setOrderBrandLoading] = useState(false);
+  const [orderPreparing, setOrderPreparing] = useState(false);         // กำลังเตรียมข้อมูลหลังเลือก Brand
 
   // ความกว้างคอลัมน์ (จำไว้ใน localStorage)
   const [colW, setColW] = useState<Record<string, number>>(() => {
@@ -1303,6 +1363,298 @@ export default function SRROrderB2BInternalPage() {
     }
   };
 
+  // ============================================================
+  // Order functions
+  // ============================================================
+  const loadOrderDocs = async () => {
+    setOrderDocsLoading(true);
+    try {
+      const { data, error } = await (supabase as any)
+        .from("order_doc")
+        .select("id, doc_no, doc_label, brand_name, branch, source_doc_id, item_count, created_at")
+        .order("doc_no", { ascending: false });
+      if (error) throw error;
+      setOrderDocs(data || []);
+    } catch {
+      // ตารางยังไม่ถูกสร้าง / RLS — ปล่อยว่าง ไม่รบกวน
+      setOrderDocs([]);
+    } finally {
+      setOrderDocsLoading(false);
+    }
+  };
+
+  // กดปุ่ม Order → เปิด popup เลือก Brand ก่อน
+  const openOrderBrandPicker = async () => {
+    setOrderBrandPickOpen(true);
+    setOrderBrandLoading(true);
+    await loadBrandOptions();
+    setOrderBrandLoading(false);
+  };
+
+  // เลือก Brand แล้ว → ตรวจเงื่อนไข แล้วเข้าหน้า Order
+  // กฎ: ต้องมีเอกสาร Monthly Usage ของแบรนด์นั้นก่อน (ไม่มี = บล็อก)
+  //     ถ้าแบรนด์มี Order Doc อยู่แล้ว = เปิดแก้ไขเอกสารเดิม (1 Brand = 1 Order Doc)
+  const handleOrderBrandPick = async (brandId: string) => {
+    const b = brandOptions.find((o) => o.id === brandId);
+    if (!b) return;
+    setOrderPreparing(true);
+    try {
+      // 1) แบรนด์นี้มี Order Doc แล้วหรือยัง → ถ้ามี เปิดแก้ไขเอกสารเดิม
+      const { data: existOrder } = await (supabase as any)
+        .from("order_doc")
+        .select("id, doc_no, doc_label, brand_name, branch, source_doc_id, item_count, created_at")
+        .eq("brand_name", b.brand_name)
+        .eq("branch", b.branch)
+        .limit(1);
+      if (existOrder && existOrder.length) {
+        setOrderBrandPickOpen(false);
+        await openOrderView(existOrder[0], false);
+        return;
+      }
+
+      // 2) ต้องมี Monthly Usage Doc ของแบรนด์ก่อน
+      const { data: muDoc } = await (supabase as any)
+        .from("monthly_usage_doc")
+        .select("id")
+        .eq("brand_name", b.brand_name)
+        .eq("branch", b.branch)
+        .limit(1);
+      if (!muDoc || !muDoc.length) {
+        toast({
+          title: "แบรนด์นี้ยังไม่มีเอกสาร Monthly Usage",
+          description: `"${b.brand_name}" — ต้องสร้าง Monthly Usage ก่อน จึงจะ Order ได้`,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // 3) ดึงรายการ Monthly Usage มาเป็นตัวตั้ง (read-only) + เติม Order Qty ว่าง
+      const sourceDocId = muDoc[0].id;
+      const { data: items, error } = await (supabase as any)
+        .from("monthly_usage_item")
+        .select("*")
+        .eq("doc_id", sourceDocId)
+        .order("sort_order", { ascending: true });
+      if (error) throw error;
+      if (!items || items.length === 0) {
+        toast({ title: "เอกสาร Monthly Usage ว่าง", description: "ไม่มีรายการให้ Order", variant: "destructive" });
+        return;
+      }
+      const rows: OrderRow[] = items.map((it: any) => ({
+        sku_code: it.sku_code ?? "",
+        barcode: it.barcode ?? "",
+        barcode_unit: it.barcode_unit ?? "",
+        product_name: it.product_name ?? "",
+        uom: it.uom ?? "",
+        monthly_qty: it.monthly_qty != null ? String(it.monthly_qty) : "",
+        order_qty: "",
+        picture: it.picture ?? "",
+        remark: it.remark ?? "",
+      }));
+      setOrderEditingDocId(null);
+      setOrderEditingDocNo(null);
+      setOrderEditingDocLabel(null);
+      setOrderBrand({ id: b.id!, brand_name: b.brand_name, branch: b.branch });
+      setOrderSourceDocId(sourceDocId);
+      setOrderRows(rows);
+      setOrderReadOnly(false);
+      setOrderOpen(true);
+      setOrderBrandPickOpen(false);
+      setActiveTab("order_edit");
+    } catch (e: any) {
+      toast({ title: "เตรียมข้อมูลไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setOrderPreparing(false);
+    }
+  };
+
+  // เปิดดู/แก้ไข Order Doc เดิม
+  const openOrderView = async (doc: OrderDoc, readOnly = true) => {
+    setOrderOpen(true);
+    setOrderReadOnly(readOnly);
+    setActiveTab("order_edit");
+    setOrderLoading(true);
+    setOrderEditingDocId(doc.id);
+    setOrderEditingDocNo(doc.doc_no);
+    setOrderEditingDocLabel(doc.doc_label);
+    setOrderBrand({ id: "", brand_name: doc.brand_name, branch: doc.branch });
+    setOrderSourceDocId(doc.source_doc_id);
+    try {
+      const { data, error } = await (supabase as any)
+        .from("order_item")
+        .select("*")
+        .eq("doc_id", doc.id)
+        .order("sort_order", { ascending: true });
+      if (error) throw error;
+      setOrderRows(
+        (data || []).map((it: any) => ({
+          sku_code: it.sku_code ?? "",
+          barcode: it.barcode ?? "",
+          barcode_unit: it.barcode_unit ?? "",
+          product_name: it.product_name ?? "",
+          uom: it.uom ?? "",
+          monthly_qty: it.monthly_qty != null ? String(it.monthly_qty) : "",
+          order_qty: it.order_qty != null ? String(it.order_qty) : "",
+          picture: it.picture ?? "",
+          remark: it.remark ?? "",
+        })),
+      );
+    } catch (e: any) {
+      toast({ title: "เปิดเอกสารไม่สำเร็จ", description: e.message, variant: "destructive" });
+      setOrderRows([]);
+    } finally {
+      setOrderLoading(false);
+    }
+  };
+
+  const updateOrderQty = (idx: number, value: string) =>
+    setOrderRows((prev) => prev.map((r, i) => (i === idx ? { ...r, order_qty: value } : r)));
+
+  const closeOrderEditor = () => {
+    setOrderOpen(false);
+    setActiveTab("order");
+  };
+
+  // บันทึก Order Doc (1 Brand = 1 Order Doc)
+  const saveOrderDoc = async () => {
+    if (!orderBrand || (!orderBrand.id && !orderBrand.brand_name)) {
+      toast({ title: "ไม่พบ Brand", variant: "destructive" });
+      return;
+    }
+    const ordered = orderRows.filter((r) => r.order_qty.trim() && Number(r.order_qty) > 0);
+    if (ordered.length === 0) {
+      toast({ title: "ยังไม่ได้ใส่จำนวน Order", description: "กรอก Order Qty อย่างน้อย 1 รายการ", variant: "destructive" });
+      return;
+    }
+    setOrderSaving(true);
+    try {
+      // ตอนสร้างใหม่ — กันแบรนด์ที่มี Order Doc แล้ว (1 Brand = 1 Order Doc)
+      if (!orderEditingDocId) {
+        const { data: existing } = await (supabase as any)
+          .from("order_doc")
+          .select("doc_label")
+          .eq("brand_name", orderBrand.brand_name)
+          .eq("branch", orderBrand.branch)
+          .limit(1);
+        if (existing && existing.length) {
+          toast({ title: "Brand นี้มี Order แล้ว", description: `"${orderBrand.brand_name}" มี ${existing[0].doc_label} อยู่แล้ว — 1 Brand ได้ 1 Order Doc`, variant: "destructive" });
+          setOrderSaving(false);
+          return;
+        }
+      }
+
+      let docNo = orderEditingDocNo;
+      if (!orderEditingDocId) {
+        const { data: maxd } = await (supabase as any)
+          .from("order_doc")
+          .select("doc_no")
+          .order("doc_no", { ascending: false })
+          .limit(1);
+        docNo = (maxd?.[0]?.doc_no || 0) + 1;
+      }
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const now = new Date();
+      const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`;
+      const label = orderEditingDocId && orderEditingDocLabel
+        ? orderEditingDocLabel
+        : `${stamp} - ${orderBrand.brand_name} (Order)`.trim();
+      const docPayload: any = {
+        doc_no: docNo,
+        doc_label: label,
+        brand_id: orderBrand.id || null,
+        brand_name: orderBrand.brand_name,
+        branch: orderBrand.branch,
+        source_doc_id: orderSourceDocId,
+        item_count: ordered.length,
+        updated_at: new Date().toISOString(),
+      };
+
+      let docId = orderEditingDocId;
+      if (orderEditingDocId) {
+        const { error } = await (supabase as any).from("order_doc").update(docPayload).eq("id", orderEditingDocId);
+        if (error) throw error;
+        const { error: delErr } = await (supabase as any).from("order_item").delete().eq("doc_id", orderEditingDocId);
+        if (delErr) throw delErr;
+      } else {
+        const { data: ins, error } = await (supabase as any).from("order_doc").insert(docPayload).select("id").limit(1);
+        if (error) throw error;
+        docId = ins?.[0]?.id;
+      }
+
+      const itemsPayload = ordered.map((r, i) => ({
+        doc_id: docId,
+        sort_order: i,
+        sku_code: r.sku_code || null,
+        barcode: r.barcode.trim() || null,
+        barcode_unit: r.barcode_unit || null,
+        product_name: r.product_name || null,
+        uom: r.uom || null,
+        monthly_qty: r.monthly_qty.trim() ? Number(r.monthly_qty) : null,
+        order_qty: Number(r.order_qty),
+        picture: r.picture || null,
+        remark: r.remark.trim() || null,
+      }));
+      const { error: itErr } = await (supabase as any).from("order_item").insert(itemsPayload);
+      if (itErr) throw itErr;
+
+      toast({ title: "บันทึก Order สำเร็จ", description: `${label} (${ordered.length} รายการ)` });
+      setOrderOpen(false);
+      setActiveTab("order");
+      loadOrderDocs();
+    } catch (e: any) {
+      toast({ title: "บันทึกไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setOrderSaving(false);
+    }
+  };
+
+  const deleteOrderDoc = async (doc: OrderDoc) => {
+    if (!window.confirm(`ลบ Order "${doc.doc_label}" และรายการทั้งหมด?`)) return;
+    try {
+      const { error } = await (supabase as any).from("order_doc").delete().eq("id", doc.id);
+      if (error) throw error;
+      toast({ title: "ลบ Order แล้ว", description: doc.doc_label });
+      loadOrderDocs();
+    } catch (e: any) {
+      toast({ title: "ลบไม่สำเร็จ", description: e.message, variant: "destructive" });
+    }
+  };
+
+  const exportOrderDoc = async (doc: OrderDoc) => {
+    try {
+      const { data, error } = await (supabase as any)
+        .from("order_item")
+        .select("*")
+        .eq("doc_id", doc.id)
+        .order("sort_order", { ascending: true });
+      if (error) throw error;
+      const items = data || [];
+      if (items.length === 0) {
+        toast({ title: "เอกสารว่าง ไม่มีรายการให้ export", variant: "destructive" });
+        return;
+      }
+      const rows = items.map((it: any, i: number) => ({
+        "#": i + 1,
+        "ID (SKU)": it.sku_code || "",
+        Barcode: it.barcode || "",
+        "Barcode Unit": it.barcode_unit || "",
+        "Product name": it.product_name || "",
+        UOM: it.uom || "",
+        "Monthly qty": it.monthly_qty ?? "",
+        "Order Qty": it.order_qty ?? "",
+        Remark: it.remark || "",
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      ws["!cols"] = [{ wch: 4 }, { wch: 14 }, { wch: 16 }, { wch: 16 }, { wch: 36 }, { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 30 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Order");
+      const safeName = doc.doc_label.replace(/[\\/:*?"<>|]/g, "_");
+      XLSX.writeFile(wb, `${safeName}.xlsx`);
+    } catch (e: any) {
+      toast({ title: "Export ไม่สำเร็จ", description: e.message, variant: "destructive" });
+    }
+  };
+
   // ensure selected brand option appears even if it's not in the live list (deleted brand)
   const mergedBrandOptions =
     selectedBrand && selectedBrand.id && !brandOptions.find((o) => o.id === selectedBrand.id)
@@ -1317,9 +1669,17 @@ export default function SRROrderB2BInternalPage() {
             <TabsTrigger value="brand" className="text-xs gap-1.5">
               <Tag className="w-3.5 h-3.5" /> Brand control
             </TabsTrigger>
+            <TabsTrigger value="order" className="text-xs gap-1.5">
+              <ShoppingCart className="w-3.5 h-3.5" /> Order
+            </TabsTrigger>
             {muOpen && (
               <TabsTrigger value="view" className="text-xs gap-1.5">
                 <Eye className="w-3.5 h-3.5" /> แสดงข้อมูล
+              </TabsTrigger>
+            )}
+            {orderOpen && (
+              <TabsTrigger value="order_edit" className="text-xs gap-1.5">
+                <ShoppingCart className="w-3.5 h-3.5" /> Order (แก้ไข)
               </TabsTrigger>
             )}
           </TabsList>
@@ -1339,6 +1699,14 @@ export default function SRROrderB2BInternalPage() {
             >
               <BarChart3 className="w-4 h-4" />
               <span className="text-[10px] leading-none">Monthly</span>
+            </button>
+            <button
+              onClick={openOrderBrandPicker}
+              title="Order (เลือกแบรนด์ แล้วคีย์ Order Qty)"
+              className="flex flex-col items-center justify-center gap-0.5 w-16 py-1 rounded-md border hover:bg-muted text-foreground"
+            >
+              <ShoppingCart className="w-4 h-4" />
+              <span className="text-[10px] leading-none">Order</span>
             </button>
             <label
               title="Import Monthly Excel (หลายแบรนด์ในไฟล์เดียว)"
@@ -1471,6 +1839,61 @@ export default function SRROrderB2BInternalPage() {
                   <tr>
                     <td colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
                       ยังไม่มีเอกสาร — กด "Monthly usage" เพื่อสร้างใหม่
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </TabsContent>
+
+        {/* ============ Order — รายการ Order Doc ============ */}
+        <TabsContent value="order" className="flex-1 overflow-auto mt-0 p-4 bg-background space-y-4">
+          <div className="border rounded-lg">
+            <div className="px-3 py-2 border-b flex items-center gap-2 bg-muted/50">
+              <ShoppingCart className="w-4 h-4 text-muted-foreground" />
+              <span className="text-sm font-medium">เอกสาร Order</span>
+              {orderDocsLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
+              <Button size="sm" className="h-7 gap-1.5 ml-auto" onClick={openOrderBrandPicker}>
+                <Plus className="w-3.5 h-3.5" /> สร้าง Order
+              </Button>
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-muted-foreground border-b">
+                  <th className="px-3 py-1.5 font-medium">Doc</th>
+                  <th className="px-3 py-1.5 font-medium">Brand</th>
+                  <th className="px-3 py-1.5 font-medium w-24 text-right">รายการ</th>
+                  <th className="px-3 py-1.5 font-medium w-36">วันที่</th>
+                  <th className="px-3 py-1.5 font-medium w-48" />
+                </tr>
+              </thead>
+              <tbody>
+                {orderDocs.map((d) => (
+                  <tr key={d.id} className="border-b last:border-0 hover:bg-muted/40">
+                    <td className="px-3 py-1.5 font-medium">{d.doc_label}</td>
+                    <td className="px-3 py-1.5">{d.brand_name}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums">{d.item_count}</td>
+                    <td className="px-3 py-1.5 text-muted-foreground">{new Date(d.created_at).toLocaleString("th-TH")}</td>
+                    <td className="px-3 py-1.5">
+                      <div className="flex items-center gap-1">
+                        <Button variant="outline" size="sm" className="h-7 gap-1" onClick={() => openOrderView(d)}>
+                          <Eye className="w-3.5 h-3.5" /> View
+                        </Button>
+                        <Button variant="outline" size="icon" className="h-7 w-7" title="Export Excel" onClick={() => exportOrderDoc(d)}>
+                          <Download className="w-3.5 h-3.5" />
+                        </Button>
+                        <Button variant="ghost" size="icon" className="h-7 w-7" title="ลบ Order" onClick={() => deleteOrderDoc(d)}>
+                          <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                        </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {orderDocs.length === 0 && !orderDocsLoading && (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">
+                      ยังไม่มี Order — กด "สร้าง Order" เพื่อเลือกแบรนด์
                     </td>
                   </tr>
                 )}
@@ -1934,6 +2357,105 @@ export default function SRROrderB2BInternalPage() {
             </div>
           )}
         </TabsContent>
+
+        {/* ============ Order editor (in-app tab) ============ */}
+        <TabsContent value="order_edit" className="flex-1 overflow-auto mt-0 p-4 bg-background space-y-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button variant="ghost" size="sm" className="h-8 gap-1" onClick={closeOrderEditor}>
+              <X className="w-4 h-4" /> ปิด
+            </Button>
+            <div className="text-sm font-semibold">
+              {orderEditingDocId ? `Order — ${orderEditingDocLabel || ""}` : `Order — ${orderBrand?.brand_name || ""}`}
+              {orderReadOnly && <span className="ml-2 text-[11px] font-normal text-muted-foreground">(โหมดดู)</span>}
+            </div>
+            <div className="ml-auto flex items-center gap-2">
+              {orderReadOnly ? (
+                <Button size="sm" className="h-8 gap-1.5" onClick={() => setOrderReadOnly(false)}>
+                  <Pencil className="w-4 h-4" /> แก้ไข
+                </Button>
+              ) : (
+                <Button size="sm" className="h-8 gap-1.5" onClick={saveOrderDoc} disabled={orderSaving || orderLoading}>
+                  {orderSaving && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Save Order
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {orderLoading ? (
+            <div className="flex items-center justify-center py-10">
+              <Loader2 className="w-6 h-6 animate-spin text-primary" />
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Brand</Label>
+                <div className="h-9 flex items-center px-3 border rounded-md bg-muted/40 text-sm">
+                  {orderBrand?.brand_name || "—"}
+                  <span className="ml-2 text-[11px] text-muted-foreground">(อ้างอิงรายการจาก Monthly Usage — แก้ได้แค่ Order Qty)</span>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto border rounded-md">
+                <table className="text-sm border-collapse" style={{ width: ORDER_TOTAL_W, tableLayout: "fixed" }}>
+                  <colgroup>
+                    {ORDER_COLS.map((c) => (
+                      <col key={c.key} style={{ width: c.w }} />
+                    ))}
+                  </colgroup>
+                  <thead>
+                    <tr className="bg-muted text-left">
+                      {ORDER_COLS.map((c) => (
+                        <th key={c.key} className="px-2 py-1.5 font-medium border-r last:border-r-0 select-none whitespace-nowrap">
+                          <span className="block truncate">{c.label}</span>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {orderRows.map((row, idx) => (
+                      <tr key={idx} className="border-t align-middle">
+                        <td className="px-2 py-1 text-center text-muted-foreground tabular-nums">{idx + 1}</td>
+                        <td className="px-2 py-1 text-xs truncate" title={row.barcode}>{row.barcode || "-"}</td>
+                        <td className="px-2 py-1 text-xs truncate" title={row.sku_code}>{row.sku_code || "-"}</td>
+                        <td className="px-2 py-1 text-xs truncate" title={row.barcode_unit}>{row.barcode_unit || "-"}</td>
+                        <td className="px-2 py-1 text-xs truncate" title={row.uom}>{row.uom || "-"}</td>
+                        <td className={`px-2 py-1 text-xs truncate ${row.product_name === "ไม่พบข้อมูล" ? "text-destructive" : ""}`} title={row.product_name}>{row.product_name || "-"}</td>
+                        <td className="px-2 py-1 text-xs text-right tabular-nums text-muted-foreground">{row.monthly_qty || "-"}</td>
+                        <td className="px-1 py-1">
+                          <div className="w-12 h-12 border rounded flex items-center justify-center bg-muted/30 overflow-hidden mx-auto">
+                            {row.picture
+                              ? <img src={row.picture} alt="picture" className="w-full h-full object-cover cursor-zoom-in" onClick={() => window.open(row.picture, "_blank")} />
+                              : <span className="text-[9px] text-muted-foreground">-</span>}
+                          </div>
+                        </td>
+                        <td className="px-2 py-1 text-xs truncate" title={row.remark}>{row.remark || "-"}</td>
+                        <td className="px-1 py-1">
+                          <Input
+                            type="number"
+                            value={row.order_qty}
+                            readOnly={orderReadOnly}
+                            onChange={(e) => updateOrderQty(idx, e.target.value)}
+                            className={`h-8 w-full ${orderReadOnly ? "bg-muted/50" : ""}`}
+                            placeholder="0"
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                    {orderRows.length === 0 && (
+                      <tr>
+                        <td colSpan={ORDER_COLS.length} className="px-2 py-6 text-center text-muted-foreground">
+                          ไม่มีรายการ
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-[11px] text-muted-foreground">บันทึกเฉพาะรายการที่ใส่ Order Qty มากกว่า 0</p>
+            </div>
+          )}
+        </TabsContent>
       </Tabs>
 
       {/* ถาม: Brand นี้มีเอกสารแล้ว เปิดแก้ไขเอกสารเดิมไหม */}
@@ -2020,6 +2542,47 @@ export default function SRROrderB2BInternalPage() {
           <DialogFooter>
             <Button onClick={() => setImportSkipOpen(false)}>ปิด</Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* เลือก Brand ก่อนเข้า Order */}
+      <Dialog open={orderBrandPickOpen} onOpenChange={(o) => { if (!orderPreparing) setOrderBrandPickOpen(o); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>เลือก Brand เพื่อ Order</DialogTitle>
+          </DialogHeader>
+          {orderBrandLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="w-6 h-6 animate-spin text-primary" />
+            </div>
+          ) : (
+            <div className="relative">
+              <Command>
+                <CommandInput placeholder="ค้นหา Brand..." />
+                <CommandList>
+                  <CommandEmpty>{brandOptions.length === 0 ? "ยังไม่มี Brand — เพิ่มใน List Brand ก่อน" : "ไม่พบ Brand"}</CommandEmpty>
+                  <CommandGroup>
+                    {brandOptions.map((b) => (
+                      <CommandItem
+                        key={b.id}
+                        value={b.brand_name}
+                        disabled={orderPreparing}
+                        onSelect={() => handleOrderBrandPick(b.id!)}
+                      >
+                        {b.brand_name}
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+              {orderPreparing && (
+                <div className="absolute inset-0 flex items-center justify-center bg-background/60">
+                  <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                </div>
+              )}
+            </div>
+          )}
+          <p className="text-[11px] text-muted-foreground">แบรนด์ต้องมีเอกสาร Monthly Usage ก่อน จึงจะ Order ได้</p>
         </DialogContent>
       </Dialog>
     </div>
