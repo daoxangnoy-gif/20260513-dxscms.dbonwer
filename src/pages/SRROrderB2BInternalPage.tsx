@@ -842,11 +842,6 @@ export default function SRROrderB2BInternalPage() {
 
   // สร้างหน้าพิมพ์ฟอร์ม Monthly Usage Request → เปิด tab ใหม่ + เรียก print (Save as PDF)
   const openPrintForm = (rows: MonthlyUsageForm[], brandName: string, needDateISO: string, logoUrl?: string) => {
-    const w = window.open("", "_blank");
-    if (!w) {
-      toast({ title: "เบราว์เซอร์บล็อก popup", description: "อนุญาต popup ของเว็บนี้แล้วบันทึกใหม่อีกครั้งเพื่อออกฟอร์ม", variant: "destructive" });
-      return;
-    }
     const esc = (s: any) =>
       String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     const now = new Date();
@@ -939,24 +934,45 @@ export default function SRROrderB2BInternalPage() {
       )
       .join("")}
   </div>
-  <script>
-    (function () {
-      function go() { try { window.focus(); window.print(); } catch (e) {} }
-      window.onload = function () {
-        var imgs = document.images, n = imgs.length, c = 0;
-        if (!n) return go();
-        for (var i = 0; i < n; i++) {
-          if (imgs[i].complete) { if (++c === n) go(); }
-          else { imgs[i].onload = imgs[i].onerror = function () { if (++c === n) go(); }; }
-        }
-      };
-    })();
-  </script>
 </body>
 </html>`;
-    w.document.open();
-    w.document.write(html);
-    w.document.close();
+
+    // พิมพ์ผ่าน hidden iframe → เด้ง print preview อย่างเดียว ไม่เปิด tab ใหม่
+    const iframe = document.createElement("iframe");
+    iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;";
+    document.body.appendChild(iframe);
+    const iwin = iframe.contentWindow;
+    const idoc = iwin?.document;
+    if (!iwin || !idoc) {
+      iframe.remove();
+      toast({ title: "เตรียมหน้าพิมพ์ไม่สำเร็จ", variant: "destructive" });
+      return;
+    }
+    const cleanup = () => { setTimeout(() => iframe.remove(), 300); };
+    iwin.onafterprint = cleanup;
+    let printed = false;
+    const doPrint = () => {
+      if (printed) return;
+      printed = true;
+      try { iwin.focus(); iwin.print(); } catch { cleanup(); }
+    };
+    idoc.open();
+    idoc.write(html);
+    idoc.close();
+    // รอรูปโหลดครบก่อนพิมพ์ (กันรูปไม่ขึ้น) + fallback กันค้าง
+    const imgs = idoc.images;
+    const n = imgs.length;
+    let c = 0;
+    if (!n) {
+      setTimeout(doPrint, 150);
+    } else {
+      for (let i = 0; i < n; i++) {
+        const im = imgs[i];
+        if (im.complete) { if (++c === n) setTimeout(doPrint, 100); }
+        else { im.onload = im.onerror = () => { if (++c === n) setTimeout(doPrint, 100); }; }
+      }
+      setTimeout(doPrint, 3000);
+    }
   };
 
   // พิมพ์ฟอร์มเอกสารเดิมซ้ำ (ดึงรายการ + need_date + logo จาก DB โดยไม่ต้องเข้าไปแก้ไข)
