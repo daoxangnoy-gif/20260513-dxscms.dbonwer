@@ -879,7 +879,7 @@ export default function SRROrderB2BInternalPage() {
   .title { font-size: 20px; font-weight: 700; display: inline-block; background: #d4ebff; padding: 4px 12px; border-radius: 3px; }
   .meta { font-size: 12px; line-height: 1.7; }
   .meta b { display: inline-block; min-width: 92px; }
-  table { width: 100%; border-collapse: collapse; }
+  table { width: 100%; border-collapse: collapse; border: 1px solid #333; }   /* ใส่ขอบตัว table กันเส้นขอบนอกขวา/ล่างหายตอนพิมพ์ */
   thead { display: table-header-group; }   /* ทำซ้ำหัวตารางทุกหน้าเมื่อเอกสารเกิน 1 หน้า */
   tr { page-break-inside: avoid; }
   th, td { border: 1px solid #333; padding: 5px 7px; font-size: 12px; vertical-align: middle; }
