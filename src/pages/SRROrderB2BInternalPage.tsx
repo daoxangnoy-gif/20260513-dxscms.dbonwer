@@ -718,6 +718,18 @@ export default function SRROrderB2BInternalPage() {
     XLSX.writeFile(wb, "MonthlyUsage_Template.xlsx");
   };
 
+  // template สำหรับ Import หลายแบรนด์ (ชีตเดียว มีคอลัมน์ Brand)
+  const downloadMultiTemplate = () => {
+    const ws = XLSX.utils.json_to_sheet([
+      { Brand: "Bonchon", Barcode: "8851123212021", "จำนวน/เดือน": 1000, หมายเหตุ: "" },
+      { Brand: "Khiang", Barcode: "8059495230180", "จำนวน/เดือน": 2, หมายเหตุ: "" },
+    ]);
+    ws["!cols"] = [{ wch: 18 }, { wch: 18 }, { wch: 12 }, { wch: 20 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Template");
+    XLSX.writeFile(wb, "MonthlyUsage_MultiBrand_Template.xlsx");
+  };
+
   // นำเข้ารายการจาก Excel → resolve barcode → เติมลงตาราง
   const handleMuImport = async (file: File) => {
     setMuImporting(true);
@@ -1074,6 +1086,7 @@ export default function SRROrderB2BInternalPage() {
       const brandOpts = await loadBrandOptions();
       const brandByName = new Map<string, BrandRow>();
       for (const b of brandOpts) if (b.brand_name) brandByName.set(b.brand_name.trim().toLowerCase(), b);
+      let nextBrandCode = brandOpts.length ? Math.max(...brandOpts.map((b) => b.code || 0)) + 1 : 1;
       const { data: existDocs } = await (supabase as any).from("monthly_usage_doc").select("brand_name");
       const existSet = new Set<string>();
       for (const d of (existDocs || []) as any[]) existSet.add(String(d.brand_name ?? "").trim().toLowerCase());
@@ -1091,8 +1104,22 @@ export default function SRROrderB2BInternalPage() {
 
       for (const { brand, rows } of groups.values()) {
         const lc = brand.trim().toLowerCase();
-        const master = brandByName.get(lc);
-        if (!master) { skips.push({ brand, reason: "ไม่พบใน List Brand", count: rows.length }); continue; }
+        let master = brandByName.get(lc);
+        if (!master) {
+          // ไม่มีใน List Brand → สร้างให้อัตโนมัติ แล้วใช้สร้าง Doc ต่อ
+          const { data: insB, error: bErr } = await (supabase as any)
+            .from("brand")
+            .insert({ code: nextBrandCode, brand_name: brand.trim(), branch: "" })
+            .select("id, code, brand_name, branch")
+            .limit(1);
+          if (bErr || !insB?.[0]) {
+            skips.push({ brand, reason: "สร้าง Brand อัตโนมัติไม่สำเร็จ" + (bErr ? ": " + bErr.message : ""), count: rows.length });
+            continue;
+          }
+          master = { id: insB[0].id, code: insB[0].code, brand_name: insB[0].brand_name, branch: insB[0].branch ?? "" };
+          brandByName.set(lc, master);
+          nextBrandCode++;
+        }
         if (existSet.has(lc)) { skips.push({ brand, reason: "มี Doc อยู่แล้ว — ไปแก้ใน Doc เดิม", count: rows.length }); continue; }
 
         // resolve barcode → data_master
@@ -1327,6 +1354,13 @@ export default function SRROrderB2BInternalPage() {
                 onChange={(e) => { const f = e.target.files?.[0]; if (f) handleMultiImport(f); e.target.value = ""; }}
               />
             </label>
+            <button
+              onClick={downloadMultiTemplate}
+              title="ดาวน์โหลด Template (Excel หลายแบรนด์)"
+              className="flex items-center justify-center h-7 w-7 self-center rounded-md border hover:bg-muted text-muted-foreground"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
 
