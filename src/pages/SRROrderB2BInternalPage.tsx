@@ -873,9 +873,9 @@ export default function SRROrderB2BInternalPage() {
   @page { size: A4; margin: 12mm; }
   * { box-sizing: border-box; }
   body { font-family: "Segoe UI", "Leelawadee UI", "Phetsarath OT", Tahoma, sans-serif; color: #111; margin: 0; }
+  .logobar { width: 100%; margin-bottom: 8px; }
+  .logobar img { width: 100%; height: auto; max-height: 120px; object-fit: contain; object-position: left; display: block; }
   .hd { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
-  .hd-left { display: flex; align-items: center; gap: 14px; }
-  .logo { max-height: 68px; max-width: 170px; object-fit: contain; }
   .title { font-size: 20px; font-weight: 700; }
   .meta { font-size: 12px; line-height: 1.7; }
   .meta b { display: inline-block; min-width: 92px; }
@@ -888,19 +888,17 @@ export default function SRROrderB2BInternalPage() {
   .sign { display: flex; justify-content: space-between; margin-top: 40px; gap: 18px; }
   .sign .box { flex: 1; border: 1px solid #333; border-radius: 6px; padding: 12px 16px 14px; }
   .sign .role { text-align: center; font-weight: 700; font-size: 13px; }
-  .sign .sp { height: 48px; }                 /* ช่องว่างสำหรับเซ็น */
+  .sign .sp { height: 80px; }                 /* ช่องว่างสำหรับเซ็น */
   .sign .ln { display: flex; align-items: flex-end; font-size: 12px; margin-top: 16px; }
-  .sign .ln .k { flex: 0 0 44px; }
+  .sign .ln .k { flex: 0 0 72px; }
   .sign .ln .v { flex: 1; border-bottom: 1px dotted #333; height: 14px; }
   @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
 </style>
 </head>
 <body>
+  ${logoUrl ? `<div class="logobar"><img src="${esc(logoUrl)}" /></div>` : ""}
   <div class="hd">
-    <div class="hd-left">
-      ${logoUrl ? `<img class="logo" src="${esc(logoUrl)}" />` : ""}
-      <div class="title">Monthly Usage Request</div>
-    </div>
+    <div class="title">Monthly Usage Request</div>
     <div class="meta">
       <div><b>Brand</b>: ${esc(brandName)}</div>
       <div><b>DATE Request</b>: ${reqStr}</div>
@@ -927,7 +925,7 @@ export default function SRROrderB2BInternalPage() {
         (role) => `<div class="box">
       <div class="role">${role}</div>
       <div class="sp"></div>
-      <div class="ln"><span class="k">Sign</span><span class="v"></span></div>
+      <div class="ln"><span class="k">Signature</span><span class="v"></span></div>
       <div class="ln"><span class="k">Name</span><span class="v"></span></div>
       <div class="ln"><span class="k">Date</span><span class="v"></span></div>
     </div>`,
