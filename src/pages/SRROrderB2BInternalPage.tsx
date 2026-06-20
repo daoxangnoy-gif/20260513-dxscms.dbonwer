@@ -8,7 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@/components/ui/command";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download, Pencil, ChevronsUpDown, Check, FileSpreadsheet, Columns3 } from "lucide-react";
+import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download, Pencil, ChevronsUpDown, Check, FileSpreadsheet, Columns3, Image as ImageIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import * as XLSX from "xlsx";
 
@@ -58,6 +58,7 @@ type MUDoc = {
   item_count: number;
   created_at: string;
   need_date: string | null; // วันที่คาดว่าจะเบิก (DATE Need) — ใช้ออกฟอร์ม
+  logo_url: string | null;  // โลโก้มุมซ้ายบนของฟอร์ม
 };
 
 const EMPTY_MU: MonthlyUsageForm = {
@@ -245,7 +246,7 @@ export default function SRROrderB2BInternalPage() {
     try {
       const { data, error } = await (supabase as any)
         .from("monthly_usage_doc")
-        .select("id, doc_no, doc_label, brand_name, branch, item_count, created_at, need_date")
+        .select("id, doc_no, doc_label, brand_name, branch, item_count, created_at, need_date, logo_url")
         .order("doc_no", { ascending: false });
       if (error) throw error;
       setDocs(data || []);
@@ -286,6 +287,23 @@ export default function SRROrderB2BInternalPage() {
       loadDocs();
     } catch (e: any) {
       toast({ title: "ลบไม่สำเร็จ", description: e.message, variant: "destructive" });
+    }
+  };
+
+  // อัป/เปลี่ยนโลโก้ของเอกสาร → เก็บ public URL ลง monthly_usage_doc.logo_url (โชว์มุมซ้ายบนของฟอร์ม)
+  const handleDocLogo = async (doc: MUDoc, file: File) => {
+    setLogoUploadingId(doc.id);
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      const url = await uploadPicture(dataUrl);
+      const { error } = await (supabase as any).from("monthly_usage_doc").update({ logo_url: url }).eq("id", doc.id);
+      if (error) throw error;
+      toast({ title: "อัปโลโก้แล้ว", description: doc.doc_label });
+      loadDocs();
+    } catch (e: any) {
+      toast({ title: "อัปโลโก้ไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setLogoUploadingId(null);
     }
   };
 
@@ -374,6 +392,8 @@ export default function SRROrderB2BInternalPage() {
   const [needDateOpen, setNeedDateOpen] = useState(false);
   const [needDate, setNeedDate] = useState(""); // yyyy-mm-dd
   const [editNeedDate, setEditNeedDate] = useState(""); // need_date เดิมของเอกสารที่กำลังแก้ (prefill)
+  const [editLogoUrl, setEditLogoUrl] = useState(""); // logo_url เดิมของเอกสารที่กำลังแก้ (คงไว้ตอน save + ใช้ออกฟอร์ม)
+  const [logoUploadingId, setLogoUploadingId] = useState<string | null>(null); // doc_id ที่กำลังอัปโลโก้
 
   // ความกว้างคอลัมน์ (จำไว้ใน localStorage)
   const [colW, setColW] = useState<Record<string, number>>(() => {
@@ -507,6 +527,7 @@ export default function SRROrderB2BInternalPage() {
     setMuRows([{ ...EMPTY_MU }]);
     setLookup({});
     setEditNeedDate("");
+    setEditLogoUrl("");
     setMuReadOnly(false);
     setMuOpen(true);
     setActiveTab("view");
@@ -522,6 +543,7 @@ export default function SRROrderB2BInternalPage() {
     setEditingDocNo(doc.doc_no);
     setEditingDocLabel(doc.doc_label);
     setEditNeedDate(doc.need_date || "");
+    setEditLogoUrl(doc.logo_url || "");
     setLookup({});
     try {
       const opts = await loadBrandOptions();
@@ -814,7 +836,7 @@ export default function SRROrderB2BInternalPage() {
   };
 
   // สร้างหน้าพิมพ์ฟอร์ม Monthly Usage Request → เปิด tab ใหม่ + เรียก print (Save as PDF)
-  const openPrintForm = (rows: MonthlyUsageForm[], brandName: string, needDateISO: string) => {
+  const openPrintForm = (rows: MonthlyUsageForm[], brandName: string, needDateISO: string, logoUrl?: string) => {
     const w = window.open("", "_blank");
     if (!w) {
       toast({ title: "เบราว์เซอร์บล็อก popup", description: "อนุญาต popup ของเว็บนี้แล้วบันทึกใหม่อีกครั้งเพื่อออกฟอร์ม", variant: "destructive" });
@@ -852,6 +874,8 @@ export default function SRROrderB2BInternalPage() {
   * { box-sizing: border-box; }
   body { font-family: "Segoe UI", "Leelawadee UI", "Phetsarath OT", Tahoma, sans-serif; color: #111; margin: 0; }
   .hd { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
+  .hd-left { display: flex; align-items: center; gap: 14px; }
+  .logo { max-height: 68px; max-width: 170px; object-fit: contain; }
   .title { font-size: 20px; font-weight: 700; }
   .meta { font-size: 12px; line-height: 1.7; }
   .meta b { display: inline-block; min-width: 92px; }
@@ -861,17 +885,22 @@ export default function SRROrderB2BInternalPage() {
   td.c { text-align: center; }
   td.pic { text-align: center; padding: 3px; }
   td.pic img { max-width: 90px; max-height: 70px; object-fit: contain; }
-  .sign { display: flex; justify-content: space-between; margin-top: 40px; gap: 20px; }
-  .sign .box { flex: 1; text-align: center; font-size: 12px; }
-  .sign .role { font-weight: 600; margin-bottom: 26px; }
-  .sign .line { border-top: 1px dotted #333; margin: 4px 12px; }
-  .sign .lbl { text-align: left; padding: 0 12px; margin-bottom: 18px; }
+  .sign { display: flex; justify-content: space-between; margin-top: 40px; gap: 18px; }
+  .sign .box { flex: 1; border: 1px solid #333; border-radius: 6px; padding: 12px 16px 14px; }
+  .sign .role { text-align: center; font-weight: 700; font-size: 13px; }
+  .sign .sp { height: 48px; }                 /* ช่องว่างสำหรับเซ็น */
+  .sign .ln { display: flex; align-items: flex-end; font-size: 12px; margin-top: 16px; }
+  .sign .ln .k { flex: 0 0 44px; }
+  .sign .ln .v { flex: 1; border-bottom: 1px dotted #333; height: 14px; }
   @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
 </style>
 </head>
 <body>
   <div class="hd">
-    <div class="title">Monthly Usage Request</div>
+    <div class="hd-left">
+      ${logoUrl ? `<img class="logo" src="${esc(logoUrl)}" />` : ""}
+      <div class="title">Monthly Usage Request</div>
+    </div>
     <div class="meta">
       <div><b>Brand</b>: ${esc(brandName)}</div>
       <div><b>DATE Request</b>: ${reqStr}</div>
@@ -893,9 +922,17 @@ export default function SRROrderB2BInternalPage() {
     <tbody>${rowsHtml}</tbody>
   </table>
   <div class="sign">
-    <div class="box"><div class="role">Requestor</div><div class="lbl">Date :</div><div class="line"></div><div class="lbl">Name :</div></div>
-    <div class="box"><div class="role">Head Of Brand</div><div class="lbl">Date :</div><div class="line"></div><div class="lbl">Name :</div></div>
-    <div class="box"><div class="role">General Manager</div><div class="lbl">Date :</div><div class="line"></div><div class="lbl">Name :</div></div>
+    ${["Requestor", "Head Of Brand", "General Manager"]
+      .map(
+        (role) => `<div class="box">
+      <div class="role">${role}</div>
+      <div class="sp"></div>
+      <div class="ln"><span class="k">Sign</span><span class="v"></span></div>
+      <div class="ln"><span class="k">Name</span><span class="v"></span></div>
+      <div class="ln"><span class="k">Date</span><span class="v"></span></div>
+    </div>`,
+      )
+      .join("")}
   </div>
   <script>
     (function () {
@@ -978,6 +1015,7 @@ export default function SRROrderB2BInternalPage() {
         branch: selectedBrand.branch,
         item_count: rowsToSave.length,
         need_date: needDateISO || null,
+        logo_url: editLogoUrl || null,
         updated_at: new Date().toISOString(),
       };
 
@@ -1011,7 +1049,7 @@ export default function SRROrderB2BInternalPage() {
 
       // ออกฟอร์ม Monthly Usage Request (หน้าพิมพ์ → Save as PDF) ด้วยข้อมูลที่เพิ่งบันทึก
       const formRows = rowsToSave.map((r, i) => ({ ...r, picture: pictureUrls[i] || "" }));
-      openPrintForm(formRows, selectedBrand.brand_name, needDateISO);
+      openPrintForm(formRows, selectedBrand.brand_name, needDateISO, editLogoUrl);
 
       toast({ title: "บันทึกสำเร็จ", description: `${label} (${rowsToSave.length} รายการ)` });
       setNeedDateOpen(false);
@@ -1092,6 +1130,28 @@ export default function SRROrderB2BInternalPage() {
                         <Button variant="outline" size="sm" className="h-7 gap-1" onClick={() => openMuView(d)}>
                           <Eye className="w-3.5 h-3.5" /> View
                         </Button>
+                        <label
+                          className={cn(
+                            "inline-flex items-center justify-center h-7 w-7 border rounded cursor-pointer hover:bg-muted relative overflow-hidden shrink-0",
+                            d.logo_url && "border-primary",
+                          )}
+                          title={d.logo_url ? "เปลี่ยนโลโก้ (โชว์มุมซ้ายบนของฟอร์ม)" : "เพิ่มโลโก้ (โชว์มุมซ้ายบนของฟอร์ม)"}
+                        >
+                          {logoUploadingId === d.id ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : d.logo_url ? (
+                            <img src={d.logo_url} alt="logo" className="w-full h-full object-cover" />
+                          ) : (
+                            <ImageIcon className="w-3.5 h-3.5 text-muted-foreground" />
+                          )}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            className="hidden"
+                            disabled={logoUploadingId === d.id}
+                            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleDocLogo(d, f); e.target.value = ""; }}
+                          />
+                        </label>
                         <Button variant="outline" size="icon" className="h-7 w-7" title="Export Excel" onClick={() => exportDoc(d)}>
                           <Download className="w-3.5 h-3.5" />
                         </Button>
