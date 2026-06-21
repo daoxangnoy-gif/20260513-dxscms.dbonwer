@@ -1800,8 +1800,8 @@ export default function SRROrderB2BInternalPage() {
               {docsLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
             </div>
             <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-muted-foreground [&>th]:sticky [&>th]:top-0 [&>th]:z-20 [&>th]:bg-background [&>th]:shadow-[0_1px_0_0_hsl(var(--border))]">
+              <thead className="sticky top-0 z-30">
+                <tr className="text-left text-muted-foreground [&_th]:bg-background [&_th]:shadow-[0_1px_0_0_hsl(var(--border))]">
                   <th className="px-3 py-1.5 font-medium">Doc</th>
                   <th className="px-3 py-1.5 font-medium">Brand</th>
                   <th className="px-3 py-1.5 font-medium w-24 text-right">Total SKU</th>
@@ -1915,8 +1915,8 @@ export default function SRROrderB2BInternalPage() {
               {orderDocsLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
             </div>
             <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-muted-foreground [&>th]:sticky [&>th]:top-0 [&>th]:z-20 [&>th]:bg-background [&>th]:shadow-[0_1px_0_0_hsl(var(--border))]">
+              <thead className="sticky top-0 z-30">
+                <tr className="text-left text-muted-foreground [&_th]:bg-background [&_th]:shadow-[0_1px_0_0_hsl(var(--border))]">
                   <th className="px-3 py-1.5 font-medium">Doc</th>
                   <th className="px-3 py-1.5 font-medium">Brand</th>
                   <th className="px-3 py-1.5 font-medium">Branch</th>
