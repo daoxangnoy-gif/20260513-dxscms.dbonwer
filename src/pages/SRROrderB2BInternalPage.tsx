@@ -1648,20 +1648,8 @@ export default function SRROrderB2BInternalPage() {
     if (!b) return;
     setOrderPreparing(true);
     try {
-      // 1) แบรนด์ + Branch นี้มี Order Doc แล้วหรือยัง → ถ้ามี เปิดแก้ไขเอกสารเดิม
-      const { data: existOrder } = await (supabase as any)
-        .from("order_doc")
-        .select("id, doc_no, doc_label, brand_name, branch, source_doc_id, item_count, created_at, updated_at")
-        .eq("brand_name", b.brand_name)
-        .eq("branch", branch)
-        .limit(1);
-      if (existOrder && existOrder.length) {
-        setOrderBrandPickOpen(false);
-        await openOrderView(existOrder[0], false);
-        return;
-      }
-
-      // 2) ต้องมี Monthly Usage Doc ของแบรนด์ก่อน (หาแบบ brand-level — Monthly เก็บ branch ว่าง)
+      // สร้าง Order ใหม่ได้เสมอ (ไม่จำกัดต่อ Brand+Branch) — ของเดิมยังอยู่ แก้จากปุ่ม View ในลิสต์
+      // ต้องมี Monthly Usage Doc ของแบรนด์ก่อน (หาแบบ brand-level — Monthly เก็บ branch ว่าง)
       const { data: muDoc } = await (supabase as any)
         .from("monthly_usage_doc")
         .select("id")
@@ -1781,21 +1769,7 @@ export default function SRROrderB2BInternalPage() {
     }
     setOrderSaving(true);
     try {
-      // ตอนสร้างใหม่ — กันแบรนด์ที่มี Order Doc แล้ว (1 Brand = 1 Order Doc)
-      if (!orderEditingDocId) {
-        const { data: existing } = await (supabase as any)
-          .from("order_doc")
-          .select("doc_label")
-          .eq("brand_name", orderBrand.brand_name)
-          .eq("branch", orderBrand.branch)
-          .limit(1);
-        if (existing && existing.length) {
-          toast({ title: "Brand นี้มี Order แล้ว", description: `"${orderBrand.brand_name}" มี ${existing[0].doc_label} อยู่แล้ว — 1 Brand ได้ 1 Order Doc`, variant: "destructive" });
-          setOrderSaving(false);
-          return;
-        }
-      }
-
+      // สร้าง Order ใหม่ได้ไม่จำกัดต่อ Brand+Branch (ไม่บล็อกของซ้ำ)
       let docNo = orderEditingDocNo;
       if (!orderEditingDocId) {
         const { data: maxd } = await (supabase as any)
@@ -1807,7 +1781,8 @@ export default function SRROrderB2BInternalPage() {
       }
       const pad = (n: number) => String(n).padStart(2, "0");
       const now = new Date();
-      const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`;
+      // ใส่วินาทีด้วย เพราะสร้าง Order ซ้ำแบรนด์เดิมได้ไม่จำกัด — ป้องกันชื่อ Doc ซ้ำกันในนาทีเดียว
+      const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
       const label = orderEditingDocId && orderEditingDocLabel
         ? orderEditingDocLabel
         : `${stamp} - ${orderBrand.brand_name} (Order)`.trim();
