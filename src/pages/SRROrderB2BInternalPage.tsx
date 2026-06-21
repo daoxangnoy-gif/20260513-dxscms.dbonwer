@@ -1486,7 +1486,8 @@ export default function SRROrderB2BInternalPage() {
       setOrderReadOnly(false);
       setOrderOpen(true);
       setOrderBrandPickOpen(false);
-      setActiveTab("order_edit");
+      setBrandSubTab("order_edit");
+      setActiveTab("brand");
     } catch (e: any) {
       toast({ title: "เตรียมข้อมูลไม่สำเร็จ", description: e.message, variant: "destructive" });
     } finally {
@@ -1498,7 +1499,8 @@ export default function SRROrderB2BInternalPage() {
   const openOrderView = async (doc: OrderDoc, readOnly = true) => {
     setOrderOpen(true);
     setOrderReadOnly(readOnly);
-    setActiveTab("order_edit");
+    setBrandSubTab("order_edit");
+    setActiveTab("brand");
     setOrderLoading(true);
     setOrderEditingDocId(doc.id);
     setOrderEditingDocNo(doc.doc_no);
@@ -1702,11 +1704,6 @@ export default function SRROrderB2BInternalPage() {
                 <Eye className="w-3.5 h-3.5" /> แสดงข้อมูล
               </TabsTrigger>
             )}
-            {orderOpen && (
-              <TabsTrigger value="order_edit" className="text-xs gap-1.5">
-                <ShoppingCart className="w-3.5 h-3.5" /> Order (แก้ไข)
-              </TabsTrigger>
-            )}
           </TabsList>
           <div className="flex items-center gap-2 pb-1">
             <button
@@ -1766,6 +1763,11 @@ export default function SRROrderB2BInternalPage() {
               <TabsTrigger value="order" className="text-xs gap-1.5">
                 <ShoppingCart className="w-3.5 h-3.5" /> Order
               </TabsTrigger>
+              {orderOpen && (
+                <TabsTrigger value="order_edit" className="text-xs gap-1.5">
+                  <ShoppingCart className="w-3.5 h-3.5" /> Order (แก้ไข)
+                </TabsTrigger>
+              )}
             </TabsList>
 
             <TabsContent value="monthly" className="mt-0 space-y-4">
@@ -1938,6 +1940,106 @@ export default function SRROrderB2BInternalPage() {
               </tbody>
             </table>
           </div>
+            </TabsContent>
+
+            {/* ============ Order editor (sub-tab ใต้ Brand control) ============ */}
+            <TabsContent value="order_edit" className="mt-0 space-y-3">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button variant="ghost" size="sm" className="h-8 gap-1" onClick={closeOrderEditor}>
+              <X className="w-4 h-4" /> ปิด
+            </Button>
+            <div className="text-sm font-semibold">
+              {orderEditingDocId ? `Order — ${orderEditingDocLabel || ""}` : `Order — ${orderBrand?.brand_name || ""}`}
+              {orderReadOnly && <span className="ml-2 text-[11px] font-normal text-muted-foreground">(โหมดดู)</span>}
+            </div>
+            <div className="ml-auto flex items-center gap-2">
+              {orderReadOnly ? (
+                <Button size="sm" className="h-8 gap-1.5" onClick={() => setOrderReadOnly(false)}>
+                  <Pencil className="w-4 h-4" /> แก้ไข
+                </Button>
+              ) : (
+                <Button size="sm" className="h-8 gap-1.5" onClick={saveOrderDoc} disabled={orderSaving || orderLoading}>
+                  {orderSaving && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Save Order
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {orderLoading ? (
+            <div className="flex items-center justify-center py-10">
+              <Loader2 className="w-6 h-6 animate-spin text-primary" />
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Brand / Branch</Label>
+                <div className="h-9 flex items-center px-3 border rounded-md bg-muted/40 text-sm">
+                  <span className="font-medium">{orderBrand?.brand_name || "—"}</span>
+                  {orderBrand?.branch && <span className="ml-1.5 text-muted-foreground">· {orderBrand.branch}</span>}
+                  <span className="ml-2 text-[11px] text-muted-foreground">(อ้างอิงรายการจาก Monthly Usage — แก้ได้แค่ Order Qty)</span>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto border rounded-md">
+                <table className="text-sm border-collapse" style={{ width: ORDER_TOTAL_W, tableLayout: "fixed" }}>
+                  <colgroup>
+                    {ORDER_COLS.map((c) => (
+                      <col key={c.key} style={{ width: c.w }} />
+                    ))}
+                  </colgroup>
+                  <thead>
+                    <tr className="bg-muted text-left">
+                      {ORDER_COLS.map((c) => (
+                        <th key={c.key} className="px-2 py-1.5 font-medium border-r last:border-r-0 select-none whitespace-nowrap">
+                          <span className="block truncate">{c.label}</span>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {orderRows.map((row, idx) => (
+                      <tr key={idx} className="border-t align-middle">
+                        <td className="px-2 py-1 text-center text-muted-foreground tabular-nums">{idx + 1}</td>
+                        <td className="px-2 py-1 text-xs truncate" title={row.barcode}>{row.barcode || "-"}</td>
+                        <td className="px-2 py-1 text-xs truncate" title={row.sku_code}>{row.sku_code || "-"}</td>
+                        <td className="px-2 py-1 text-xs truncate" title={row.barcode_unit}>{row.barcode_unit || "-"}</td>
+                        <td className="px-2 py-1 text-xs truncate" title={row.uom}>{row.uom || "-"}</td>
+                        <td className={`px-2 py-1 text-xs truncate ${row.product_name === "ไม่พบข้อมูล" ? "text-destructive" : ""}`} title={row.product_name}>{row.product_name || "-"}</td>
+                        <td className="px-2 py-1 text-xs text-right tabular-nums text-muted-foreground">{row.monthly_qty || "-"}</td>
+                        <td className="px-1 py-1">
+                          <div className="w-12 h-12 border rounded flex items-center justify-center bg-muted/30 overflow-hidden mx-auto">
+                            {row.picture
+                              ? <img src={row.picture} alt="picture" className="w-full h-full object-cover cursor-zoom-in" onClick={() => window.open(row.picture, "_blank")} />
+                              : <span className="text-[9px] text-muted-foreground">-</span>}
+                          </div>
+                        </td>
+                        <td className="px-2 py-1 text-xs truncate" title={row.remark}>{row.remark || "-"}</td>
+                        <td className="px-1 py-1">
+                          <Input
+                            type="number"
+                            value={row.order_qty}
+                            readOnly={orderReadOnly}
+                            onChange={(e) => updateOrderQty(idx, e.target.value)}
+                            className={`h-8 w-full ${orderReadOnly ? "bg-muted/50" : ""}`}
+                            placeholder="0"
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                    {orderRows.length === 0 && (
+                      <tr>
+                        <td colSpan={ORDER_COLS.length} className="px-2 py-6 text-center text-muted-foreground">
+                          ไม่มีรายการ
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-[11px] text-muted-foreground">บันทึกเฉพาะรายการที่ใส่ Order Qty มากกว่า 0</p>
+            </div>
+          )}
             </TabsContent>
           </Tabs>
         </TabsContent>
@@ -2399,105 +2501,6 @@ export default function SRROrderB2BInternalPage() {
           )}
         </TabsContent>
 
-        {/* ============ Order editor (in-app tab) ============ */}
-        <TabsContent value="order_edit" className="flex-1 overflow-auto mt-0 p-4 bg-background space-y-3">
-          <div className="flex items-center gap-2 flex-wrap">
-            <Button variant="ghost" size="sm" className="h-8 gap-1" onClick={closeOrderEditor}>
-              <X className="w-4 h-4" /> ปิด
-            </Button>
-            <div className="text-sm font-semibold">
-              {orderEditingDocId ? `Order — ${orderEditingDocLabel || ""}` : `Order — ${orderBrand?.brand_name || ""}`}
-              {orderReadOnly && <span className="ml-2 text-[11px] font-normal text-muted-foreground">(โหมดดู)</span>}
-            </div>
-            <div className="ml-auto flex items-center gap-2">
-              {orderReadOnly ? (
-                <Button size="sm" className="h-8 gap-1.5" onClick={() => setOrderReadOnly(false)}>
-                  <Pencil className="w-4 h-4" /> แก้ไข
-                </Button>
-              ) : (
-                <Button size="sm" className="h-8 gap-1.5" onClick={saveOrderDoc} disabled={orderSaving || orderLoading}>
-                  {orderSaving && <Loader2 className="w-4 h-4 animate-spin" />}
-                  Save Order
-                </Button>
-              )}
-            </div>
-          </div>
-
-          {orderLoading ? (
-            <div className="flex items-center justify-center py-10">
-              <Loader2 className="w-6 h-6 animate-spin text-primary" />
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <div className="space-y-1.5">
-                <Label className="text-xs">Brand / Branch</Label>
-                <div className="h-9 flex items-center px-3 border rounded-md bg-muted/40 text-sm">
-                  <span className="font-medium">{orderBrand?.brand_name || "—"}</span>
-                  {orderBrand?.branch && <span className="ml-1.5 text-muted-foreground">· {orderBrand.branch}</span>}
-                  <span className="ml-2 text-[11px] text-muted-foreground">(อ้างอิงรายการจาก Monthly Usage — แก้ได้แค่ Order Qty)</span>
-                </div>
-              </div>
-
-              <div className="overflow-x-auto border rounded-md">
-                <table className="text-sm border-collapse" style={{ width: ORDER_TOTAL_W, tableLayout: "fixed" }}>
-                  <colgroup>
-                    {ORDER_COLS.map((c) => (
-                      <col key={c.key} style={{ width: c.w }} />
-                    ))}
-                  </colgroup>
-                  <thead>
-                    <tr className="bg-muted text-left">
-                      {ORDER_COLS.map((c) => (
-                        <th key={c.key} className="px-2 py-1.5 font-medium border-r last:border-r-0 select-none whitespace-nowrap">
-                          <span className="block truncate">{c.label}</span>
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {orderRows.map((row, idx) => (
-                      <tr key={idx} className="border-t align-middle">
-                        <td className="px-2 py-1 text-center text-muted-foreground tabular-nums">{idx + 1}</td>
-                        <td className="px-2 py-1 text-xs truncate" title={row.barcode}>{row.barcode || "-"}</td>
-                        <td className="px-2 py-1 text-xs truncate" title={row.sku_code}>{row.sku_code || "-"}</td>
-                        <td className="px-2 py-1 text-xs truncate" title={row.barcode_unit}>{row.barcode_unit || "-"}</td>
-                        <td className="px-2 py-1 text-xs truncate" title={row.uom}>{row.uom || "-"}</td>
-                        <td className={`px-2 py-1 text-xs truncate ${row.product_name === "ไม่พบข้อมูล" ? "text-destructive" : ""}`} title={row.product_name}>{row.product_name || "-"}</td>
-                        <td className="px-2 py-1 text-xs text-right tabular-nums text-muted-foreground">{row.monthly_qty || "-"}</td>
-                        <td className="px-1 py-1">
-                          <div className="w-12 h-12 border rounded flex items-center justify-center bg-muted/30 overflow-hidden mx-auto">
-                            {row.picture
-                              ? <img src={row.picture} alt="picture" className="w-full h-full object-cover cursor-zoom-in" onClick={() => window.open(row.picture, "_blank")} />
-                              : <span className="text-[9px] text-muted-foreground">-</span>}
-                          </div>
-                        </td>
-                        <td className="px-2 py-1 text-xs truncate" title={row.remark}>{row.remark || "-"}</td>
-                        <td className="px-1 py-1">
-                          <Input
-                            type="number"
-                            value={row.order_qty}
-                            readOnly={orderReadOnly}
-                            onChange={(e) => updateOrderQty(idx, e.target.value)}
-                            className={`h-8 w-full ${orderReadOnly ? "bg-muted/50" : ""}`}
-                            placeholder="0"
-                          />
-                        </td>
-                      </tr>
-                    ))}
-                    {orderRows.length === 0 && (
-                      <tr>
-                        <td colSpan={ORDER_COLS.length} className="px-2 py-6 text-center text-muted-foreground">
-                          ไม่มีรายการ
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-              <p className="text-[11px] text-muted-foreground">บันทึกเฉพาะรายการที่ใส่ Order Qty มากกว่า 0</p>
-            </div>
-          )}
-        </TabsContent>
       </Tabs>
 
       {/* ถาม: Brand นี้มีเอกสารแล้ว เปิดแก้ไขเอกสารเดิมไหม */}
