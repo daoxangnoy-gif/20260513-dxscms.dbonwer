@@ -11,9 +11,16 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download, Pencil, ChevronsUpDown, Check, FileSpreadsheet, Columns3, Image as ImageIcon, Printer, FileSignature, ShoppingCart, Boxes, Route } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { remapRowsByTemplate } from "@/lib/exportTemplate";
 import * as XLSX from "xlsx";
 
 const MU_BUCKET = "monthly-usage-pictures";
+
+// ===== SO export (SCM Control → tab SO) — คอนเซ็ปต์/คอลัมน์ยืดจาก Order B2B (SO) =====
+const SO_COMPANY = "Lanexang Green Property Sole Co.,Ltd";
+const SO_WAREHOUSE = "DC Thongpong";
+const SO_PRICELIST = "WSPRICE 2 (Internal B2B)";
+const SO_DEFAULT_CUSTOMER = "40237 KR F&B Co.,LTD"; // Customer เริ่มต้นตอน export
 
 // คอลัมน์ Branch ใน dialog List Brand (1 แบรนด์มีได้หลาย Branch = หลายแถว)
 // Branch ใช้ตอน Order (เลือกจาก dropdown) — ในรายการเลือกแบรนด์มองเป็น distinct ตามชื่อ
@@ -164,6 +171,7 @@ type OrderRow = {
   uom: string;
   monthly_qty: string; // snapshot อ้างอิง
   order_qty: string;   // คีย์เอง
+  order_group: string; // มาจาก Monthly Usage (ใช้แยก SO)
   picture: string;
   remark: string;
 };
@@ -178,6 +186,31 @@ type OrderDoc = {
   item_count: number;
   created_at: string;
   updated_at: string | null; // เวลาแก้ไขล่าสุด
+};
+
+// ===== SO Doc (SCM Control → tab SO) — สร้างอัตโนมัติตอน Save Order, แยกตาม order_group =====
+type SODoc = {
+  id: string;
+  doc_no: number;
+  doc_label: string;
+  brand_name: string;
+  branch: string;
+  order_doc_id: string | null;
+  order_group: string | null;
+  customer: string | null;
+  item_count: number;
+  created_at: string;
+  updated_at: string | null;
+};
+
+type SOItem = {
+  sku_code: string;
+  barcode: string;
+  barcode_unit: string;
+  product_name: string;
+  uom: string;
+  order_qty: string;
+  order_group: string;
 };
 
 // คอลัมน์ตาราง Order (หน้าตาคล้าย Monthly usage; ทุกคอลัมน์ read-only ยกเว้น Order Qty)
@@ -369,6 +402,7 @@ export default function SRROrderB2BInternalPage() {
     loadDocs();
     loadOrderDocs();
     loadRouteplan();
+    loadSoDocs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -534,6 +568,20 @@ export default function SRROrderB2BInternalPage() {
   const [orderPickBrandName, setOrderPickBrandName] = useState<string | null>(null); // แบรนด์ที่ติกใน popup (distinct ตามชื่อ, ทีละ 1)
   const [orderPickBranch, setOrderPickBranch] = useState("");          // Branch ที่เลือกจาก dropdown (บังคับ)
   const [orderBrandSearch, setOrderBrandSearch] = useState("");        // ค้นหา Brand ใน popup
+
+  // ============================================================
+  // SCM Control → tab SO
+  // ============================================================
+  const [scmSubTab, setScmSubTab] = useState("so");
+  const [soDocs, setSoDocs] = useState<SODoc[]>([]);
+  const [soDocsLoading, setSoDocsLoading] = useState(false);
+  const [soSearch, setSoSearch] = useState("");
+  const [soItemHitIds, setSoItemHitIds] = useState<Set<string> | null>(null); // doc_id ที่ item match คำค้น (barcode/id/product)
+  const [soSelected, setSoSelected] = useState<Set<string>>(new Set());
+  const [soExporting, setSoExporting] = useState(false);
+  const [soViewDoc, setSoViewDoc] = useState<SODoc | null>(null);
+  const [soViewItems, setSoViewItems] = useState<SOItem[]>([]);
+  const [soViewLoading, setSoViewLoading] = useState(false);
 
   // ============================================================
   // Routeplan — แนบ PDF (เก็บไฟล์ล่าสุด) + เวลาอัปล่าสุด
@@ -1648,6 +1696,7 @@ export default function SRROrderB2BInternalPage() {
         uom: it.uom ?? "",
         monthly_qty: it.monthly_qty != null ? String(it.monthly_qty) : "",
         order_qty: "",
+        order_group: it.order_group ?? "",
         picture: it.picture ?? "",
         remark: it.remark ?? "",
       }));
@@ -1697,6 +1746,7 @@ export default function SRROrderB2BInternalPage() {
           uom: it.uom ?? "",
           monthly_qty: it.monthly_qty != null ? String(it.monthly_qty) : "",
           order_qty: it.order_qty != null ? String(it.order_qty) : "",
+          order_group: it.order_group ?? "",
           picture: it.picture ?? "",
           remark: it.remark ?? "",
         })),
@@ -1794,13 +1844,20 @@ export default function SRROrderB2BInternalPage() {
         uom: r.uom || null,
         monthly_qty: r.monthly_qty.trim() ? Number(r.monthly_qty) : null,
         order_qty: Number(r.order_qty),
+        order_group: r.order_group?.trim() || null,
         picture: r.picture || null,
         remark: r.remark.trim() || null,
       }));
       const { error: itErr } = await (supabase as any).from("order_item").insert(itemsPayload);
       if (itErr) throw itErr;
 
-      toast({ title: "บันทึก Order สำเร็จ", description: `${label} (${ordered.length} รายการ)` });
+      // แยกสร้าง SO Doc (SCM Control → tab SO) ตาม order_group — เฉพาะรายการที่ resolve เจอข้อมูล
+      const soCount = await generateSODocs(docId!, orderBrand, ordered);
+
+      toast({
+        title: "บันทึก Order สำเร็จ",
+        description: `${label} (${ordered.length} รายการ)${soCount > 0 ? ` · สร้าง ${soCount} SO ใน SCM Control` : ""}`,
+      });
       setOrderOpen(false);
       setBrandSubTab("order");
       setActiveTab("brand");
@@ -1858,6 +1915,263 @@ export default function SRROrderB2BInternalPage() {
       toast({ title: "Export ไม่สำเร็จ", description: e.message, variant: "destructive" });
     }
   };
+
+  // ============================================================
+  // SO functions (SCM Control → tab SO)
+  // ============================================================
+  const loadSoDocs = async () => {
+    setSoDocsLoading(true);
+    try {
+      const { data, error } = await (supabase as any)
+        .from("so_doc")
+        .select("id, doc_no, doc_label, brand_name, branch, order_doc_id, order_group, customer, item_count, created_at, updated_at")
+        .order("doc_no", { ascending: false });
+      if (error) throw error;
+      setSoDocs(data || []);
+    } catch {
+      // ตารางยังไม่ถูกสร้าง / RLS — ปล่อยว่าง ไม่รบกวน
+      setSoDocs([]);
+    } finally {
+      setSoDocsLoading(false);
+    }
+  };
+
+  // สร้าง SO Doc แยกตาม order_group จากรายการ Order ที่สั่ง (order_qty > 0 + resolve เจอข้อมูล)
+  // regenerate: ลบ SO เดิมของ order_doc นี้ก่อนทุกครั้ง → คืนจำนวน SO ที่สร้าง
+  const generateSODocs = async (orderDocId: string, brand: { id: string; brand_name: string; branch: string }, ordered: OrderRow[]): Promise<number> => {
+    try {
+      // เฉพาะมีข้อมูล = resolve เจอ product + มี barcode (พร้อมยิงเข้า Odoo)
+      const dataRows = ordered.filter(
+        (r) => (r.barcode_unit?.trim() || r.barcode?.trim()) && r.product_name?.trim() && r.product_name !== "ไม่พบข้อมูล" && Number(r.order_qty) > 0,
+      );
+
+      // ลบ SO เดิมของ order_doc นี้ (CASCADE ลบ so_item ด้วย)
+      await (supabase as any).from("so_doc").delete().eq("order_doc_id", orderDocId);
+      if (dataRows.length === 0) return 0;
+
+      // จัดกลุ่มตาม order_group (trim; ว่าง = "")
+      const groups = new Map<string, { display: string; rows: OrderRow[] }>();
+      for (const r of dataRows) {
+        const display = (r.order_group || "").trim();
+        const key = display.toLowerCase();
+        if (!groups.has(key)) groups.set(key, { display, rows: [] });
+        groups.get(key)!.rows.push(r);
+      }
+
+      // เลข doc_no เริ่มต้น
+      const { data: maxd } = await (supabase as any).from("so_doc").select("doc_no").order("doc_no", { ascending: false }).limit(1);
+      let nextDocNo = (maxd?.[0]?.doc_no || 0) + 1;
+
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const now = new Date();
+      const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`;
+
+      let created = 0;
+      for (const { display, rows } of groups.values()) {
+        const groupLabel = display || "ไม่ระบุกลุ่ม";
+        const label = `${stamp} - ${brand.brand_name} - ${groupLabel} (SO)`.trim();
+        const { data: ins, error } = await (supabase as any)
+          .from("so_doc")
+          .insert({
+            doc_no: nextDocNo,
+            doc_label: label,
+            brand_id: brand.id || null,
+            brand_name: brand.brand_name,
+            branch: brand.branch || "",
+            order_doc_id: orderDocId,
+            order_group: display,
+            customer: SO_DEFAULT_CUSTOMER,
+            item_count: rows.length,
+            updated_at: new Date().toISOString(),
+          })
+          .select("id")
+          .limit(1);
+        if (error) throw error;
+        const soDocId = ins?.[0]?.id;
+        nextDocNo++;
+
+        const itemsPayload = rows.map((r, i) => ({
+          doc_id: soDocId,
+          sort_order: i,
+          sku_code: r.sku_code || null,
+          barcode: r.barcode?.trim() || null,
+          barcode_unit: r.barcode_unit || null,
+          product_name: r.product_name || null,
+          uom: r.uom || null,
+          order_qty: Number(r.order_qty),
+          order_group: display || null,
+          picture: r.picture || null,
+          remark: r.remark?.trim() || null,
+        }));
+        const { error: itErr } = await (supabase as any).from("so_item").insert(itemsPayload);
+        if (itErr) throw itErr;
+        created++;
+      }
+      loadSoDocs();
+      return created;
+    } catch (e: any) {
+      toast({ title: "สร้าง SO ไม่สำเร็จ", description: e.message, variant: "destructive" });
+      return 0;
+    }
+  };
+
+  const deleteSoDoc = async (doc: SODoc) => {
+    if (!window.confirm(`ลบ SO "${doc.doc_label}" และรายการทั้งหมด?`)) return;
+    try {
+      const { error } = await (supabase as any).from("so_doc").delete().eq("id", doc.id);
+      if (error) throw error;
+      toast({ title: "ลบ SO แล้ว", description: doc.doc_label });
+      setSoSelected((p) => { const n = new Set(p); n.delete(doc.id); return n; });
+      loadSoDocs();
+    } catch (e: any) {
+      toast({ title: "ลบไม่สำเร็จ", description: e.message, variant: "destructive" });
+    }
+  };
+
+  const openSoView = async (doc: SODoc) => {
+    setSoViewDoc(doc);
+    setSoViewLoading(true);
+    setSoViewItems([]);
+    try {
+      const { data, error } = await (supabase as any)
+        .from("so_item")
+        .select("*")
+        .eq("doc_id", doc.id)
+        .order("sort_order", { ascending: true });
+      if (error) throw error;
+      setSoViewItems(
+        (data || []).map((it: any) => ({
+          sku_code: it.sku_code ?? "",
+          barcode: it.barcode ?? "",
+          barcode_unit: it.barcode_unit ?? "",
+          product_name: it.product_name ?? "",
+          uom: it.uom ?? "",
+          order_qty: it.order_qty != null ? String(it.order_qty) : "",
+          order_group: it.order_group ?? "",
+        })),
+      );
+    } catch (e: any) {
+      toast({ title: "เปิดเอกสารไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setSoViewLoading(false);
+    }
+  };
+
+  // สร้างแถว SO (รูปแบบ/คอลัมน์ยืดจาก Order B2B) — main row ที่ idx 0 ใส่ค่า header
+  const buildSoExportRows = (items: SOItem[], customer: string): Record<string, any>[] =>
+    items.map((r, idx) => ({
+      "Order Reference": "",
+      "Customer": idx === 0 ? customer : "",
+      "Pricelist": idx === 0 ? SO_PRICELIST : "",
+      "Order Lines/Barcode": r.barcode_unit || r.barcode,
+      "Order Lines/Product": r.barcode_unit || r.barcode,
+      "Product Name": r.product_name,
+      "UOM": r.uom,
+      "Order Lines/Quantity": Number(r.order_qty) || 0,
+      "Source Document": idx === 0 ? "" : "",
+      "Warehouse": idx === 0 ? SO_WAREHOUSE : "",
+      "Company": idx === 0 ? SO_COMPANY : "",
+    }));
+
+  const fetchSoItems = async (docId: string): Promise<SOItem[]> => {
+    const { data, error } = await (supabase as any)
+      .from("so_item")
+      .select("*")
+      .eq("doc_id", docId)
+      .order("sort_order", { ascending: true });
+    if (error) throw error;
+    return (data || []).map((it: any) => ({
+      sku_code: it.sku_code ?? "",
+      barcode: it.barcode ?? "",
+      barcode_unit: it.barcode_unit ?? "",
+      product_name: it.product_name ?? "",
+      uom: it.uom ?? "",
+      order_qty: it.order_qty != null ? String(it.order_qty) : "",
+      order_group: it.order_group ?? "",
+    }));
+  };
+
+  // export หลาย SO Doc พร้อมกัน (รวมเป็นไฟล์เดียว) — แต่ละ Doc = 1 SO group
+  const exportSoSelected = async () => {
+    const list = filteredSoDocs.filter((d) => soSelected.has(d.id));
+    if (list.length === 0) { toast({ title: "กรุณาเลือก SO ก่อน", variant: "destructive" }); return; }
+    setSoExporting(true);
+    try {
+      const all: Record<string, any>[] = [];
+      for (const d of list) {
+        const items = await fetchSoItems(d.id);
+        if (items.length === 0) continue;
+        const rows = buildSoExportRows(items, d.customer || SO_DEFAULT_CUSTOMER);
+        const mapped = await remapRowsByTemplate("srr_special_so", rows);
+        all.push(...mapped);
+      }
+      if (all.length === 0) { toast({ title: "ไม่มีรายการให้ export", variant: "destructive" }); return; }
+      const ws = XLSX.utils.json_to_sheet(all);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "SO");
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const now = new Date();
+      const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`;
+      XLSX.writeFile(wb, `${stamp}-SO-Combined.xlsx`);
+      toast({ title: "Export SO สำเร็จ", description: `${list.length} SO` });
+    } catch (e: any) {
+      toast({ title: "Export ไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setSoExporting(false);
+    }
+  };
+
+  const exportSoSingle = async (doc: SODoc) => {
+    try {
+      const items = await fetchSoItems(doc.id);
+      if (items.length === 0) { toast({ title: "เอกสารว่าง ไม่มีรายการให้ export", variant: "destructive" }); return; }
+      const rows = await remapRowsByTemplate("srr_special_so", buildSoExportRows(items, doc.customer || SO_DEFAULT_CUSTOMER));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "SO");
+      const safeName = doc.doc_label.replace(/[\\/:*?"<>|]/g, "_");
+      XLSX.writeFile(wb, `${safeName}.xlsx`);
+    } catch (e: any) {
+      toast({ title: "Export ไม่สำเร็จ", description: e.message, variant: "destructive" });
+    }
+  };
+
+  // ค้นหา item (barcode / id / product name) → เก็บ doc_id ที่ match (ค้น doc_label/brand ทำ client-side)
+  useEffect(() => {
+    const q = soSearch.trim();
+    if (!q) { setSoItemHitIds(null); return; }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const like = `%${q}%`;
+        const { data } = await (supabase as any)
+          .from("so_item")
+          .select("doc_id")
+          .or(`barcode.ilike.${like},barcode_unit.ilike.${like},sku_code.ilike.${like},product_name.ilike.${like}`)
+          .limit(5000);
+        if (cancelled) return;
+        setSoItemHitIds(new Set((data || []).map((r: any) => r.doc_id)));
+      } catch {
+        if (!cancelled) setSoItemHitIds(new Set());
+      }
+    }, 250);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [soSearch]);
+
+  const filteredSoDocs = (() => {
+    const q = soSearch.trim().toLowerCase();
+    if (!q) return soDocs;
+    return soDocs.filter(
+      (d) =>
+        d.doc_label?.toLowerCase().includes(q) ||
+        String(d.doc_no).includes(q) ||
+        d.brand_name?.toLowerCase().includes(q) ||
+        (d.order_group || "").toLowerCase().includes(q) ||
+        (soItemHitIds?.has(d.id) ?? false),
+    );
+  })();
+
+  const toggleSoSel = (id: string) => setSoSelected((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   // ensure selected brand option appears even if it's not in the live list (deleted brand)
   const mergedBrandOptions =
@@ -2816,11 +3130,126 @@ export default function SRROrderB2BInternalPage() {
           </Tabs>
         </TabsContent>
 
-        {/* ============ SCM Control (placeholder — รอเพิ่มเนื้อหา) ============ */}
-        <TabsContent value="scm_control" className="flex-1 overflow-auto mt-0 p-4 bg-background min-h-0 data-[state=active]:flex flex-col items-center justify-center text-center text-muted-foreground gap-2">
-          <Boxes className="w-10 h-10 opacity-40" />
-          <div className="text-sm font-medium">SCM Control</div>
-          <div className="text-xs">ยังไม่มีเนื้อหา — รอเพิ่มฟีเจอร์ภายหลัง</div>
+        {/* ============ SCM Control ============ */}
+        <TabsContent value="scm_control" className="flex-1 overflow-hidden mt-0 p-4 bg-background flex-col min-h-0 data-[state=active]:flex">
+          <Tabs value={scmSubTab} onValueChange={setScmSubTab} className="flex-1 flex flex-col overflow-hidden min-h-0 gap-4">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <TabsList className="h-8">
+                <TabsTrigger value="so" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+                  <FileSpreadsheet className="w-3.5 h-3.5" /> SO
+                </TabsTrigger>
+              </TabsList>
+            </div>
+
+            <TabsContent value="so" className="mt-0 flex-1 flex-col overflow-hidden min-h-0 data-[state=active]:flex gap-2">
+              {/* Toolbar: ค้นหา + Select All + Export */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="relative flex-1 min-w-[220px] max-w-md">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input
+                    value={soSearch}
+                    onChange={(e) => setSoSearch(e.target.value)}
+                    className="h-8 pl-8"
+                    placeholder="ค้นหา เลข Doc / Barcode / ID / Product name"
+                  />
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  {filteredSoDocs.length} / {soDocs.length} SO
+                  {soSelected.size > 0 && <> · เลือก {soSelected.size}</>}
+                </span>
+                <div className="ml-auto flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 gap-1.5 text-xs"
+                    onClick={() => setSoSelected(new Set(filteredSoDocs.map((d) => d.id)))}
+                    disabled={filteredSoDocs.length === 0}
+                  >
+                    <Check className="w-3.5 h-3.5" /> Select All
+                  </Button>
+                  {soSelected.size > 0 && (
+                    <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={() => setSoSelected(new Set())}>
+                      <X className="w-3.5 h-3.5" /> ล้าง
+                    </Button>
+                  )}
+                  <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={exportSoSelected} disabled={soSelected.size === 0 || soExporting}>
+                    {soExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                    Export SO ({soSelected.size})
+                  </Button>
+                </div>
+              </div>
+
+              <div className="border rounded-lg flex-1 flex flex-col overflow-hidden min-h-0">
+                <div className="px-3 py-2 border-b flex items-center gap-2 bg-muted/50">
+                  <FileSpreadsheet className="w-4 h-4 text-muted-foreground" />
+                  <span className="text-sm font-medium">เอกสาร SO</span>
+                  {soDocsLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
+                </div>
+                <div className="flex-1 overflow-auto min-h-0">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 z-30">
+                      <tr className="text-left text-muted-foreground [&_th]:bg-background [&_th]:shadow-[0_1px_0_0_hsl(var(--border))]">
+                        <th className="px-3 py-1.5 w-10">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4"
+                            checked={filteredSoDocs.length > 0 && filteredSoDocs.every((d) => soSelected.has(d.id))}
+                            onChange={(e) =>
+                              setSoSelected(e.target.checked ? new Set(filteredSoDocs.map((d) => d.id)) : new Set())
+                            }
+                          />
+                        </th>
+                        <th className="px-3 py-1.5 font-medium">Doc</th>
+                        <th className="px-3 py-1.5 font-medium">Brand</th>
+                        <th className="px-3 py-1.5 font-medium">Order group</th>
+                        <th className="px-3 py-1.5 font-medium">Customer</th>
+                        <th className="px-3 py-1.5 font-medium w-24 text-right">รายการ</th>
+                        <th className="px-3 py-1.5 font-medium w-36">แก้ไขล่าสุด</th>
+                        <th className="px-3 py-1.5 font-medium w-40" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredSoDocs.map((d) => (
+                        <tr key={d.id} className={cn("border-b last:border-0 hover:bg-muted/40", soSelected.has(d.id) && "bg-primary/5")}>
+                          <td className="px-3 py-1.5">
+                            <input type="checkbox" className="h-4 w-4" checked={soSelected.has(d.id)} onChange={() => toggleSoSel(d.id)} />
+                          </td>
+                          <td className="px-3 py-1.5 font-medium">{d.doc_label}</td>
+                          <td className="px-3 py-1.5">{d.brand_name}</td>
+                          <td className="px-3 py-1.5">{d.order_group?.trim() || <span className="text-muted-foreground">ไม่ระบุกลุ่ม</span>}</td>
+                          <td className="px-3 py-1.5 text-muted-foreground">{d.customer || SO_DEFAULT_CUSTOMER}</td>
+                          <td className="px-3 py-1.5 text-right tabular-nums">{d.item_count}</td>
+                          <td className="px-3 py-1.5 text-muted-foreground">{new Date(d.updated_at || d.created_at).toLocaleString("th-TH")}</td>
+                          <td className="px-3 py-1.5">
+                            <div className="flex items-center gap-1">
+                              <Button variant="outline" size="sm" className="h-7 gap-1" onClick={() => openSoView(d)}>
+                                <Eye className="w-3.5 h-3.5" /> View
+                              </Button>
+                              <Button variant="outline" size="icon" className="h-7 w-7" title="Export SO (Excel)" onClick={() => exportSoSingle(d)}>
+                                <Download className="w-3.5 h-3.5" />
+                              </Button>
+                              <Button variant="ghost" size="icon" className="h-7 w-7" title="ลบ SO" onClick={() => deleteSoDoc(d)}>
+                                <Trash2 className="w-3.5 h-3.5 text-destructive" />
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {filteredSoDocs.length === 0 && !soDocsLoading && (
+                        <tr>
+                          <td colSpan={8} className="px-3 py-6 text-center text-muted-foreground">
+                            {soDocs.length === 0
+                              ? "ยังไม่มี SO — Save Order ที่ Brand control แล้วระบบจะแยกสร้าง SO ตาม Order group ให้อัตโนมัติ"
+                              : "ไม่พบ SO ที่ค้นหา"}
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </TabsContent>
+          </Tabs>
         </TabsContent>
 
       </Tabs>
@@ -3024,6 +3453,63 @@ export default function SRROrderB2BInternalPage() {
               {orderPreparing && <Loader2 className="w-4 h-4 animate-spin mr-1.5" />}
               ใส่จำนวน
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ดูรายการใน SO Doc (read-only) */}
+      <Dialog open={!!soViewDoc} onOpenChange={(o) => { if (!o) { setSoViewDoc(null); setSoViewItems([]); } }}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>{soViewDoc?.doc_label || "SO"}</DialogTitle>
+          </DialogHeader>
+          {soViewLoading ? (
+            <div className="flex items-center justify-center py-10">
+              <Loader2 className="w-6 h-6 animate-spin text-primary" />
+            </div>
+          ) : (
+            <div className="max-h-[60vh] overflow-auto">
+              <div className="text-xs text-muted-foreground mb-2">
+                Brand: <b>{soViewDoc?.brand_name}</b> · Order group: <b>{soViewDoc?.order_group?.trim() || "ไม่ระบุกลุ่ม"}</b> · Customer: <b>{soViewDoc?.customer || SO_DEFAULT_CUSTOMER}</b>
+              </div>
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-muted">
+                  <tr className="text-left">
+                    <th className="px-2 py-1.5 w-10 font-medium">#</th>
+                    <th className="px-2 py-1.5 font-medium">Barcode</th>
+                    <th className="px-2 py-1.5 font-medium">ID (SKU)</th>
+                    <th className="px-2 py-1.5 font-medium">Product name</th>
+                    <th className="px-2 py-1.5 font-medium">UOM</th>
+                    <th className="px-2 py-1.5 font-medium text-right w-20">Order Qty</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {soViewItems.map((it, i) => (
+                    <tr key={i} className="border-b last:border-0">
+                      <td className="px-2 py-1 text-muted-foreground tabular-nums">{i + 1}</td>
+                      <td className="px-2 py-1">{it.barcode_unit || it.barcode || "-"}</td>
+                      <td className="px-2 py-1">{it.sku_code || "-"}</td>
+                      <td className="px-2 py-1">{it.product_name || "-"}</td>
+                      <td className="px-2 py-1">{it.uom || "-"}</td>
+                      <td className="px-2 py-1 text-right tabular-nums">{it.order_qty || "-"}</td>
+                    </tr>
+                  ))}
+                  {soViewItems.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="px-2 py-6 text-center text-muted-foreground">ไม่มีรายการ</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setSoViewDoc(null); setSoViewItems([]); }}>ปิด</Button>
+            {soViewDoc && (
+              <Button onClick={() => exportSoSingle(soViewDoc)} className="gap-1.5">
+                <Download className="w-4 h-4" /> Export SO
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
