@@ -9,7 +9,7 @@ import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, Command
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download, Pencil, ChevronsUpDown, Check, FileSpreadsheet, Columns3, Image as ImageIcon, Printer, FileSignature, ShoppingCart } from "lucide-react";
+import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download, Pencil, ChevronsUpDown, Check, FileSpreadsheet, Columns3, Image as ImageIcon, Printer, FileSignature, ShoppingCart, Boxes } from "lucide-react";
 import { cn } from "@/lib/utils";
 import * as XLSX from "xlsx";
 
@@ -1810,10 +1810,13 @@ export default function SRROrderB2BInternalPage() {
             <TabsTrigger value="brand" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
               <Tag className="w-3.5 h-3.5" /> Brand control
             </TabsTrigger>
+            <TabsTrigger value="scm_control" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+              <Boxes className="w-3.5 h-3.5" /> SCM Control
+            </TabsTrigger>
           </TabsList>
         </div>
 
-        <TabsContent value="brand" className="flex-1 overflow-hidden mt-0 p-4 bg-background flex flex-col min-h-0">
+        <TabsContent value="brand" className="flex-1 overflow-hidden mt-0 p-4 bg-background flex-col min-h-0 data-[state=active]:flex">
           <Tabs value={brandSubTab} onValueChange={setBrandSubTab} className="flex-1 flex flex-col overflow-hidden min-h-0 gap-4">
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <TabsList className="h-8">
@@ -2697,6 +2700,13 @@ export default function SRROrderB2BInternalPage() {
           )}
             </TabsContent>
           </Tabs>
+        </TabsContent>
+
+        {/* ============ SCM Control (placeholder — รอเพิ่มเนื้อหา) ============ */}
+        <TabsContent value="scm_control" className="flex-1 overflow-auto mt-0 p-4 bg-background min-h-0 data-[state=active]:flex flex-col items-center justify-center text-center text-muted-foreground gap-2">
+          <Boxes className="w-10 h-10 opacity-40" />
+          <div className="text-sm font-medium">SCM Control</div>
+          <div className="text-xs">ยังไม่มีเนื้อหา — รอเพิ่มฟีเจอร์ภายหลัง</div>
         </TabsContent>
 
       </Tabs>
