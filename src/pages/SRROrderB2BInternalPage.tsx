@@ -466,6 +466,7 @@ export default function SRROrderB2BInternalPage() {
   const [orderPreparing, setOrderPreparing] = useState(false);         // กำลังเตรียมข้อมูลหลังเลือก Brand
   const [orderPickBrandId, setOrderPickBrandId] = useState<string | null>(null); // แบรนด์ที่ติกใน popup (ทีละ 1)
   const [orderPickBranch, setOrderPickBranch] = useState("");          // Branch ที่พิมพ์ใน popup (บังคับกรอก)
+  const [orderBrandSearch, setOrderBrandSearch] = useState("");        // ค้นหา Brand ใน popup
 
   // ความกว้างคอลัมน์ (จำไว้ใน localStorage)
   const [colW, setColW] = useState<Record<string, number>>(() => {
@@ -1390,6 +1391,7 @@ export default function SRROrderB2BInternalPage() {
   const openOrderBrandPicker = async () => {
     setOrderPickBrandId(null);
     setOrderPickBranch("");
+    setOrderBrandSearch("");
     setOrderBrandPickOpen(true);
     setOrderBrandLoading(true);
     await loadBrandOptions();
@@ -2581,35 +2583,51 @@ export default function SRROrderB2BInternalPage() {
             </div>
           ) : (
             <div className="relative space-y-3">
-              <Command className="border rounded-md">
-                <CommandInput placeholder="ค้นหา Brand..." />
-                <CommandList>
-                  <CommandEmpty>{brandOptions.length === 0 ? "ยังไม่มี Brand — เพิ่มใน List Brand ก่อน" : "ไม่พบ Brand"}</CommandEmpty>
-                  <CommandGroup>
-                    {brandOptions.map((b) => {
-                      const checked = orderPickBrandId === b.id;
-                      return (
-                        <CommandItem
-                          key={b.id}
-                          value={b.brand_name}
+              {/* ค้นหา */}
+              <div className="relative">
+                <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input
+                  value={orderBrandSearch}
+                  onChange={(e) => setOrderBrandSearch(e.target.value)}
+                  className="h-9 pl-8"
+                  placeholder="ค้นหา Brand..."
+                  disabled={orderPreparing}
+                />
+              </div>
+
+              {/* รายการ Brand — ติกทีละ 1 (กล่อง scroll ความสูงคงที่) */}
+              <div className="border rounded-md h-[220px] overflow-y-auto p-1">
+                {(() => {
+                  const oq = orderBrandSearch.trim().toLowerCase();
+                  const list = brandOptions.filter((b) => !oq || b.brand_name.toLowerCase().includes(oq));
+                  if (brandOptions.length === 0)
+                    return <div className="py-8 text-center text-sm text-muted-foreground">ยังไม่มี Brand — เพิ่มใน List Brand ก่อน</div>;
+                  if (list.length === 0)
+                    return <div className="py-8 text-center text-sm text-muted-foreground">ไม่พบ Brand</div>;
+                  return list.map((b) => {
+                    const checked = orderPickBrandId === b.id;
+                    return (
+                      <label
+                        key={b.id}
+                        className={cn(
+                          "flex items-center gap-2 px-2 py-2 rounded cursor-pointer text-sm hover:bg-muted",
+                          checked && "bg-muted",
+                          orderPreparing && "pointer-events-none opacity-60",
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 shrink-0"
+                          checked={checked}
                           disabled={orderPreparing}
-                          onSelect={() => setOrderPickBrandId(checked ? null : b.id!)}
-                        >
-                          <span
-                            className={cn(
-                              "mr-2 flex h-4 w-4 items-center justify-center rounded border shrink-0",
-                              checked ? "bg-primary border-primary text-primary-foreground" : "border-muted-foreground/40",
-                            )}
-                          >
-                            {checked && <Check className="h-3 w-3" />}
-                          </span>
-                          {b.brand_name}
-                        </CommandItem>
-                      );
-                    })}
-                  </CommandGroup>
-                </CommandList>
-              </Command>
+                          onChange={() => setOrderPickBrandId(checked ? null : b.id!)}
+                        />
+                        {b.brand_name}
+                      </label>
+                    );
+                  });
+                })()}
+              </div>
 
               {/* Branch — Enable เมื่อติกแบรนด์แล้ว (บังคับกรอก) */}
               <div className="space-y-1.5">
@@ -2623,6 +2641,8 @@ export default function SRROrderB2BInternalPage() {
                 />
               </div>
 
+              <p className="text-[11px] text-muted-foreground">แบรนด์ต้องมีเอกสาร Monthly Usage ก่อน จึงจะ Order ได้</p>
+
               {orderPreparing && (
                 <div className="absolute inset-0 flex items-center justify-center bg-background/60">
                   <Loader2 className="w-6 h-6 animate-spin text-primary" />
@@ -2630,7 +2650,6 @@ export default function SRROrderB2BInternalPage() {
               )}
             </div>
           )}
-          <p className="text-[11px] text-muted-foreground">แบรนด์ต้องมีเอกสาร Monthly Usage ก่อน จึงจะ Order ได้</p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setOrderBrandPickOpen(false)} disabled={orderPreparing}>
               ยกเลิก
