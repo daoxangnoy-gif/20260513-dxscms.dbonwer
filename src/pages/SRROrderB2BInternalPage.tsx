@@ -49,6 +49,12 @@ type MonthlyUsageForm = {
   department: string;
   buying_status: string;
   vendor_origin: string;
+  // รายการทดแทน (replacement) — คีย์ Barcode ทดแทน → resolve ที่เหลือ; Picture อัปเอง
+  repl_barcode: string;
+  repl_sku_code: string;
+  repl_barcode_unit: string;
+  repl_product_name_en: string;
+  repl_picture: string;
 };
 
 type MUDoc = {
@@ -81,6 +87,11 @@ const EMPTY_MU: MonthlyUsageForm = {
   department: "",
   buying_status: "",
   vendor_origin: "",
+  repl_barcode: "",
+  repl_sku_code: "",
+  repl_barcode_unit: "",
+  repl_product_name_en: "",
+  repl_picture: "",
 };
 
 const fileToDataUrl = (file: File): Promise<string> =>
@@ -120,10 +131,16 @@ const MU_COLS = [
   { key: "dqty", label: "Daily qty (÷30)", def: 110, min: 70 },
   { key: "pic", label: "Picture", def: 150, min: 120 },
   { key: "remark", label: "Remark", def: 200, min: 100 },
+  // รายการทดแทน (replacement) — ขวาสุดข้าง Remark
+  { key: "repl_barcode", label: "Barcode ทดแทน (คีย์เอง)", def: 160, min: 100 },
+  { key: "repl_sku", label: "ID ทดแทน", def: 120, min: 80 },
+  { key: "repl_bunit", label: "Barcode Unit ทดแทน", def: 150, min: 90 },
+  { key: "repl_pname_en", label: "Product name EN ทดแทน", def: 240, min: 120 },
+  { key: "repl_pic", label: "Picture ทดแทน", def: 150, min: 120 },
   { key: "act", label: "", def: 74, min: 64 },
 ] as const;
 const MU_COL_KEY = "mu_col_widths_v1";
-const MU_VIS_KEY = "mu_col_visible_v5";
+const MU_VIS_KEY = "mu_col_visible_v6";
 // คอลัมน์ที่ติกซ่อน/แสดงได้ (ยกเว้น # และ action)
 const MU_TOGGLE_COLS = MU_COLS.filter((c) => c.key !== "idx" && c.key !== "act");
 // คอลัมน์อ้างอิงที่ default ซ่อนไว้ (อยากดูค่อยติกเอง) — รวม Product name (LA) + Daily qty
@@ -658,8 +675,11 @@ export default function SRROrderB2BInternalPage() {
         .eq("doc_id", doc.id)
         .order("sort_order", { ascending: true });
       if (error) throw error;
-      // เติมคอลัมน์อ้างอิงจาก data_master (Division/Department/Buying Status/Vendor Origin) ตาม sku_code
-      const skus = [...new Set((data || []).map((it: any) => it.sku_code).filter(Boolean))] as string[];
+      // เติมคอลัมน์อ้างอิงจาก data_master (Division/Department/Buying Status/Vendor Origin + repl EN) ตาม sku_code
+      const skus = [...new Set([
+        ...(data || []).map((it: any) => it.sku_code),
+        ...(data || []).map((it: any) => it.repl_sku_code),
+      ].filter(Boolean))] as string[];
       const dmMap: Record<string, any> = {};
       if (skus.length) {
         const { data: dm } = await (supabase as any)
@@ -686,6 +706,11 @@ export default function SRROrderB2BInternalPage() {
           department: d.department ?? "",
           buying_status: d.buying_status ?? "",
           vendor_origin: vendorOrigin,
+          repl_barcode: it.repl_barcode ?? "",
+          repl_sku_code: it.repl_sku_code ?? "",
+          repl_barcode_unit: it.repl_barcode_unit ?? "",
+          repl_product_name_en: (dmMap[it.repl_sku_code]?.product_name_en) ?? "",
+          repl_picture: it.repl_picture ?? "",
         };
       });
       setMuRows(sortRowsAZ(loadedRows));
@@ -787,6 +812,33 @@ export default function SRROrderB2BInternalPage() {
     }
   };
 
+  // resolve Barcode ทดแทน → เติม ID/Barcode Unit/Product name EN ของรายการทดแทน
+  const handleReplBarcodeLookup = async (idx: number) => {
+    const code = muRows[idx]?.repl_barcode || "";
+    if (!code.trim()) {
+      // ล้างช่อง barcode ทดแทน → ล้างข้อมูลที่ resolve มา (คงรูปไว้)
+      setMuRows((prev) => prev.map((r, i) => (i === idx ? { ...r, repl_sku_code: "", repl_barcode_unit: "", repl_product_name_en: "" } : r)));
+      return;
+    }
+    try {
+      const res = await resolveBarcode(code);
+      setMuRows((prev) =>
+        prev.map((r, i) =>
+          i === idx
+            ? {
+                ...r,
+                repl_sku_code: res.found ? res.sku_code : "",
+                repl_barcode_unit: res.found ? res.barcode_unit : "",
+                repl_product_name_en: res.found ? res.product_name_en : "ไม่พบข้อมูลในระบบ",
+              }
+            : r,
+        ),
+      );
+    } catch (e: any) {
+      toast({ title: "ค้นหารายการทดแทนไม่สำเร็จ", description: e.message, variant: "destructive" });
+    }
+  };
+
   const updateMuField = (idx: number, field: keyof MonthlyUsageForm, value: string) =>
     setMuRows((prev) => prev.map((r, i) => (i === idx ? { ...r, [field]: value } : r)));
 
@@ -804,8 +856,8 @@ export default function SRROrderB2BInternalPage() {
   // ดาวน์โหลด template สำหรับนำเข้า Monthly usage
   const downloadMuTemplate = () => {
     const ws = XLSX.utils.json_to_sheet([
-      { Barcode: "8857000000001", "จำนวน/เดือน": 10, หมายเหตุ: "" },
-      { Barcode: "8857000000002", "จำนวน/เดือน": 5, หมายเหตุ: "" },
+      { Barcode: "8857000000001", "จำนวน/เดือน": 10, หมายเหตุ: "", "Barcode ทดแทน": "" },
+      { Barcode: "8857000000002", "จำนวน/เดือน": 5, หมายเหตุ: "", "Barcode ทดแทน": "8857000000099" },
     ]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Template");
@@ -833,7 +885,9 @@ export default function SRROrderB2BInternalPage() {
       const raw: any[][] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
       if (raw.length < 2) { toast({ title: "ไฟล์ว่าง", variant: "destructive" }); return; }
       const headers = (raw[0] as string[]).map((h) => String(h ?? "").toLowerCase().trim());
-      const bIdx = headers.findIndex((h) => h.includes("barcode") || h.includes("sku") || h.includes("code"));
+      // คอลัมน์ Barcode ทดแทน (replacement) — ตรวจก่อน เพื่อไม่ให้ชนกับ Barcode หลัก
+      const replIdx = headers.findIndex((h) => h.includes("ทดแทน") || h.includes("replace") || h.includes("repl") || h.includes("substitut"));
+      const bIdx = headers.findIndex((h, i) => i !== replIdx && (h.includes("barcode") || h.includes("sku") || h.includes("code")));
       const qIdx = headers.findIndex((h) => h.includes("qty") || h.includes("quantity") || h.includes("จำนวน"));
       const rIdx = headers.findIndex((h) => h.includes("remark") || h.includes("หมายเหตุ") || h.includes("note"));
       if (bIdx < 0) { toast({ title: "ไม่พบคอลัมน์ Barcode", variant: "destructive" }); return; }
@@ -845,6 +899,9 @@ export default function SRROrderB2BInternalPage() {
           const qty = qIdx >= 0 ? String(r[qIdx] ?? "").trim() : "";
           const remark = rIdx >= 0 ? String(r[rIdx] ?? "").trim() : "";
           const res = await resolveBarcode(code);
+          // รายการทดแทน (ถ้ามีคอลัมน์)
+          const replCode = replIdx >= 0 ? String(r[replIdx] ?? "").trim() : "";
+          const replRes = replCode ? await resolveBarcode(replCode) : ({ found: false } as any);
           return {
             barcode: code,
             sku_code: res.found ? res.sku_code : "",
@@ -860,6 +917,11 @@ export default function SRROrderB2BInternalPage() {
             department: res.found ? res.department : "",
             buying_status: res.found ? res.buying_status : "",
             vendor_origin: res.found ? res.vendor_origin : "",
+            repl_barcode: replCode,
+            repl_sku_code: replRes.found ? replRes.sku_code : "",
+            repl_barcode_unit: replRes.found ? replRes.barcode_unit : "",
+            repl_product_name_en: replCode ? (replRes.found ? replRes.product_name_en : "ไม่พบข้อมูลในระบบ") : "",
+            repl_picture: "",
           };
         }),
       );
@@ -878,7 +940,7 @@ export default function SRROrderB2BInternalPage() {
         const exIdx = k ? byKey.get(k) : undefined;
         if (exIdx !== undefined) {
           // อัปเดตแถวเดิม — เก็บรูปเดิมไว้ถ้าไฟล์ import ไม่มีรูป
-          result[exIdx] = { ...result[exIdx], ...row, picture: result[exIdx].picture || row.picture };
+          result[exIdx] = { ...result[exIdx], ...row, picture: result[exIdx].picture || row.picture, repl_picture: result[exIdx].repl_picture || row.repl_picture };
           updated++;
         } else {
           result.push(row);
@@ -896,12 +958,12 @@ export default function SRROrderB2BInternalPage() {
     }
   };
 
-  const handleRowFile = async (idx: number, e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleRowFile = async (idx: number, e: React.ChangeEvent<HTMLInputElement>, field: "picture" | "repl_picture" = "picture") => {
     const f = e.target.files?.[0];
     if (f) {
       try {
         const url = await fileToDataUrl(f);
-        updateMuField(idx, "picture", url);
+        updateMuField(idx, field, url);
       } catch {
         toast({ title: "อ่านรูปไม่สำเร็จ", variant: "destructive" });
       }
@@ -909,7 +971,7 @@ export default function SRROrderB2BInternalPage() {
     e.target.value = "";
   };
 
-  const handleRowPaste = async (idx: number, e: React.ClipboardEvent) => {
+  const handleRowPaste = async (idx: number, e: React.ClipboardEvent, field: "picture" | "repl_picture" = "picture") => {
     const items = e.clipboardData?.items;
     if (!items) return;
     for (const it of items) {
@@ -919,7 +981,7 @@ export default function SRROrderB2BInternalPage() {
           e.preventDefault();
           try {
             const url = await fileToDataUrl(f);
-            updateMuField(idx, "picture", url);
+            updateMuField(idx, field, url);
           } catch {
             toast({ title: "วางรูปไม่สำเร็จ", variant: "destructive" });
           }
@@ -1333,6 +1395,14 @@ export default function SRROrderB2BInternalPage() {
           return r.picture;
         }),
       );
+      // อัปรูปรายการทดแทนด้วย
+      const replPictureUrls = await Promise.all(
+        rowsToSave.map(async (r) => {
+          if (!r.repl_picture) return null;
+          if (r.repl_picture.startsWith("data:")) return await uploadPicture(r.repl_picture);
+          return r.repl_picture;
+        }),
+      );
 
       let docNo = editingDocNo;
       if (!editingDocId) {
@@ -1386,6 +1456,10 @@ export default function SRROrderB2BInternalPage() {
         daily_qty: r.monthly_qty.trim() ? Number(r.monthly_qty) / 30 : null,
         picture: pictureUrls[i],
         remark: r.remark.trim() || null,
+        repl_barcode: r.repl_barcode.trim() || null,
+        repl_sku_code: r.repl_sku_code || null,
+        repl_barcode_unit: r.repl_barcode_unit || null,
+        repl_picture: replPictureUrls[i],
       }));
       const { error: itErr } = await (supabase as any).from("monthly_usage_item").insert(itemsPayload);
       if (itErr) throw itErr;
@@ -2507,6 +2581,67 @@ export default function SRROrderB2BInternalPage() {
                               className={`h-8 w-full ${muReadOnly ? "bg-muted/50" : ""}`}
                               placeholder="หมายเหตุ"
                             />
+                          </td>}
+                          {/* ===== รายการทดแทน (replacement) ===== */}
+                          {isColShown("repl_barcode") && <td className="px-1 py-1">
+                            <Input
+                              value={row.repl_barcode}
+                              readOnly={muReadOnly}
+                              onChange={(e) => updateMuField(idx, "repl_barcode", e.target.value)}
+                              onBlur={() => handleReplBarcodeLookup(idx)}
+                              className={`h-8 w-full ${muReadOnly ? "bg-muted/50" : ""}`}
+                              placeholder="คีย์ barcode ทดแทน"
+                            />
+                          </td>}
+                          {isColShown("repl_sku") && <td className="px-1 py-1">
+                            <Input value={row.repl_sku_code} readOnly className="h-8 w-full bg-muted/50" placeholder="auto" />
+                          </td>}
+                          {isColShown("repl_bunit") && <td className="px-1 py-1">
+                            <Input value={row.repl_barcode_unit} readOnly className="h-8 w-full bg-muted/50" placeholder="auto" />
+                          </td>}
+                          {isColShown("repl_pname_en") && (() => {
+                            const nf = row.repl_product_name_en === "ไม่พบข้อมูลในระบบ";
+                            const txt = row.repl_product_name_en || "-";
+                            return <td className={`px-2 py-1 text-xs truncate ${nf ? "text-destructive" : ""}`} title={txt}>{txt}</td>;
+                          })()}
+                          {isColShown("repl_pic") && <td className="px-1 py-1">
+                            {muReadOnly ? (
+                              <div className="w-14 h-14 border rounded flex items-center justify-center bg-muted/30 overflow-hidden">
+                                {row.repl_picture
+                                  ? <img src={row.repl_picture} alt="repl" className="w-full h-full object-cover cursor-zoom-in" onClick={() => window.open(row.repl_picture, "_blank")} />
+                                  : <span className="text-[9px] text-muted-foreground">-</span>}
+                              </div>
+                            ) : (
+                            <div className="flex items-center gap-1">
+                              <div
+                                tabIndex={0}
+                                onPaste={(e) => handleRowPaste(idx, e, "repl_picture")}
+                                className="relative w-14 h-14 border rounded flex items-center justify-center bg-muted/30 overflow-hidden outline-none focus:ring-2 focus:ring-primary shrink-0"
+                                title="คลิกแล้ว Ctrl+V เพื่อวางรูป"
+                              >
+                                {row.repl_picture ? (
+                                  <>
+                                    <img src={row.repl_picture} alt="repl" className="w-full h-full object-cover cursor-zoom-in" onClick={() => window.open(row.repl_picture, "_blank")} />
+                                    <button type="button" onClick={() => updateMuField(idx, "repl_picture", "")} className="absolute -top-1 -right-1 bg-background rounded-full p-0.5 border hover:bg-muted" title="ลบรูป">
+                                      <X className="w-3 h-3 text-destructive" />
+                                    </button>
+                                  </>
+                                ) : (
+                                  <span className="text-[9px] text-muted-foreground text-center leading-tight px-0.5">Ctrl+V</span>
+                                )}
+                              </div>
+                              <div className="flex flex-col gap-0.5">
+                                <label className="inline-flex items-center justify-center h-6 w-6 border rounded cursor-pointer hover:bg-muted" title="นำเข้ารูป">
+                                  <Upload className="w-3.5 h-3.5" />
+                                  <input type="file" accept="image/*" className="hidden" onChange={(e) => handleRowFile(idx, e, "repl_picture")} />
+                                </label>
+                                <label className="inline-flex items-center justify-center h-6 w-6 border rounded cursor-pointer hover:bg-muted" title="ถ่ายรูป">
+                                  <Camera className="w-3.5 h-3.5" />
+                                  <input type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => handleRowFile(idx, e, "repl_picture")} />
+                                </label>
+                              </div>
+                            </div>
+                            )}
                           </td>}
                           <td className="px-1 py-1">
                             {!muReadOnly && (
