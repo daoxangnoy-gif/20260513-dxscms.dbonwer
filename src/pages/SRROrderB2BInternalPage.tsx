@@ -972,14 +972,16 @@ export default function SRROrderB2BInternalPage() {
   .meta b { display: inline-block; min-width: 92px; }
   table { width: 100%; border-collapse: collapse; border: 1px solid #333; table-layout: fixed; }   /* fixed = ตารางเต็มความกว้างพอดี เส้นขอบขวา/ล่างไม่หลุด */
   thead { display: table-header-group; }   /* ทำซ้ำหัวตารางทุกหน้าเมื่อเอกสารเกิน 1 หน้า */
+  tfoot { display: table-footer-group; }   /* กล่องเซ็น = footer ทำซ้ำท้ายทุกหน้า + อยู่ล่างเสมอ */
   tr { page-break-inside: avoid; }
   th, td { border: 1px solid #333; padding: 5px 7px; font-size: 12px; vertical-align: middle; word-break: break-word; overflow-wrap: anywhere; }
   th { background: #f0f0f0; text-align: center; }
   td.c { text-align: center; }
   td.pic { text-align: center; padding: 3px; }
   td.pic img { max-width: 90px; max-height: 70px; object-fit: contain; }
-  .sign { display: flex; justify-content: space-between; margin-top: 40px; gap: 18px; }
-  .sign .box { flex: 1; border: 1px solid #333; border-radius: 6px; padding: 12px 16px 14px; }
+  tfoot td.signcell { border: 0; padding: 14px 0 2px; }   /* ช่องกล่องเซ็น ไม่เอาเส้นตาราง */
+  .sign { display: flex; justify-content: space-between; gap: 18px; page-break-inside: avoid; }   /* ทั้งแถวกล่องเซ็นไม่ตัดครึ่งข้ามหน้า */
+  .sign .box { flex: 1; border: 1px solid #333; border-radius: 6px; padding: 12px 16px 14px; page-break-inside: avoid; }
   .sign .role { text-align: center; font-weight: 700; font-size: 13px; }
   .sign .sp { height: 80px; }                 /* ช่องว่างสำหรับเซ็น */
   .sign .ln { display: flex; align-items: flex-end; font-size: 12px; margin-top: 16px; }
@@ -1011,20 +1013,26 @@ export default function SRROrderB2BInternalPage() {
       </tr>
     </thead>
     <tbody>${rowsHtml}</tbody>
+    <tfoot>
+      <tr>
+        <td class="signcell" colspan="7">
+          <div class="sign">
+            ${["Requestor", "Head Of Brand", "General Manager"]
+              .map(
+                (role) => `<div class="box">
+              <div class="role">${role}</div>
+              <div class="sp"></div>
+              <div class="ln"><span class="k">Signature</span><span class="v"></span></div>
+              <div class="ln"><span class="k">Name</span><span class="v"></span></div>
+              <div class="ln"><span class="k">Date</span><span class="v"></span></div>
+            </div>`,
+              )
+              .join("")}
+          </div>
+        </td>
+      </tr>
+    </tfoot>
   </table>
-  <div class="sign">
-    ${["Requestor", "Head Of Brand", "General Manager"]
-      .map(
-        (role) => `<div class="box">
-      <div class="role">${role}</div>
-      <div class="sp"></div>
-      <div class="ln"><span class="k">Signature</span><span class="v"></span></div>
-      <div class="ln"><span class="k">Name</span><span class="v"></span></div>
-      <div class="ln"><span class="k">Date</span><span class="v"></span></div>
-    </div>`,
-      )
-      .join("")}
-  </div>
 </body>
 </html>`;
 
