@@ -155,6 +155,7 @@ type OrderDoc = {
   source_doc_id: string | null;
   item_count: number;
   created_at: string;
+  updated_at: string | null; // เวลาแก้ไขล่าสุด
 };
 
 // คอลัมน์ตาราง Order (หน้าตาคล้าย Monthly usage; ทุกคอลัมน์ read-only ยกเว้น Order Qty)
@@ -1414,7 +1415,7 @@ export default function SRROrderB2BInternalPage() {
     try {
       const { data, error } = await (supabase as any)
         .from("order_doc")
-        .select("id, doc_no, doc_label, brand_name, branch, source_doc_id, item_count, created_at")
+        .select("id, doc_no, doc_label, brand_name, branch, source_doc_id, item_count, created_at, updated_at")
         .order("doc_no", { ascending: false });
       if (error) throw error;
       setOrderDocs(data || []);
@@ -1457,7 +1458,7 @@ export default function SRROrderB2BInternalPage() {
       // 1) แบรนด์ + Branch นี้มี Order Doc แล้วหรือยัง → ถ้ามี เปิดแก้ไขเอกสารเดิม
       const { data: existOrder } = await (supabase as any)
         .from("order_doc")
-        .select("id, doc_no, doc_label, brand_name, branch, source_doc_id, item_count, created_at")
+        .select("id, doc_no, doc_label, brand_name, branch, source_doc_id, item_count, created_at, updated_at")
         .eq("brand_name", b.brand_name)
         .eq("branch", branch)
         .limit(1);
@@ -1941,7 +1942,7 @@ export default function SRROrderB2BInternalPage() {
                   <th className="px-3 py-1.5 font-medium">Brand</th>
                   <th className="px-3 py-1.5 font-medium">Branch</th>
                   <th className="px-3 py-1.5 font-medium w-24 text-right">รายการ</th>
-                  <th className="px-3 py-1.5 font-medium w-36">วันที่</th>
+                  <th className="px-3 py-1.5 font-medium w-36">แก้ไขล่าสุด</th>
                   <th className="px-3 py-1.5 font-medium w-48" />
                 </tr>
               </thead>
@@ -1952,7 +1953,7 @@ export default function SRROrderB2BInternalPage() {
                     <td className="px-3 py-1.5">{d.brand_name}</td>
                     <td className="px-3 py-1.5">{d.branch || "-"}</td>
                     <td className="px-3 py-1.5 text-right tabular-nums">{d.item_count}</td>
-                    <td className="px-3 py-1.5 text-muted-foreground">{new Date(d.created_at).toLocaleString("th-TH")}</td>
+                    <td className="px-3 py-1.5 text-muted-foreground">{new Date(d.updated_at || d.created_at).toLocaleString("th-TH")}</td>
                     <td className="px-3 py-1.5">
                       <div className="flex items-center gap-1">
                         <Button variant="outline" size="sm" className="h-7 gap-1" onClick={() => openOrderView(d)}>
