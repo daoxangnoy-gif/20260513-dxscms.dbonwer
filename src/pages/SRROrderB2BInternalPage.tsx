@@ -614,14 +614,16 @@ export default function SRROrderB2BInternalPage() {
     setEditLogoUrl("");
     setMuReadOnly(false);
     setMuOpen(true);
-    setActiveTab("view");
+    setBrandSubTab("view");
+    setActiveTab("brand");
     await loadBrandOptions();
   };
 
   const openMuView = async (doc: MUDoc, readOnly = true) => {
     setMuOpen(true);
     setMuReadOnly(readOnly);
-    setActiveTab("view");
+    setBrandSubTab("view");
+    setActiveTab("brand");
     setMuLoading(true);
     setEditingDocId(doc.id);
     setEditingDocNo(doc.doc_no);
@@ -1377,6 +1379,7 @@ export default function SRROrderB2BInternalPage() {
       toast({ title: "บันทึกสำเร็จ", description: `${label} (${rowsToSave.length} รายการ)` });
       setNeedDateOpen(false);
       setMuOpen(false);
+      setBrandSubTab("monthly");
       setActiveTab("brand");
       loadDocs();
     } catch (e: any) {
@@ -1707,11 +1710,6 @@ export default function SRROrderB2BInternalPage() {
             <TabsTrigger value="brand" className="text-xs gap-1.5">
               <Tag className="w-3.5 h-3.5" /> Brand control
             </TabsTrigger>
-            {muOpen && (
-              <TabsTrigger value="view" className="text-xs gap-1.5">
-                <Eye className="w-3.5 h-3.5" /> แสดงข้อมูล
-              </TabsTrigger>
-            )}
           </TabsList>
         </div>
 
@@ -1728,6 +1726,11 @@ export default function SRROrderB2BInternalPage() {
                 {orderOpen && (
                   <TabsTrigger value="order_edit" className="text-xs gap-1.5">
                     <ShoppingCart className="w-3.5 h-3.5" /> Order (แก้ไข)
+                  </TabsTrigger>
+                )}
+                {muOpen && (
+                  <TabsTrigger value="view" className="text-xs gap-1.5">
+                    <Eye className="w-3.5 h-3.5" /> แสดงข้อมูล
                   </TabsTrigger>
                 )}
               </TabsList>
@@ -2052,8 +2055,6 @@ export default function SRROrderB2BInternalPage() {
             </div>
           )}
             </TabsContent>
-          </Tabs>
-        </TabsContent>
 
       {/* ============ List Brand dialog ============ */}
       <Dialog open={open} onOpenChange={setOpen}>
@@ -2163,11 +2164,11 @@ export default function SRROrderB2BInternalPage() {
         </DialogContent>
       </Dialog>
 
-        {/* ============ แสดงข้อมูล / แก้ไข (in-app tab) ============ */}
-        <TabsContent value="view" className="flex-1 overflow-auto mt-0 p-4 bg-background space-y-3">
+            {/* ============ แสดงข้อมูล / แก้ไข (sub-tab ใต้ Brand control) ============ */}
+            <TabsContent value="view" className="mt-0 space-y-3">
           {/* header toolbar */}
           <div className="flex items-center gap-2 flex-wrap">
-            <Button variant="ghost" size="sm" className="h-8 gap-1" onClick={() => { setMuOpen(false); setActiveTab("brand"); }}>
+            <Button variant="ghost" size="sm" className="h-8 gap-1" onClick={() => { setMuOpen(false); setBrandSubTab("monthly"); setActiveTab("brand"); }}>
               <X className="w-4 h-4" /> ปิด
             </Button>
             <div className="text-sm font-semibold">
@@ -2510,6 +2511,8 @@ export default function SRROrderB2BInternalPage() {
               )}
             </div>
           )}
+            </TabsContent>
+          </Tabs>
         </TabsContent>
 
       </Tabs>
