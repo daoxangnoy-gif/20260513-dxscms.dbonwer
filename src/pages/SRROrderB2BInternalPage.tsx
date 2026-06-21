@@ -1807,7 +1807,7 @@ export default function SRROrderB2BInternalPage() {
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
         <div className="border-b px-4 pt-3 flex items-end justify-between">
           <TabsList className="h-8">
-            <TabsTrigger value="brand" className="text-xs gap-1.5">
+            <TabsTrigger value="brand" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
               <Tag className="w-3.5 h-3.5" /> Brand control
             </TabsTrigger>
           </TabsList>
@@ -1817,19 +1817,19 @@ export default function SRROrderB2BInternalPage() {
           <Tabs value={brandSubTab} onValueChange={setBrandSubTab} className="flex-1 flex flex-col overflow-hidden min-h-0 gap-4">
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <TabsList className="h-8">
-                <TabsTrigger value="monthly" className="text-xs gap-1.5">
+                <TabsTrigger value="monthly" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
                   <BarChart3 className="w-3.5 h-3.5" /> Monthly usage
                 </TabsTrigger>
-                <TabsTrigger value="order" className="text-xs gap-1.5">
+                <TabsTrigger value="order" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
                   <ShoppingCart className="w-3.5 h-3.5" /> Order
                 </TabsTrigger>
                 {orderOpen && (
-                  <TabsTrigger value="order_edit" className="text-xs gap-1.5">
+                  <TabsTrigger value="order_edit" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
                     <ShoppingCart className="w-3.5 h-3.5" /> Order (แก้ไข)
                   </TabsTrigger>
                 )}
                 {muOpen && (
-                  <TabsTrigger value="view" className="text-xs gap-1.5">
+                  <TabsTrigger value="view" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
                     <Eye className="w-3.5 h-3.5" /> แสดงข้อมูล
                   </TabsTrigger>
                 )}
