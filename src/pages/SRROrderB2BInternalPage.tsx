@@ -41,6 +41,7 @@ type MonthlyUsageForm = {
   product_name_en: string;  // ชื่อสินค้า EN
   uom: string;
   monthly_qty: string;
+  order_group: string;  // ใช้แยก/จัดกลุ่มออเดอร์ภายหลัง (คีย์เอง)
   picture: string;
   remark: string;
   // คอลัมน์อ้างอิงจาก data_master / vendor_master (derive ตอนแสดงผล ไม่ได้เก็บลง DB)
@@ -80,6 +81,7 @@ const EMPTY_MU: MonthlyUsageForm = {
   product_name_en: "",
   uom: "",
   monthly_qty: "",
+  order_group: "",
   picture: "",
   remark: "",
   division_group: "",
@@ -128,6 +130,7 @@ const MU_COLS = [
   { key: "pname_en", label: "Product name (EN)", def: 240, min: 120 },
   { key: "pname", label: "Product name (LA)", def: 240, min: 120 },
   { key: "mqty", label: "Monthly qty", def: 110, min: 80 },
+  { key: "order_group", label: "Order group", def: 130, min: 90 },
   { key: "dqty", label: "Daily qty (÷30)", def: 110, min: 70 },
   { key: "pic", label: "Picture", def: 150, min: 120 },
   { key: "remark", label: "Remark", def: 200, min: 100 },
@@ -140,7 +143,7 @@ const MU_COLS = [
   { key: "act", label: "", def: 74, min: 64 },
 ] as const;
 const MU_COL_KEY = "mu_col_widths_v1";
-const MU_VIS_KEY = "mu_col_visible_v6";
+const MU_VIS_KEY = "mu_col_visible_v7";
 // คอลัมน์ที่ติกซ่อน/แสดงได้ (ยกเว้น # และ action)
 const MU_TOGGLE_COLS = MU_COLS.filter((c) => c.key !== "idx" && c.key !== "act");
 // คอลัมน์อ้างอิงที่ default ซ่อนไว้ (อยากดูค่อยติกเอง) — รวม Product name (LA) + Daily qty
@@ -699,6 +702,7 @@ export default function SRROrderB2BInternalPage() {
           product_name_en: d.product_name_en ?? "",
           uom: it.uom ?? "",
           monthly_qty: it.monthly_qty != null ? String(it.monthly_qty) : "",
+          order_group: it.order_group ?? "",
           picture: it.picture ?? "",
           remark: it.remark ?? "",
           division_group: d.division_group ?? "",
@@ -856,8 +860,8 @@ export default function SRROrderB2BInternalPage() {
   // ดาวน์โหลด template สำหรับนำเข้า Monthly usage
   const downloadMuTemplate = () => {
     const ws = XLSX.utils.json_to_sheet([
-      { Barcode: "8857000000001", "จำนวน/เดือน": 10, หมายเหตุ: "", "Barcode ทดแทน": "" },
-      { Barcode: "8857000000002", "จำนวน/เดือน": 5, หมายเหตุ: "", "Barcode ทดแทน": "8857000000099" },
+      { Barcode: "8857000000001", "จำนวน/เดือน": 10, "Order group": "A", หมายเหตุ: "", "Barcode ทดแทน": "" },
+      { Barcode: "8857000000002", "จำนวน/เดือน": 5, "Order group": "B", หมายเหตุ: "", "Barcode ทดแทน": "8857000000099" },
     ]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Template");
@@ -890,6 +894,7 @@ export default function SRROrderB2BInternalPage() {
       const bIdx = headers.findIndex((h, i) => i !== replIdx && (h.includes("barcode") || h.includes("sku") || h.includes("code")));
       const qIdx = headers.findIndex((h) => h.includes("qty") || h.includes("quantity") || h.includes("จำนวน"));
       const rIdx = headers.findIndex((h) => h.includes("remark") || h.includes("หมายเหตุ") || h.includes("note"));
+      const gIdx = headers.findIndex((h) => h.includes("order group") || h.includes("order_group") || h.includes("group") || h.includes("กลุ่ม"));
       if (bIdx < 0) { toast({ title: "ไม่พบคอลัมน์ Barcode", variant: "destructive" }); return; }
       const dataRows = raw.slice(1).filter((r) => String(r[bIdx] ?? "").trim());
       if (!dataRows.length) { toast({ title: "ไม่พบข้อมูล", variant: "destructive" }); return; }
@@ -898,6 +903,7 @@ export default function SRROrderB2BInternalPage() {
           const code = String(r[bIdx] ?? "").trim();
           const qty = qIdx >= 0 ? String(r[qIdx] ?? "").trim() : "";
           const remark = rIdx >= 0 ? String(r[rIdx] ?? "").trim() : "";
+          const orderGroup = gIdx >= 0 ? String(r[gIdx] ?? "").trim() : "";
           const res = await resolveBarcode(code);
           // รายการทดแทน (ถ้ามีคอลัมน์)
           const replCode = replIdx >= 0 ? String(r[replIdx] ?? "").trim() : "";
@@ -910,6 +916,7 @@ export default function SRROrderB2BInternalPage() {
             product_name: res.found ? res.product_name : "ไม่พบข้อมูล",
             product_name_en: res.found ? res.product_name_en : "",
             monthly_qty: qty,
+            order_group: orderGroup,
             picture: "",
             remark,
             division_group: res.found ? res.division_group : "",
@@ -1454,6 +1461,7 @@ export default function SRROrderB2BInternalPage() {
         uom: r.uom || null,
         monthly_qty: r.monthly_qty.trim() ? Number(r.monthly_qty) : null,
         daily_qty: r.monthly_qty.trim() ? Number(r.monthly_qty) / 30 : null,
+        order_group: r.order_group.trim() || null,
         picture: pictureUrls[i],
         remark: r.remark.trim() || null,
         repl_barcode: r.repl_barcode.trim() || null,
@@ -2502,6 +2510,15 @@ export default function SRROrderB2BInternalPage() {
                               onKeyDown={(e) => handleCellKey(e, idx, 5)}
                               className={`h-8 w-full ${muReadOnly ? "bg-muted/50" : ""}`}
                               placeholder="0"
+                            />
+                          </td>}
+                          {isColShown("order_group") && <td className="px-1 py-1">
+                            <Input
+                              value={row.order_group}
+                              readOnly={muReadOnly}
+                              onChange={(e) => updateMuField(idx, "order_group", e.target.value)}
+                              className={`h-8 w-full ${muReadOnly ? "bg-muted/50" : ""}`}
+                              placeholder="กลุ่ม"
                             />
                           </td>}
                           {isColShown("dqty") && <td className="px-1 py-1">
