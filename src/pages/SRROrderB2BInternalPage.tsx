@@ -9,7 +9,7 @@ import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, Command
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download, Pencil, ChevronsUpDown, Check, FileSpreadsheet, Columns3, Image as ImageIcon, Printer, FileSignature, ShoppingCart, Boxes } from "lucide-react";
+import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download, Pencil, ChevronsUpDown, Check, FileSpreadsheet, Columns3, Image as ImageIcon, Printer, FileSignature, ShoppingCart, Boxes, Route } from "lucide-react";
 import { cn } from "@/lib/utils";
 import * as XLSX from "xlsx";
 
@@ -366,6 +366,7 @@ export default function SRROrderB2BInternalPage() {
   useEffect(() => {
     loadDocs();
     loadOrderDocs();
+    loadRouteplan();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -513,6 +514,48 @@ export default function SRROrderB2BInternalPage() {
   const [orderPickBrandName, setOrderPickBrandName] = useState<string | null>(null); // แบรนด์ที่ติกใน popup (distinct ตามชื่อ, ทีละ 1)
   const [orderPickBranch, setOrderPickBranch] = useState("");          // Branch ที่เลือกจาก dropdown (บังคับ)
   const [orderBrandSearch, setOrderBrandSearch] = useState("");        // ค้นหา Brand ใน popup
+
+  // ============================================================
+  // Routeplan — แนบ PDF (เก็บไฟล์ล่าสุด) + เวลาอัปล่าสุด
+  // ============================================================
+  const [routeplan, setRouteplan] = useState<{ pdf_url: string; uploaded_at: string | null; upload_count: number } | null>(null);
+  const [routeplanUploading, setRouteplanUploading] = useState(false);
+
+  const loadRouteplan = async () => {
+    try {
+      const { data } = await (supabase as any)
+        .from("routeplan")
+        .select("pdf_url, uploaded_at, upload_count")
+        .eq("key", "default")
+        .limit(1);
+      setRouteplan(data?.[0] || null);
+    } catch {
+      setRouteplan(null);
+    }
+  };
+
+  const handleRouteplanUpload = async (file: File) => {
+    setRouteplanUploading(true);
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      const url = await uploadPicture(dataUrl); // bucket เดียวกัน รองรับ pdf
+      const payload = {
+        key: "default",
+        pdf_url: url,
+        uploaded_at: new Date().toISOString(),
+        upload_count: (routeplan?.upload_count || 0) + 1,
+        updated_at: new Date().toISOString(),
+      };
+      const { error } = await (supabase as any).from("routeplan").upsert(payload, { onConflict: "key" });
+      if (error) throw error;
+      toast({ title: "อัป Routeplan แล้ว" });
+      loadRouteplan();
+    } catch (e: any) {
+      toast({ title: "อัป Routeplan ไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setRouteplanUploading(false);
+    }
+  };
 
   // ความกว้างคอลัมน์ (จำไว้ใน localStorage)
   const [colW, setColW] = useState<Record<string, number>>(() => {
@@ -1814,6 +1857,32 @@ export default function SRROrderB2BInternalPage() {
               <Boxes className="w-3.5 h-3.5" /> SCM Control
             </TabsTrigger>
           </TabsList>
+
+          {/* Routeplan — แนบ PDF + เวลาอัปล่าสุด */}
+          <div className="flex items-center gap-2 pb-1">
+            {routeplan?.pdf_url && (
+              <div className="text-[11px] leading-tight text-right">
+                <a href={routeplan.pdf_url} target="_blank" rel="noreferrer" className="text-primary hover:underline">ดูไฟล์ล่าสุด</a>
+                <div className="text-muted-foreground">
+                  {routeplan.uploaded_at ? new Date(routeplan.uploaded_at).toLocaleString("th-TH") : "-"} · {routeplan.upload_count || 0} ครั้ง
+                </div>
+              </div>
+            )}
+            <label
+              title="แนบไฟล์ PDF Routeplan"
+              className="flex items-center gap-1.5 h-9 px-3 rounded-lg border-2 border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors cursor-pointer text-xs font-medium"
+            >
+              {routeplanUploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Route className="w-4 h-4" />}
+              Routeplan
+              <input
+                type="file"
+                accept="application/pdf,.pdf"
+                className="hidden"
+                disabled={routeplanUploading}
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) handleRouteplanUpload(f); e.target.value = ""; }}
+              />
+            </label>
+          </div>
         </div>
 
         <TabsContent value="brand" className="flex-1 overflow-hidden mt-0 p-4 bg-background flex-col min-h-0 data-[state=active]:flex">
