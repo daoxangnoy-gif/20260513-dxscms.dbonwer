@@ -1713,8 +1713,8 @@ export default function SRROrderB2BInternalPage() {
           </TabsList>
         </div>
 
-        <TabsContent value="brand" className="flex-1 overflow-auto mt-0 p-4 bg-background space-y-4">
-          <Tabs value={brandSubTab} onValueChange={setBrandSubTab} className="space-y-4">
+        <TabsContent value="brand" className="flex-1 overflow-hidden mt-0 p-4 bg-background flex flex-col min-h-0">
+          <Tabs value={brandSubTab} onValueChange={setBrandSubTab} className="flex-1 flex flex-col overflow-hidden min-h-0 gap-4">
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <TabsList className="h-8">
                 <TabsTrigger value="monthly" className="text-xs gap-1.5">
@@ -1791,14 +1791,15 @@ export default function SRROrderB2BInternalPage() {
               )}
             </div>
 
-            <TabsContent value="monthly" className="mt-0 space-y-4">
+            <TabsContent value="monthly" className="mt-0 flex-1 flex flex-col overflow-hidden min-h-0">
           {/* Monthly usage docs */}
-          <div className="border rounded-lg">
+          <div className="border rounded-lg flex-1 flex flex-col overflow-hidden min-h-0">
             <div className="px-3 py-2 border-b flex items-center gap-2 bg-muted/50">
               <BarChart3 className="w-4 h-4 text-muted-foreground" />
               <span className="text-sm font-medium">เอกสาร Monthly usage</span>
               {docsLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
             </div>
+            <div className="flex-1 overflow-auto min-h-0">
             <table className="w-full text-sm">
               <thead className="sticky top-0 z-30">
                 <tr className="text-left text-muted-foreground [&_th]:bg-background [&_th]:shadow-[0_1px_0_0_hsl(var(--border))]">
@@ -1903,17 +1904,19 @@ export default function SRROrderB2BInternalPage() {
                 )}
               </tbody>
             </table>
+            </div>
           </div>
             </TabsContent>
 
             {/* ============ Order — รายการ Order Doc ============ */}
-            <TabsContent value="order" className="mt-0 space-y-4">
-          <div className="border rounded-lg">
+            <TabsContent value="order" className="mt-0 flex-1 flex flex-col overflow-hidden min-h-0">
+          <div className="border rounded-lg flex-1 flex flex-col overflow-hidden min-h-0">
             <div className="px-3 py-2 border-b flex items-center gap-2 bg-muted/50">
               <ShoppingCart className="w-4 h-4 text-muted-foreground" />
               <span className="text-sm font-medium">เอกสาร Order</span>
               {orderDocsLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
             </div>
+            <div className="flex-1 overflow-auto min-h-0">
             <table className="w-full text-sm">
               <thead className="sticky top-0 z-30">
                 <tr className="text-left text-muted-foreground [&_th]:bg-background [&_th]:shadow-[0_1px_0_0_hsl(var(--border))]">
@@ -1957,11 +1960,12 @@ export default function SRROrderB2BInternalPage() {
                 )}
               </tbody>
             </table>
+            </div>
           </div>
             </TabsContent>
 
             {/* ============ Order editor (sub-tab ใต้ Brand control) ============ */}
-            <TabsContent value="order_edit" className="mt-0 space-y-3">
+            <TabsContent value="order_edit" className="mt-0 flex-1 overflow-auto min-h-0 space-y-3">
           <div className="flex items-center gap-2 flex-wrap">
             <Button variant="ghost" size="sm" className="h-8 gap-1" onClick={closeOrderEditor}>
               <X className="w-4 h-4" /> ปิด
@@ -2169,7 +2173,7 @@ export default function SRROrderB2BInternalPage() {
       </Dialog>
 
             {/* ============ แสดงข้อมูล / แก้ไข (sub-tab ใต้ Brand control) ============ */}
-            <TabsContent value="view" className="mt-0 space-y-3">
+            <TabsContent value="view" className="mt-0 flex-1 overflow-auto min-h-0 space-y-3">
           {/* header toolbar */}
           <div className="flex items-center gap-2 flex-wrap">
             <Button variant="ghost" size="sm" className="h-8 gap-1" onClick={() => { setMuOpen(false); setBrandSubTab("monthly"); setActiveTab("brand"); }}>
