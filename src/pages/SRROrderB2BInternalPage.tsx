@@ -2399,7 +2399,11 @@ export default function SRROrderB2BInternalPage() {
                               placeholder="auto"
                             />
                           </td>}
-                          {isColShown("pname_en") && <td className="px-2 py-1 text-xs truncate" title={row.product_name_en}>{row.product_name_en || "-"}</td>}
+                          {isColShown("pname_en") && (() => {
+                            const notFound = row.product_name === "ไม่พบข้อมูล";
+                            const txt = notFound ? "ไม่พบข้อมูลในระบบ" : (row.product_name_en || "-");
+                            return <td className={`px-2 py-1 text-xs truncate ${notFound ? "text-destructive" : ""}`} title={txt}>{txt}</td>;
+                          })()}
                           {isColShown("pname") && <td className="px-1 py-1">
                             <Input
                               data-r={idx}
