@@ -1791,7 +1791,7 @@ export default function SRROrderB2BInternalPage() {
               )}
             </div>
 
-            <TabsContent value="monthly" className="mt-0 flex-1 flex flex-col overflow-hidden min-h-0">
+            <TabsContent value="monthly" className="mt-0 flex-1 flex-col overflow-hidden min-h-0 data-[state=active]:flex">
           {/* Monthly usage docs */}
           <div className="border rounded-lg flex-1 flex flex-col overflow-hidden min-h-0">
             <div className="px-3 py-2 border-b flex items-center gap-2 bg-muted/50">
@@ -1909,7 +1909,7 @@ export default function SRROrderB2BInternalPage() {
             </TabsContent>
 
             {/* ============ Order — รายการ Order Doc ============ */}
-            <TabsContent value="order" className="mt-0 flex-1 flex flex-col overflow-hidden min-h-0">
+            <TabsContent value="order" className="mt-0 flex-1 flex-col overflow-hidden min-h-0 data-[state=active]:flex">
           <div className="border rounded-lg flex-1 flex flex-col overflow-hidden min-h-0">
             <div className="px-3 py-2 border-b flex items-center gap-2 bg-muted/50">
               <ShoppingCart className="w-4 h-4 text-muted-foreground" />
