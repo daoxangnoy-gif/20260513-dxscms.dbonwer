@@ -1777,6 +1777,18 @@ export default function SRROrderB2BInternalPage() {
                   </button>
                 </div>
               )}
+
+              {/* ปุ่ม Order (โผล่เฉพาะหน้า Order) */}
+              {brandSubTab === "order" && (
+                <button
+                  onClick={openOrderBrandPicker}
+                  title="สร้าง Order (เลือกแบรนด์ แล้วคีย์ Order Qty)"
+                  className="flex flex-col items-center justify-center gap-0.5 w-16 py-1 rounded-lg border-2 border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100 transition-colors"
+                >
+                  <ShoppingCart className="w-4 h-4" />
+                  <span className="text-[10px] leading-none font-medium">Order</span>
+                </button>
+              )}
             </div>
 
             <TabsContent value="monthly" className="mt-0 space-y-4">
@@ -1901,14 +1913,6 @@ export default function SRROrderB2BInternalPage() {
               <ShoppingCart className="w-4 h-4 text-muted-foreground" />
               <span className="text-sm font-medium">เอกสาร Order</span>
               {orderDocsLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
-              <button
-                onClick={openOrderBrandPicker}
-                title="สร้าง Order (เลือกแบรนด์ แล้วคีย์ Order Qty)"
-                className="ml-auto flex flex-col items-center justify-center gap-0.5 w-16 py-1 rounded-lg border-2 border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100 transition-colors"
-              >
-                <ShoppingCart className="w-4 h-4" />
-                <span className="text-[10px] leading-none font-medium">Order</span>
-              </button>
             </div>
             <table className="w-full text-sm">
               <thead>
