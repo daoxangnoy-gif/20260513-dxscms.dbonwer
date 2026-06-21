@@ -1709,72 +1709,76 @@ export default function SRROrderB2BInternalPage() {
             <button
               onClick={openOrderBrandPicker}
               title="Order (เลือกแบรนด์ แล้วคีย์ Order Qty)"
-              className="flex flex-col items-center justify-center gap-0.5 w-16 py-1 rounded-md border hover:bg-muted text-foreground"
+              className="flex flex-col items-center justify-center gap-0.5 w-16 py-1 rounded-lg border-2 border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100 transition-colors"
             >
               <ShoppingCart className="w-4 h-4" />
-              <span className="text-[10px] leading-none">Order</span>
+              <span className="text-[10px] leading-none font-medium">Order</span>
             </button>
           </div>
         </div>
 
         <TabsContent value="brand" className="flex-1 overflow-auto mt-0 p-4 bg-background space-y-4">
           <Tabs value={brandSubTab} onValueChange={setBrandSubTab} className="space-y-4">
-            <TabsList className="h-8">
-              <TabsTrigger value="monthly" className="text-xs gap-1.5">
-                <BarChart3 className="w-3.5 h-3.5" /> Monthly usage
-              </TabsTrigger>
-              <TabsTrigger value="order" className="text-xs gap-1.5">
-                <ShoppingCart className="w-3.5 h-3.5" /> Order
-              </TabsTrigger>
-              {orderOpen && (
-                <TabsTrigger value="order_edit" className="text-xs gap-1.5">
-                  <ShoppingCart className="w-3.5 h-3.5" /> Order (แก้ไข)
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <TabsList className="h-8">
+                <TabsTrigger value="monthly" className="text-xs gap-1.5">
+                  <BarChart3 className="w-3.5 h-3.5" /> Monthly usage
                 </TabsTrigger>
+                <TabsTrigger value="order" className="text-xs gap-1.5">
+                  <ShoppingCart className="w-3.5 h-3.5" /> Order
+                </TabsTrigger>
+                {orderOpen && (
+                  <TabsTrigger value="order_edit" className="text-xs gap-1.5">
+                    <ShoppingCart className="w-3.5 h-3.5" /> Order (แก้ไข)
+                  </TabsTrigger>
+                )}
+              </TabsList>
+
+              {/* Toolbar ของ Monthly usage (โผล่เฉพาะหน้า Monthly usage) */}
+              {brandSubTab === "monthly" && (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={openDialog}
+                    title="List Brand"
+                    className="flex flex-col items-center justify-center gap-0.5 w-16 py-1 rounded-lg border-2 border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100 transition-colors"
+                  >
+                    <Tag className="w-4 h-4" />
+                    <span className="text-[10px] leading-none font-medium">List Brand</span>
+                  </button>
+                  <button
+                    onClick={openMuNew}
+                    title="Monthly usage (สร้างใหม่)"
+                    className="flex flex-col items-center justify-center gap-0.5 w-16 py-1 rounded-lg border-2 border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors"
+                  >
+                    <BarChart3 className="w-4 h-4" />
+                    <span className="text-[10px] leading-none font-medium">Monthly</span>
+                  </button>
+                  <label
+                    title="Import Monthly Excel (หลายแบรนด์ในไฟล์เดียว)"
+                    className="flex flex-col items-center justify-center gap-0.5 w-16 py-1 rounded-lg border-2 border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors cursor-pointer"
+                  >
+                    {multiImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                    <span className="text-[10px] leading-none font-medium">Import</span>
+                    <input
+                      type="file"
+                      accept=".xlsx,.xls,.csv"
+                      className="hidden"
+                      disabled={multiImporting}
+                      onChange={(e) => { const f = e.target.files?.[0]; if (f) handleMultiImport(f); e.target.value = ""; }}
+                    />
+                  </label>
+                  <button
+                    onClick={downloadMultiTemplate}
+                    title="ดาวน์โหลด Template (Excel หลายแบรนด์)"
+                    className="flex items-center justify-center h-9 w-9 rounded-lg border-2 border-violet-300 bg-violet-50 text-violet-700 hover:bg-violet-100 transition-colors"
+                  >
+                    <FileSpreadsheet className="w-4 h-4" />
+                  </button>
+                </div>
               )}
-            </TabsList>
+            </div>
 
             <TabsContent value="monthly" className="mt-0 space-y-4">
-          {/* Toolbar ของ Monthly usage */}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={openDialog}
-              title="List Brand"
-              className="flex flex-col items-center justify-center gap-0.5 w-16 py-1 rounded-md border hover:bg-muted text-foreground"
-            >
-              <Tag className="w-4 h-4" />
-              <span className="text-[10px] leading-none">List Brand</span>
-            </button>
-            <button
-              onClick={openMuNew}
-              title="Monthly usage (สร้างใหม่)"
-              className="flex flex-col items-center justify-center gap-0.5 w-16 py-1 rounded-md border hover:bg-muted text-foreground"
-            >
-              <BarChart3 className="w-4 h-4" />
-              <span className="text-[10px] leading-none">Monthly</span>
-            </button>
-            <label
-              title="Import Monthly Excel (หลายแบรนด์ในไฟล์เดียว)"
-              className="flex flex-col items-center justify-center gap-0.5 w-16 py-1 rounded-md border hover:bg-muted text-foreground cursor-pointer"
-            >
-              {multiImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-              <span className="text-[10px] leading-none">Import</span>
-              <input
-                type="file"
-                accept=".xlsx,.xls,.csv"
-                className="hidden"
-                disabled={multiImporting}
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) handleMultiImport(f); e.target.value = ""; }}
-              />
-            </label>
-            <button
-              onClick={downloadMultiTemplate}
-              title="ดาวน์โหลด Template (Excel หลายแบรนด์)"
-              className="flex items-center justify-center h-7 w-7 self-center rounded-md border hover:bg-muted text-muted-foreground"
-            >
-              <FileSpreadsheet className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
           {/* Monthly usage docs */}
           <div className="border rounded-lg">
             <div className="px-3 py-2 border-b flex items-center gap-2 bg-muted/50">
