@@ -3113,6 +3113,9 @@ export default function SRROrderB2BInternalPage() {
                 <TabsTrigger value="so" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
                   <FileSpreadsheet className="w-3.5 h-3.5" /> SO
                 </TabsTrigger>
+                <TabsTrigger value="po" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+                  <FileSignature className="w-3.5 h-3.5" /> PO
+                </TabsTrigger>
               </TabsList>
             </div>
 
@@ -3223,6 +3226,11 @@ export default function SRROrderB2BInternalPage() {
                   </table>
                 </div>
               </div>
+            </TabsContent>
+
+            {/* ============ PO (รวมจาก Monthly usage ทุกแบรนด์ + 2 sub-tab Import) ============ */}
+            <TabsContent value="po" className="mt-0 flex-1 flex-col overflow-hidden min-h-0 data-[state=active]:flex">
+              <SCMPOTab vendorOriginMap={vendorOriginMapRef} />
             </TabsContent>
           </Tabs>
         </TabsContent>
@@ -3489,5 +3497,465 @@ export default function SRROrderB2BInternalPage() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+// ============================================================
+// SCM Control → tab PO
+// รวมรายการจาก Monthly usage ทุกแบรนด์ (sum monthly_qty group by SKU) + pivot ต่อแบรนด์
+// คอลัมน์ที่ชัดเจนดึงจาก data_master / vendor_master / stock; PO tracking ว่างไว้ก่อน
+// 2 sub-tab Import: Stock Kr / PO Receive (อัปโหลด Excel → แสดงผล)
+// ============================================================
+type POAgg = {
+  sku: string;
+  barcode: string;
+  product_name: string;
+  total: number;
+  byBrand: Map<string, number>;
+};
+type PORow = {
+  division: string;
+  department: string;
+  sku: string;
+  vendor: string;
+  vendor_origin: string;
+  id: string;
+  barcode: string;
+  product_name_en: string;
+  stock_dc: number | null;
+  byBrand: Map<string, number>;
+  total: number;
+};
+
+// คอลัมน์ของ 2 sub-tab Import (key + label + alias สำหรับจับหัวคอลัมน์ Excel)
+const STOCK_KR_COLS = [
+  { key: "id", label: "ID", aliases: ["id", "sku", "รหัส"] },
+  { key: "barcode", label: "Barcode", aliases: ["barcode"] },
+  { key: "description", label: "Description", aliases: ["description", "desc", "ชื่อ", "product"] },
+  { key: "uom", label: "Unit of Measure", aliases: ["unit of measure", "uom", "หน่วย"] },
+  { key: "qty", label: "Qty", aliases: ["qty", "quantity", "จำนวน"] },
+  { key: "remark", label: "Remark", aliases: ["remark", "หมายเหตุ", "note"] },
+] as const;
+const PO_RECEIVE_COLS = [
+  { key: "id", label: "ID", aliases: ["id"] },
+  { key: "created_date", label: "Order Lines/Purchase Created Date", aliases: ["purchase created date", "created date"] },
+  { key: "order_ref", label: "Order Lines/Order Reference", aliases: ["order reference", "reference"] },
+  { key: "partner", label: "Order Lines/Partner", aliases: ["partner"] },
+  { key: "barcode", label: "Order Lines/Barcode", aliases: ["barcode"] },
+  { key: "product", label: "Order Lines/Product", aliases: ["product"] },
+  { key: "received_qty", label: "Order Lines/Received Qty", aliases: ["received"] },
+  { key: "quantity", label: "Order Lines/Quantity", aliases: ["quantity"] },
+  { key: "status", label: "Status", aliases: ["status"] },
+] as const;
+
+// คอลัมน์ PO tracking (รอบนี้ว่างไว้ก่อน — placeholder)
+const PO_TRACK_COLS = ["PO NUMBER", "PO DATE", "PO Status", "PO QTY", "REC PO", "DIFF", "1x", "Pocost"] as const;
+
+function SCMPOTab({ vendorOriginMap }: { vendorOriginMap: React.MutableRefObject<Record<string, string>> }) {
+  const { toast } = useToast();
+  const [poSubTab, setPoSubTab] = useState("list");
+
+  // ---- PO list (aggregation) ----
+  const [poRows, setPoRows] = useState<PORow[]>([]);
+  const [poBrands, setPoBrands] = useState<string[]>([]);
+  const [poLoading, setPoLoading] = useState(false);
+  const [poLoaded, setPoLoaded] = useState(false);
+  const [poSearch, setPoSearch] = useState("");
+
+  // ---- Import sub-tabs ----
+  const [stockKrRows, setStockKrRows] = useState<Record<string, string>[]>([]);
+  const [poReceiveRows, setPoReceiveRows] = useState<Record<string, string>[]>([]);
+  const [importingKr, setImportingKr] = useState(false);
+  const [importingRec, setImportingRec] = useState(false);
+
+  const fetchInChunks = async (table: string, select: string, col: string, ids: string[]): Promise<any[]> => {
+    const out: any[] = [];
+    const CH = 200;
+    for (let i = 0; i < ids.length; i += CH) {
+      const part = ids.slice(i, i + CH);
+      if (part.length === 0) continue;
+      const { data, error } = await (supabase as any).from(table).select(select).in(col, part);
+      if (error) throw error;
+      out.push(...(data || []));
+    }
+    return out;
+  };
+
+  // โหลด + คำนวณตาราง PO จาก Monthly usage ทุกแบรนด์
+  const buildPO = async () => {
+    setPoLoading(true);
+    try {
+      // 1) ดึง item ทั้งหมด (paginate) + map doc → brand
+      const items: any[] = [];
+      const PAGE = 1000;
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await (supabase as any)
+          .from("monthly_usage_item")
+          .select("sku_code, barcode, product_name, monthly_qty, doc_id")
+          .range(from, from + PAGE - 1);
+        if (error) throw error;
+        if (!data || data.length === 0) break;
+        items.push(...data);
+        if (data.length < PAGE) break;
+      }
+      const { data: docs } = await (supabase as any).from("monthly_usage_doc").select("id, brand_name");
+      const brandByDoc = new Map<string, string>();
+      for (const d of (docs || []) as any[]) brandByDoc.set(d.id, d.brand_name || "");
+
+      // 2) รวม qty group by SKU (ถ้าไม่มี SKU ใช้ barcode) + per brand
+      const map = new Map<string, POAgg>();
+      const brandSet = new Set<string>();
+      for (const it of items) {
+        const sku = String(it.sku_code ?? "").trim();
+        const key = sku || (String(it.barcode ?? "").trim() ? `bc:${String(it.barcode).trim()}` : "");
+        if (!key) continue;
+        const brand = brandByDoc.get(it.doc_id) || "";
+        if (brand) brandSet.add(brand);
+        const qty = Number(it.monthly_qty) || 0;
+        if (!map.has(key)) map.set(key, { sku, barcode: it.barcode || "", product_name: it.product_name || "", total: 0, byBrand: new Map() });
+        const a = map.get(key)!;
+        a.total += qty;
+        if (brand) a.byBrand.set(brand, (a.byBrand.get(brand) || 0) + qty);
+        if (!a.barcode && it.barcode) a.barcode = it.barcode;
+        if (!a.product_name && it.product_name) a.product_name = it.product_name;
+      }
+
+      // 3) enrich จาก data_master / vendor_master / stock (เฉพาะที่มี SKU)
+      const skus = [...map.keys()].filter((k) => !k.startsWith("bc:"));
+      const dm = skus.length
+        ? await fetchInChunks("data_master", "sku_code, division, department, product_name_en, vendor_code, vendor_display_name, main_barcode", "sku_code", skus)
+        : [];
+      const dmMap = new Map<string, any>();
+      for (const d of dm) if (d.sku_code && !dmMap.has(d.sku_code)) dmMap.set(d.sku_code, d);
+      const vendorCodes = [...new Set(dm.map((d: any) => d.vendor_code).filter(Boolean))] as string[];
+      const vm = vendorCodes.length
+        ? await fetchInChunks("vendor_master", "vendor_code, supplier_currency", "vendor_code", vendorCodes)
+        : [];
+      const vmMap = new Map<string, any>();
+      for (const v of vm) if (v.vendor_code && !vmMap.has(v.vendor_code)) vmMap.set(v.vendor_code, v);
+      const stock = skus.length ? await fetchInChunks("stock", "item_id, type_store, quantity", "item_id", skus) : [];
+      const stockDcMap = new Map<string, number>();
+      for (const s of stock) {
+        if (String(s.type_store) === "DC") stockDcMap.set(s.item_id, (stockDcMap.get(s.item_id) || 0) + (Number(s.quantity) || 0));
+      }
+
+      const brands = [...brandSet].sort((a, b) => a.localeCompare(b));
+      const rows: PORow[] = [...map.values()].map((a) => {
+        const d = dmMap.get(a.sku) || {};
+        const v = vmMap.get(d.vendor_code) || {};
+        const origin = (d.vendor_code && vendorOriginMap.current[d.vendor_code]) || "";
+        const vendorStr = d.vendor_code
+          ? `${d.vendor_code}${d.vendor_display_name ? ` - ${d.vendor_display_name}` : ""}${v.supplier_currency ? ` - ${v.supplier_currency}` : ""}`
+          : "";
+        return {
+          division: d.division || "",
+          department: d.department || "",
+          sku: a.sku,
+          vendor: vendorStr,
+          vendor_origin: origin,
+          id: a.sku,
+          barcode: d.main_barcode || a.barcode || "",
+          product_name_en: d.product_name_en || a.product_name || "",
+          stock_dc: stockDcMap.has(a.sku) ? (stockDcMap.get(a.sku) as number) : null,
+          byBrand: a.byBrand,
+          total: a.total,
+        };
+      });
+      rows.sort((x, y) => (x.product_name_en || x.id).localeCompare(y.product_name_en || y.id, undefined, { sensitivity: "base" }));
+
+      setPoBrands(brands);
+      setPoRows(rows);
+      setPoLoaded(true);
+      toast({ title: "โหลด PO สำเร็จ", description: `${rows.length} SKU · ${brands.length} แบรนด์` });
+    } catch (e: any) {
+      toast({ title: "โหลด PO ไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setPoLoading(false);
+    }
+  };
+
+  const filteredPoRows = (() => {
+    const q = poSearch.trim().toLowerCase();
+    if (!q) return poRows;
+    return poRows.filter(
+      (r) =>
+        r.id.toLowerCase().includes(q) ||
+        r.barcode.toLowerCase().includes(q) ||
+        r.product_name_en.toLowerCase().includes(q) ||
+        r.vendor.toLowerCase().includes(q),
+    );
+  })();
+
+  // export ตาราง PO เป็น Excel (รวมคอลัมน์ pivot + tracking ว่าง)
+  const exportPO = () => {
+    if (filteredPoRows.length === 0) { toast({ title: "ไม่มีข้อมูลให้ export", variant: "destructive" }); return; }
+    const out = filteredPoRows.map((r, i) => {
+      const base: Record<string, any> = {
+        "#": i + 1,
+        Division: r.division,
+        Department: r.department,
+        Remark: "",
+        SKU: r.sku,
+        "Vendor (code-name-currency)": r.vendor,
+        "Vendor origin": r.vendor_origin,
+        ID: r.id,
+        Barcode: r.barcode,
+        "Product name EN": r.product_name_en,
+        "Stock DC": r.stock_dc ?? "",
+        "Stock DC (KR)": "",
+      };
+      for (const b of poBrands) base[b] = r.byBrand.get(b) ?? "";
+      base["Total qty"] = r.total;
+      for (const t of PO_TRACK_COLS) base[t] = "";
+      return base;
+    });
+    const ws = XLSX.utils.json_to_sheet(out);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "PO");
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const now = new Date();
+    const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`;
+    XLSX.writeFile(wb, `${stamp}-PO.xlsx`);
+  };
+
+  // parse Excel ตาม column config → array of row objects (key = col.key)
+  const parseImport = async (file: File, cols: readonly { key: string; aliases: readonly string[] }[]): Promise<Record<string, string>[]> => {
+    const ab = await file.arrayBuffer();
+    const wb = XLSX.read(ab);
+    const raw: any[][] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
+    if (raw.length < 2) return [];
+    const headers = (raw[0] as any[]).map((h) => String(h ?? "").toLowerCase().trim());
+    const idxOf: Record<string, number> = {};
+    for (const c of cols) idxOf[c.key] = headers.findIndex((h) => c.aliases.some((a) => h.includes(a)));
+    return raw
+      .slice(1)
+      .filter((r) => r.some((v) => String(v ?? "").trim()))
+      .map((r) => {
+        const o: Record<string, string> = {};
+        for (const c of cols) o[c.key] = idxOf[c.key] >= 0 ? String(r[idxOf[c.key]] ?? "").trim() : "";
+        return o;
+      });
+  };
+
+  const handleKrImport = async (file: File) => {
+    setImportingKr(true);
+    try {
+      const rows = await parseImport(file, STOCK_KR_COLS);
+      if (rows.length === 0) { toast({ title: "ไม่พบข้อมูลในไฟล์", variant: "destructive" }); return; }
+      setStockKrRows(rows);
+      toast({ title: "นำเข้า Stock Kr สำเร็จ", description: `${rows.length} รายการ` });
+    } catch (e: any) {
+      toast({ title: "นำเข้าไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setImportingKr(false);
+    }
+  };
+  const handleRecImport = async (file: File) => {
+    setImportingRec(true);
+    try {
+      const rows = await parseImport(file, PO_RECEIVE_COLS);
+      if (rows.length === 0) { toast({ title: "ไม่พบข้อมูลในไฟล์", variant: "destructive" }); return; }
+      setPoReceiveRows(rows);
+      toast({ title: "นำเข้า PO Receive สำเร็จ", description: `${rows.length} รายการ` });
+    } catch (e: any) {
+      toast({ title: "นำเข้าไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setImportingRec(false);
+    }
+  };
+
+  const downloadImportTemplate = (cols: readonly { label: string }[], name: string) => {
+    const ws = XLSX.utils.aoa_to_sheet([cols.map((c) => c.label)]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Template");
+    XLSX.writeFile(wb, `${name}.xlsx`);
+  };
+
+  return (
+    <Tabs value={poSubTab} onValueChange={setPoSubTab} className="flex-1 flex flex-col overflow-hidden min-h-0 gap-3">
+      <TabsList className="h-8 w-fit">
+        <TabsTrigger value="list" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+          <FileSignature className="w-3.5 h-3.5" /> PO
+        </TabsTrigger>
+        <TabsTrigger value="stock_kr" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+          <Boxes className="w-3.5 h-3.5" /> Stock Kr
+        </TabsTrigger>
+        <TabsTrigger value="po_receive" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+          <Download className="w-3.5 h-3.5" /> PO Receive
+        </TabsTrigger>
+      </TabsList>
+
+      {/* ===== PO list ===== */}
+      <TabsContent value="list" className="mt-0 flex-1 flex-col overflow-hidden min-h-0 data-[state=active]:flex gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={buildPO} disabled={poLoading}>
+            {poLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <BarChart3 className="w-3.5 h-3.5" />}
+            {poLoaded ? "โหลดใหม่" : "โหลด / คำนวณ"}
+          </Button>
+          <div className="relative flex-1 min-w-[220px] max-w-md">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input value={poSearch} onChange={(e) => setPoSearch(e.target.value)} className="h-8 pl-8" placeholder="ค้นหา ID / Barcode / Product / Vendor" />
+          </div>
+          <span className="text-xs text-muted-foreground">{filteredPoRows.length} / {poRows.length} SKU</span>
+          <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs ml-auto" onClick={exportPO} disabled={filteredPoRows.length === 0}>
+            <Download className="w-3.5 h-3.5" /> Export
+          </Button>
+        </div>
+
+        <div className="border rounded-lg flex-1 overflow-auto min-h-0">
+          <table className="text-sm border-collapse whitespace-nowrap">
+            <thead className="sticky top-0 z-30">
+              <tr className="text-left text-muted-foreground [&_th]:bg-background [&_th]:shadow-[0_1px_0_0_hsl(var(--border))] [&_th]:px-3 [&_th]:py-1.5 [&_th]:font-medium">
+                <th>#</th>
+                <th>Division</th>
+                <th>Department</th>
+                <th>Remark</th>
+                <th>SKU</th>
+                <th className="text-center">Action</th>
+                <th>Vendor (code-name-currency)</th>
+                <th>Vendor origin</th>
+                <th>ID</th>
+                <th>Barcode</th>
+                <th>Product name EN</th>
+                <th className="text-right">Stock DC</th>
+                <th className="text-right">Stock DC (KR)</th>
+                {poBrands.map((b) => (
+                  <th key={b} className="text-right bg-amber-50">{b}</th>
+                ))}
+                <th className="text-right bg-emerald-50">Total qty</th>
+                {PO_TRACK_COLS.map((t) => (
+                  <th key={t} className="text-muted-foreground/60">{t}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filteredPoRows.map((r, i) => (
+                <tr key={r.id || i} className="border-b last:border-0 hover:bg-muted/40 [&_td]:px-3 [&_td]:py-1.5">
+                  <td className="text-muted-foreground tabular-nums">{i + 1}</td>
+                  <td className="text-muted-foreground">{r.division || "-"}</td>
+                  <td className="text-muted-foreground">{r.department || "-"}</td>
+                  <td className="text-muted-foreground">-</td>
+                  <td>{r.sku || "-"}</td>
+                  <td className="text-center text-muted-foreground/50">-</td>
+                  <td>{r.vendor || "-"}</td>
+                  <td className="text-muted-foreground">{r.vendor_origin || "-"}</td>
+                  <td className="font-medium">{r.id || "-"}</td>
+                  <td>{r.barcode || "-"}</td>
+                  <td className="max-w-[260px] truncate" title={r.product_name_en}>{r.product_name_en || "-"}</td>
+                  <td className="text-right tabular-nums">{r.stock_dc ?? "-"}</td>
+                  <td className="text-right tabular-nums text-muted-foreground/50">-</td>
+                  {poBrands.map((b) => (
+                    <td key={b} className="text-right tabular-nums bg-amber-50/40">{r.byBrand.get(b) ?? ""}</td>
+                  ))}
+                  <td className="text-right tabular-nums font-semibold bg-emerald-50/40">{r.total}</td>
+                  {PO_TRACK_COLS.map((t) => (
+                    <td key={t} className="text-muted-foreground/40">-</td>
+                  ))}
+                </tr>
+              ))}
+              {filteredPoRows.length === 0 && (
+                <tr>
+                  <td colSpan={13 + poBrands.length + 1 + PO_TRACK_COLS.length} className="px-3 py-8 text-center text-muted-foreground">
+                    {!poLoaded ? "กด \"โหลด / คำนวณ\" เพื่อดึงรายการจาก Monthly usage ทุกแบรนด์" : poRows.length === 0 ? "ไม่มีข้อมูล" : "ไม่พบรายการที่ค้นหา"}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          Stock DC (KR) และคอลัมน์ PO tracking (PO NUMBER, PO DATE, ...) เว้นว่างไว้ก่อน — จะเชื่อมจาก sub-tab Stock Kr / PO Receive ภายหลัง
+        </p>
+      </TabsContent>
+
+      {/* ===== Stock Kr (Import) ===== */}
+      <TabsContent value="stock_kr" className="mt-0 flex-1 flex-col overflow-hidden min-h-0 data-[state=active]:flex gap-2">
+        <POImportPanel
+          title="Stock Kr"
+          cols={STOCK_KR_COLS as any}
+          rows={stockKrRows}
+          importing={importingKr}
+          onImport={handleKrImport}
+          onClear={() => setStockKrRows([])}
+          onTemplate={() => downloadImportTemplate(STOCK_KR_COLS as any, "StockKr_Template")}
+        />
+      </TabsContent>
+
+      {/* ===== PO Receive (Import) ===== */}
+      <TabsContent value="po_receive" className="mt-0 flex-1 flex-col overflow-hidden min-h-0 data-[state=active]:flex gap-2">
+        <POImportPanel
+          title="PO Receive"
+          cols={PO_RECEIVE_COLS as any}
+          rows={poReceiveRows}
+          importing={importingRec}
+          onImport={handleRecImport}
+          onClear={() => setPoReceiveRows([])}
+          onTemplate={() => downloadImportTemplate(PO_RECEIVE_COLS as any, "POReceive_Template")}
+        />
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+// แผง Import ทั่วไป (อัปโหลด Excel → แสดงตารางตามคอลัมน์ที่กำหนด)
+function POImportPanel({
+  title, cols, rows, importing, onImport, onClear, onTemplate,
+}: {
+  title: string;
+  cols: { key: string; label: string }[];
+  rows: Record<string, string>[];
+  importing: boolean;
+  onImport: (f: File) => void;
+  onClear: () => void;
+  onTemplate: () => void;
+}) {
+  return (
+    <>
+      <div className="flex items-center gap-2 flex-wrap">
+        <label className="flex items-center gap-1.5 h-8 px-3 rounded-lg border-2 border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors cursor-pointer text-xs font-medium">
+          {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+          Import {title}
+          <input type="file" accept=".xlsx,.xls,.csv" className="hidden" disabled={importing} onChange={(e) => { const f = e.target.files?.[0]; if (f) onImport(f); e.target.value = ""; }} />
+        </label>
+        <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={onTemplate}>
+          <FileSpreadsheet className="w-3.5 h-3.5" /> Template
+        </Button>
+        {rows.length > 0 && (
+          <Button size="sm" variant="ghost" className="h-8 gap-1.5 text-xs text-destructive" onClick={onClear}>
+            <Trash2 className="w-3.5 h-3.5" /> ล้าง
+          </Button>
+        )}
+        <span className="text-xs text-muted-foreground ml-auto">{rows.length} รายการ</span>
+      </div>
+      <div className="border rounded-lg flex-1 overflow-auto min-h-0">
+        <table className="text-sm border-collapse whitespace-nowrap w-full">
+          <thead className="sticky top-0 z-30">
+            <tr className="text-left text-muted-foreground [&_th]:bg-background [&_th]:shadow-[0_1px_0_0_hsl(var(--border))] [&_th]:px-3 [&_th]:py-1.5 [&_th]:font-medium">
+              <th>#</th>
+              {cols.map((c) => (
+                <th key={c.key}>{c.label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i} className="border-b last:border-0 hover:bg-muted/40 [&_td]:px-3 [&_td]:py-1.5">
+                <td className="text-muted-foreground tabular-nums">{i + 1}</td>
+                {cols.map((c) => (
+                  <td key={c.key}>{r[c.key] || "-"}</td>
+                ))}
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={cols.length + 1} className="px-3 py-8 text-center text-muted-foreground">
+                  ยังไม่มีข้อมูล — กด "Import {title}" เพื่ออัปโหลด Excel
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
