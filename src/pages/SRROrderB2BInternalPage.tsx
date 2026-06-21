@@ -159,6 +159,7 @@ const ORDER_TOTAL_W = ORDER_COLS.reduce((s, c) => s + c.w, 0);
 
 export default function SRROrderB2BInternalPage() {
   const [activeTab, setActiveTab] = useState("brand");
+  const [brandSubTab, setBrandSubTab] = useState("monthly"); // sub-tab ใต้ Brand control: monthly | order
   const { toast } = useToast();
 
   // ============================================================
@@ -1512,7 +1513,8 @@ export default function SRROrderB2BInternalPage() {
 
   const closeOrderEditor = () => {
     setOrderOpen(false);
-    setActiveTab("order");
+    setBrandSubTab("order");
+    setActiveTab("brand");
   };
 
   // บันทึก Order Doc (1 Brand = 1 Order Doc)
@@ -1599,7 +1601,8 @@ export default function SRROrderB2BInternalPage() {
 
       toast({ title: "บันทึก Order สำเร็จ", description: `${label} (${ordered.length} รายการ)` });
       setOrderOpen(false);
-      setActiveTab("order");
+      setBrandSubTab("order");
+      setActiveTab("brand");
       loadOrderDocs();
     } catch (e: any) {
       toast({ title: "บันทึกไม่สำเร็จ", description: e.message, variant: "destructive" });
@@ -1669,9 +1672,6 @@ export default function SRROrderB2BInternalPage() {
             <TabsTrigger value="brand" className="text-xs gap-1.5">
               <Tag className="w-3.5 h-3.5" /> Brand control
             </TabsTrigger>
-            <TabsTrigger value="order" className="text-xs gap-1.5">
-              <ShoppingCart className="w-3.5 h-3.5" /> Order
-            </TabsTrigger>
             {muOpen && (
               <TabsTrigger value="view" className="text-xs gap-1.5">
                 <Eye className="w-3.5 h-3.5" /> แสดงข้อมูล
@@ -1733,6 +1733,17 @@ export default function SRROrderB2BInternalPage() {
         </div>
 
         <TabsContent value="brand" className="flex-1 overflow-auto mt-0 p-4 bg-background space-y-4">
+          <Tabs value={brandSubTab} onValueChange={setBrandSubTab} className="space-y-4">
+            <TabsList className="h-8">
+              <TabsTrigger value="monthly" className="text-xs gap-1.5">
+                <BarChart3 className="w-3.5 h-3.5" /> Monthly usage
+              </TabsTrigger>
+              <TabsTrigger value="order" className="text-xs gap-1.5">
+                <ShoppingCart className="w-3.5 h-3.5" /> Order
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="monthly" className="mt-0 space-y-4">
           {/* Monthly usage docs */}
           <div className="border rounded-lg">
             <div className="px-3 py-2 border-b flex items-center gap-2 bg-muted/50">
@@ -1845,10 +1856,10 @@ export default function SRROrderB2BInternalPage() {
               </tbody>
             </table>
           </div>
-        </TabsContent>
+            </TabsContent>
 
-        {/* ============ Order — รายการ Order Doc ============ */}
-        <TabsContent value="order" className="flex-1 overflow-auto mt-0 p-4 bg-background space-y-4">
+            {/* ============ Order — รายการ Order Doc ============ */}
+            <TabsContent value="order" className="mt-0 space-y-4">
           <div className="border rounded-lg">
             <div className="px-3 py-2 border-b flex items-center gap-2 bg-muted/50">
               <ShoppingCart className="w-4 h-4 text-muted-foreground" />
@@ -1900,6 +1911,8 @@ export default function SRROrderB2BInternalPage() {
               </tbody>
             </table>
           </div>
+            </TabsContent>
+          </Tabs>
         </TabsContent>
 
       {/* ============ List Brand dialog ============ */}
