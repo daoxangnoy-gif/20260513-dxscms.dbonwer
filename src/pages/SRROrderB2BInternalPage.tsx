@@ -37,7 +37,8 @@ type MonthlyUsageForm = {
   barcode: string;
   sku_code: string;
   barcode_unit: string;
-  product_name: string;
+  product_name: string;     // ชื่อสินค้า LA (ดั้งเดิม — ซ่อน default)
+  product_name_en: string;  // ชื่อสินค้า EN
   uom: string;
   monthly_qty: string;
   picture: string;
@@ -70,6 +71,7 @@ const EMPTY_MU: MonthlyUsageForm = {
   sku_code: "",
   barcode_unit: "",
   product_name: "",
+  product_name_en: "",
   uom: "",
   monthly_qty: "",
   picture: "",
@@ -89,6 +91,17 @@ const fileToDataUrl = (file: File): Promise<string> =>
     reader.readAsDataURL(file);
   });
 
+// เรียงรายการ A-Z ตามชื่อสินค้า EN (ถ้าไม่มีใช้ LA) — รายการว่าง/ไม่พบไว้ท้ายสุด
+const sortRowsAZ = (rows: MonthlyUsageForm[]): MonthlyUsageForm[] =>
+  [...rows].sort((a, b) => {
+    const ka = (a.product_name_en || a.product_name || "").trim();
+    const kb = (b.product_name_en || b.product_name || "").trim();
+    if (!ka && !kb) return 0;
+    if (!ka) return 1;
+    if (!kb) return -1;
+    return ka.localeCompare(kb, undefined, { sensitivity: "base" });
+  });
+
 // คอลัมน์ของตาราง Monthly usage (1 item = 1 แถว) + ความกว้างเริ่มต้น (px) — ลากปรับได้
 const MU_COLS = [
   { key: "idx", label: "#", def: 44, min: 36 },
@@ -101,7 +114,8 @@ const MU_COLS = [
   { key: "sku", label: "ID (SKU)", def: 120, min: 80 },
   { key: "bunit", label: "Barcode Unit", def: 140, min: 90 },
   { key: "uom", label: "UOM", def: 80, min: 60 },
-  { key: "pname", label: "Product name", def: 240, min: 120 },
+  { key: "pname_en", label: "Product name (EN)", def: 240, min: 120 },
+  { key: "pname", label: "Product name (LA)", def: 240, min: 120 },
   { key: "mqty", label: "Monthly qty", def: 110, min: 80 },
   { key: "dqty", label: "Daily qty (÷30)", def: 110, min: 70 },
   { key: "pic", label: "Picture", def: 150, min: 120 },
@@ -109,11 +123,11 @@ const MU_COLS = [
   { key: "act", label: "", def: 74, min: 64 },
 ] as const;
 const MU_COL_KEY = "mu_col_widths_v1";
-const MU_VIS_KEY = "mu_col_visible_v4";
+const MU_VIS_KEY = "mu_col_visible_v5";
 // คอลัมน์ที่ติกซ่อน/แสดงได้ (ยกเว้น # และ action)
 const MU_TOGGLE_COLS = MU_COLS.filter((c) => c.key !== "idx" && c.key !== "act");
-// คอลัมน์อ้างอิงที่ default ซ่อนไว้ (อยากดูค่อยติกเอง)
-const MU_DEFAULT_HIDDEN = new Set(["dgroup", "division", "dept", "bstatus", "vorigin"]);
+// คอลัมน์อ้างอิงที่ default ซ่อนไว้ (อยากดูค่อยติกเอง) — รวม Product name (LA) + Daily qty
+const MU_DEFAULT_HIDDEN = new Set(["dgroup", "division", "dept", "bstatus", "vorigin", "pname", "dqty"]);
 
 // ลำดับคอลัมน์ที่ใช้ keyboard navigation (มี input) — index = data-c
 const MU_NAV_COLS = ["barcode", "sku", "bunit", "uom", "pname", "mqty", "dqty", "remark"] as const;
@@ -649,31 +663,31 @@ export default function SRROrderB2BInternalPage() {
       if (skus.length) {
         const { data: dm } = await (supabase as any)
           .from("data_master")
-          .select("sku_code, division_group, division, department, buying_status, vendor_code, vendor_display_name")
+          .select("sku_code, product_name_en, division_group, division, department, buying_status, vendor_code, vendor_display_name")
           .in("sku_code", skus);
         for (const d of (dm || []) as any[]) { if (d.sku_code && !dmMap[d.sku_code]) dmMap[d.sku_code] = d; }
       }
-      setMuRows(
-        (data || []).map((it: any) => {
-          const d = dmMap[it.sku_code] || {};
-          const vendorOrigin = (d.vendor_code && vendorOriginMapRef.current[d.vendor_code]) || "";
-          return {
-            barcode: it.barcode ?? "",
-            sku_code: it.sku_code ?? "",
-            barcode_unit: it.barcode_unit ?? "",
-            product_name: it.product_name ?? "",
-            uom: it.uom ?? "",
-            monthly_qty: it.monthly_qty != null ? String(it.monthly_qty) : "",
-            picture: it.picture ?? "",
-            remark: it.remark ?? "",
-            division_group: d.division_group ?? "",
-            division: d.division ?? "",
-            department: d.department ?? "",
-            buying_status: d.buying_status ?? "",
-            vendor_origin: vendorOrigin,
-          };
-        }),
-      );
+      const loadedRows: MonthlyUsageForm[] = (data || []).map((it: any) => {
+        const d = dmMap[it.sku_code] || {};
+        const vendorOrigin = (d.vendor_code && vendorOriginMapRef.current[d.vendor_code]) || "";
+        return {
+          barcode: it.barcode ?? "",
+          sku_code: it.sku_code ?? "",
+          barcode_unit: it.barcode_unit ?? "",
+          product_name: it.product_name ?? "",
+          product_name_en: d.product_name_en ?? "",
+          uom: it.uom ?? "",
+          monthly_qty: it.monthly_qty != null ? String(it.monthly_qty) : "",
+          picture: it.picture ?? "",
+          remark: it.remark ?? "",
+          division_group: d.division_group ?? "",
+          division: d.division ?? "",
+          department: d.department ?? "",
+          buying_status: d.buying_status ?? "",
+          vendor_origin: vendorOrigin,
+        };
+      });
+      setMuRows(sortRowsAZ(loadedRows));
     } catch (e: any) {
       toast({ title: "เปิดเอกสารไม่สำเร็จ", description: e.message, variant: "destructive" });
       setMuRows([{ ...EMPTY_MU }]);
@@ -725,6 +739,7 @@ export default function SRROrderB2BInternalPage() {
       barcode_unit: rec?.main_barcode || "",
       uom: rec?.unit_of_measure || "",
       product_name: name,
+      product_name_en: rec?.product_name_en || "",
       division_group: rec?.division_group || "",
       division: rec?.division || "",
       department: rec?.department || "",
@@ -754,6 +769,7 @@ export default function SRROrderB2BInternalPage() {
                 barcode_unit: res.found ? res.barcode_unit : "",
                 uom: res.found ? res.uom : "",
                 product_name: res.found ? res.product_name : "ไม่พบข้อมูล",
+                product_name_en: res.found ? res.product_name_en : "",
                 division_group: res.found ? res.division_group : "",
                 division: res.found ? res.division : "",
                 department: res.found ? res.department : "",
@@ -834,6 +850,7 @@ export default function SRROrderB2BInternalPage() {
             barcode_unit: res.found ? res.barcode_unit : "",
             uom: res.found ? res.uom : "",
             product_name: res.found ? res.product_name : "ไม่พบข้อมูล",
+            product_name_en: res.found ? res.product_name_en : "",
             monthly_qty: qty,
             picture: "",
             remark,
@@ -868,7 +885,7 @@ export default function SRROrderB2BInternalPage() {
           added++;
         }
       }
-      setMuRows(result.length ? result : [{ ...EMPTY_MU }]);
+      setMuRows(result.length ? sortRowsAZ(result) : [{ ...EMPTY_MU }]);
       const notFound = resolved.filter((r) => r.product_name === "ไม่พบข้อมูล").length;
       toast({ title: "นำเข้าสำเร็จ", description: `เพิ่ม ${added} · อัปเดต ${updated}${notFound ? ` · ไม่พบ ${notFound}` : ""}` });
     } catch (e: any) {
@@ -2333,15 +2350,16 @@ export default function SRROrderB2BInternalPage() {
                           {isColShown("bstatus") && <td className="px-2 py-1 text-xs truncate" title={row.buying_status}>{row.buying_status || "-"}</td>}
                           {isColShown("vorigin") && <td className="px-2 py-1 text-xs text-muted-foreground truncate" title={row.vendor_origin}>{row.vendor_origin || "-"}</td>}
                           {isColShown("barcode") && <td className="px-1 py-1">
+                            {/* แก้ barcode ได้เฉพาะรายการที่ยังไม่พบ SKU (ไม่พบข้อมูล/แถวใหม่) */}
                             <Input
                               data-r={idx}
                               data-c={0}
                               value={row.barcode}
-                              readOnly={muReadOnly}
+                              readOnly={muReadOnly || !!row.sku_code}
                               onChange={(e) => updateMuField(idx, "barcode", e.target.value)}
                               onBlur={() => handleBarcodeLookup(idx)}
                               onKeyDown={(e) => handleCellKey(e, idx, 0)}
-                              className={`h-8 w-full ${muReadOnly ? "bg-muted/50" : ""}`}
+                              className={`h-8 w-full ${muReadOnly || row.sku_code ? "bg-muted/50" : ""}`}
                               placeholder="คีย์ barcode"
                             />
                           </td>}
@@ -2381,6 +2399,7 @@ export default function SRROrderB2BInternalPage() {
                               placeholder="auto"
                             />
                           </td>}
+                          {isColShown("pname_en") && <td className="px-2 py-1 text-xs truncate" title={row.product_name_en}>{row.product_name_en || "-"}</td>}
                           {isColShown("pname") && <td className="px-1 py-1">
                             <Input
                               data-r={idx}
