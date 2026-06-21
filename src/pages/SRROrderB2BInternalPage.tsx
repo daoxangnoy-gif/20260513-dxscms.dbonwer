@@ -1801,7 +1801,7 @@ export default function SRROrderB2BInternalPage() {
             </div>
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-left text-muted-foreground border-b">
+                <tr className="text-left text-muted-foreground border-b sticky top-0 z-20 bg-background shadow-[0_1px_0_0_hsl(var(--border))]">
                   <th className="px-3 py-1.5 font-medium">Doc</th>
                   <th className="px-3 py-1.5 font-medium">Brand</th>
                   <th className="px-3 py-1.5 font-medium w-24 text-right">Total SKU</th>
@@ -1916,7 +1916,7 @@ export default function SRROrderB2BInternalPage() {
             </div>
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-left text-muted-foreground border-b">
+                <tr className="text-left text-muted-foreground border-b sticky top-0 z-20 bg-background shadow-[0_1px_0_0_hsl(var(--border))]">
                   <th className="px-3 py-1.5 font-medium">Doc</th>
                   <th className="px-3 py-1.5 font-medium">Brand</th>
                   <th className="px-3 py-1.5 font-medium">Branch</th>
