@@ -66,8 +66,10 @@ type MUDoc = {
   branch: string;
   item_count: number;
   created_at: string;
+  updated_at: string | null; // เวลาแก้ไขล่าสุด
   need_date: string | null; // วันที่คาดว่าจะเบิก (DATE Need) — ใช้ออกฟอร์ม
-  logo_url: string | null;  // โลโก้มุมซ้ายบนของฟอร์ม
+  logo_url: string | null;  // โลโก้มุมซ้ายบนของฟอร์ม (หัวเอกสาร)
+  brand_logo_url: string | null; // โลโก้ของแบรนด์ (แสดงในตาราง — คนละอันกับหัวฟอร์ม)
   signed_pdf_url: string | null;     // ไฟล์ PDF ที่เซ็นแล้ว (ล่าสุด)
   signed_uploaded_at: string | null; // วันที่/เวลาอัปล่าสุด
   signed_count: number | null;       // จำนวนครั้งที่อัป
@@ -336,7 +338,7 @@ export default function SRROrderB2BInternalPage() {
     try {
       const { data, error } = await (supabase as any)
         .from("monthly_usage_doc")
-        .select("id, doc_no, doc_label, brand_name, branch, item_count, created_at, need_date, logo_url, signed_pdf_url, signed_uploaded_at, signed_count")
+        .select("id, doc_no, doc_label, brand_name, branch, item_count, created_at, updated_at, need_date, logo_url, brand_logo_url, signed_pdf_url, signed_uploaded_at, signed_count")
         .order("doc_no", { ascending: false });
       if (error) throw error;
       setDocs(data || []);
@@ -396,6 +398,23 @@ export default function SRROrderB2BInternalPage() {
       toast({ title: "อัปโลโก้ไม่สำเร็จ", description: e.message, variant: "destructive" });
     } finally {
       setLogoUploadingId(null);
+    }
+  };
+
+  // อัป/เปลี่ยนโลโก้ของแบรนด์ → เก็บลง monthly_usage_doc.brand_logo_url (แสดงในตาราง — คนละอันกับหัวฟอร์ม)
+  const handleBrandLogo = async (doc: MUDoc, file: File) => {
+    setBrandLogoUploadingId(doc.id);
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      const url = await uploadPicture(dataUrl);
+      const { error } = await (supabase as any).from("monthly_usage_doc").update({ brand_logo_url: url }).eq("id", doc.id);
+      if (error) throw error;
+      toast({ title: "อัปโลโก้แบรนด์แล้ว", description: doc.doc_label });
+      loadDocs();
+    } catch (e: any) {
+      toast({ title: "อัปโลโก้แบรนด์ไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setBrandLogoUploadingId(null);
     }
   };
 
@@ -485,7 +504,8 @@ export default function SRROrderB2BInternalPage() {
   const [needDate, setNeedDate] = useState(""); // yyyy-mm-dd
   const [editNeedDate, setEditNeedDate] = useState(""); // need_date เดิมของเอกสารที่กำลังแก้ (prefill)
   const [editLogoUrl, setEditLogoUrl] = useState(""); // logo_url เดิมของเอกสารที่กำลังแก้ (คงไว้ตอน save + ใช้ออกฟอร์ม)
-  const [logoUploadingId, setLogoUploadingId] = useState<string | null>(null); // doc_id ที่กำลังอัปโลโก้
+  const [logoUploadingId, setLogoUploadingId] = useState<string | null>(null); // doc_id ที่กำลังอัปโลโก้ (หัวฟอร์ม)
+  const [brandLogoUploadingId, setBrandLogoUploadingId] = useState<string | null>(null); // doc_id ที่กำลังอัปโลโก้แบรนด์
   const [signedUploadingId, setSignedUploadingId] = useState<string | null>(null); // doc_id ที่กำลังอัปไฟล์เซ็น
   const [printingId, setPrintingId] = useState<string | null>(null); // doc_id ที่กำลังเตรียมพิมพ์
   // Import Monthly Excel หลายแบรนด์พร้อมกัน
@@ -1976,10 +1996,11 @@ export default function SRROrderB2BInternalPage() {
               <thead className="sticky top-0 z-30">
                 <tr className="text-left text-muted-foreground [&_th]:bg-background [&_th]:shadow-[0_1px_0_0_hsl(var(--border))]">
                   <th className="px-3 py-1.5 font-medium">Doc</th>
+                  <th className="px-3 py-1.5 font-medium w-28">Logo</th>
                   <th className="px-3 py-1.5 font-medium">Brand</th>
                   <th className="px-3 py-1.5 font-medium w-24 text-right">Total SKU</th>
                   <th className="px-3 py-1.5 font-medium w-28 text-right">SKU No Odoo</th>
-                  <th className="px-3 py-1.5 font-medium w-36">วันที่</th>
+                  <th className="px-3 py-1.5 font-medium w-36">แก้ไขล่าสุด</th>
                   <th className="px-3 py-1.5 font-medium w-52">ไฟล์เซ็น (PDF)</th>
                   <th className="px-3 py-1.5 font-medium w-52" />
                 </tr>
@@ -1988,6 +2009,30 @@ export default function SRROrderB2BInternalPage() {
                 {docs.map((d) => (
                   <tr key={d.id} className="border-b last:border-0 hover:bg-muted/40">
                     <td className="px-3 py-1.5 font-medium">{d.doc_label}</td>
+                    <td className="px-3 py-1.5">
+                      <label
+                        className={cn(
+                          "inline-flex items-center justify-center h-12 w-20 border rounded cursor-pointer hover:bg-muted relative overflow-hidden bg-muted/20 shrink-0",
+                          d.brand_logo_url && "border-primary",
+                        )}
+                        title={d.brand_logo_url ? "เปลี่ยนโลโก้แบรนด์" : "อัปโลโก้แบรนด์"}
+                      >
+                        {brandLogoUploadingId === d.id ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : d.brand_logo_url ? (
+                          <img src={d.brand_logo_url} alt="brand logo" className="w-full h-full object-contain" />
+                        ) : (
+                          <ImageIcon className="w-5 h-5 text-muted-foreground" />
+                        )}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          disabled={brandLogoUploadingId === d.id}
+                          onChange={(e) => { const f = e.target.files?.[0]; if (f) handleBrandLogo(d, f); e.target.value = ""; }}
+                        />
+                      </label>
+                    </td>
                     <td className="px-3 py-1.5">{d.brand_name}</td>
                     <td className="px-3 py-1.5 text-right tabular-nums">{d.item_count}</td>
                     <td className="px-3 py-1.5 text-right tabular-nums">
@@ -1995,7 +2040,7 @@ export default function SRROrderB2BInternalPage() {
                         ? <span className="text-destructive font-medium">{noOdooMap[d.id]}</span>
                         : <span className="text-muted-foreground">0</span>}
                     </td>
-                    <td className="px-3 py-1.5 text-muted-foreground">{new Date(d.created_at).toLocaleString("th-TH")}</td>
+                    <td className="px-3 py-1.5 text-muted-foreground">{new Date(d.updated_at || d.created_at).toLocaleString("th-TH")}</td>
                     <td className="px-3 py-1.5">
                       <div className="flex items-center gap-2">
                         <label
@@ -2069,7 +2114,7 @@ export default function SRROrderB2BInternalPage() {
                 ))}
                 {docs.length === 0 && !docsLoading && (
                   <tr>
-                    <td colSpan={7} className="px-3 py-6 text-center text-muted-foreground">
+                    <td colSpan={8} className="px-3 py-6 text-center text-muted-foreground">
                       ยังไม่มีเอกสาร — กด "Monthly usage" เพื่อสร้างใหม่
                     </td>
                   </tr>
