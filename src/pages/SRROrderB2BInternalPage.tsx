@@ -1707,6 +1707,36 @@ export default function SRROrderB2BInternalPage() {
           </TabsList>
           <div className="flex items-center gap-2 pb-1">
             <button
+              onClick={openOrderBrandPicker}
+              title="Order (เลือกแบรนด์ แล้วคีย์ Order Qty)"
+              className="flex flex-col items-center justify-center gap-0.5 w-16 py-1 rounded-md border hover:bg-muted text-foreground"
+            >
+              <ShoppingCart className="w-4 h-4" />
+              <span className="text-[10px] leading-none">Order</span>
+            </button>
+          </div>
+        </div>
+
+        <TabsContent value="brand" className="flex-1 overflow-auto mt-0 p-4 bg-background space-y-4">
+          <Tabs value={brandSubTab} onValueChange={setBrandSubTab} className="space-y-4">
+            <TabsList className="h-8">
+              <TabsTrigger value="monthly" className="text-xs gap-1.5">
+                <BarChart3 className="w-3.5 h-3.5" /> Monthly usage
+              </TabsTrigger>
+              <TabsTrigger value="order" className="text-xs gap-1.5">
+                <ShoppingCart className="w-3.5 h-3.5" /> Order
+              </TabsTrigger>
+              {orderOpen && (
+                <TabsTrigger value="order_edit" className="text-xs gap-1.5">
+                  <ShoppingCart className="w-3.5 h-3.5" /> Order (แก้ไข)
+                </TabsTrigger>
+              )}
+            </TabsList>
+
+            <TabsContent value="monthly" className="mt-0 space-y-4">
+          {/* Toolbar ของ Monthly usage */}
+          <div className="flex items-center gap-2">
+            <button
               onClick={openDialog}
               title="List Brand"
               className="flex flex-col items-center justify-center gap-0.5 w-16 py-1 rounded-md border hover:bg-muted text-foreground"
@@ -1721,14 +1751,6 @@ export default function SRROrderB2BInternalPage() {
             >
               <BarChart3 className="w-4 h-4" />
               <span className="text-[10px] leading-none">Monthly</span>
-            </button>
-            <button
-              onClick={openOrderBrandPicker}
-              title="Order (เลือกแบรนด์ แล้วคีย์ Order Qty)"
-              className="flex flex-col items-center justify-center gap-0.5 w-16 py-1 rounded-md border hover:bg-muted text-foreground"
-            >
-              <ShoppingCart className="w-4 h-4" />
-              <span className="text-[10px] leading-none">Order</span>
             </button>
             <label
               title="Import Monthly Excel (หลายแบรนด์ในไฟล์เดียว)"
@@ -1752,25 +1774,7 @@ export default function SRROrderB2BInternalPage() {
               <FileSpreadsheet className="w-3.5 h-3.5" />
             </button>
           </div>
-        </div>
 
-        <TabsContent value="brand" className="flex-1 overflow-auto mt-0 p-4 bg-background space-y-4">
-          <Tabs value={brandSubTab} onValueChange={setBrandSubTab} className="space-y-4">
-            <TabsList className="h-8">
-              <TabsTrigger value="monthly" className="text-xs gap-1.5">
-                <BarChart3 className="w-3.5 h-3.5" /> Monthly usage
-              </TabsTrigger>
-              <TabsTrigger value="order" className="text-xs gap-1.5">
-                <ShoppingCart className="w-3.5 h-3.5" /> Order
-              </TabsTrigger>
-              {orderOpen && (
-                <TabsTrigger value="order_edit" className="text-xs gap-1.5">
-                  <ShoppingCart className="w-3.5 h-3.5" /> Order (แก้ไข)
-                </TabsTrigger>
-              )}
-            </TabsList>
-
-            <TabsContent value="monthly" className="mt-0 space-y-4">
           {/* Monthly usage docs */}
           <div className="border rounded-lg">
             <div className="px-3 py-2 border-b flex items-center gap-2 bg-muted/50">
