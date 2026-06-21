@@ -1705,16 +1705,6 @@ export default function SRROrderB2BInternalPage() {
               </TabsTrigger>
             )}
           </TabsList>
-          <div className="flex items-center gap-2 pb-1">
-            <button
-              onClick={openOrderBrandPicker}
-              title="Order (เลือกแบรนด์ แล้วคีย์ Order Qty)"
-              className="flex flex-col items-center justify-center gap-0.5 w-16 py-1 rounded-lg border-2 border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100 transition-colors"
-            >
-              <ShoppingCart className="w-4 h-4" />
-              <span className="text-[10px] leading-none font-medium">Order</span>
-            </button>
-          </div>
         </div>
 
         <TabsContent value="brand" className="flex-1 overflow-auto mt-0 p-4 bg-background space-y-4">
@@ -1900,9 +1890,14 @@ export default function SRROrderB2BInternalPage() {
               <ShoppingCart className="w-4 h-4 text-muted-foreground" />
               <span className="text-sm font-medium">เอกสาร Order</span>
               {orderDocsLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
-              <Button size="sm" className="h-7 gap-1.5 ml-auto" onClick={openOrderBrandPicker}>
-                <Plus className="w-3.5 h-3.5" /> สร้าง Order
-              </Button>
+              <button
+                onClick={openOrderBrandPicker}
+                title="สร้าง Order (เลือกแบรนด์ แล้วคีย์ Order Qty)"
+                className="ml-auto flex flex-col items-center justify-center gap-0.5 w-16 py-1 rounded-lg border-2 border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100 transition-colors"
+              >
+                <ShoppingCart className="w-4 h-4" />
+                <span className="text-[10px] leading-none font-medium">Order</span>
+              </button>
             </div>
             <table className="w-full text-sm">
               <thead>
