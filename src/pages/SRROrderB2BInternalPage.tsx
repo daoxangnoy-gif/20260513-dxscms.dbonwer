@@ -203,6 +203,15 @@ export default function SRROrderB2BInternalPage() {
 
   const removeRow = (idx: number) => setRows((prev) => prev.filter((_, i) => i !== idx));
 
+  // แทรกแถวใหม่ (ว่าง) ใต้แถวที่กด
+  const insertRowBelow = (idx: number) =>
+    setRows((prev) => {
+      const newCode = prev.length ? Math.max(...prev.map((r) => r.code)) + 1 : 1;
+      const next = [...prev];
+      next.splice(idx + 1, 0, { code: newCode, brand_name: "", branch: "" });
+      return next;
+    });
+
   const duplicateRow = (idx: number) =>
     setRows((prev) => {
       const src = prev[idx];
@@ -1998,6 +2007,9 @@ export default function SRROrderB2BInternalPage() {
                               <Copy className="w-4 h-4 text-muted-foreground" />
                             </Button>
                           )}
+                          <Button variant="ghost" size="icon" className="h-7 w-7" title="แทรกแถวใหม่ใต้แถวนี้" onClick={() => insertRowBelow(idx)}>
+                            <Plus className="w-4 h-4 text-primary" />
+                          </Button>
                           <Button variant="ghost" size="icon" className="h-7 w-7" title="ลบ" onClick={() => removeRow(idx)}>
                             <Trash2 className="w-4 h-4 text-destructive" />
                           </Button>
@@ -2008,7 +2020,9 @@ export default function SRROrderB2BInternalPage() {
                   {rows.length === 0 && (
                     <tr>
                       <td colSpan={SHOW_BRAND_BRANCH ? 4 : 3} className="px-2 py-6 text-center text-muted-foreground">
-                        ยังไม่มีข้อมูล กดปุ่ม + เพื่อเพิ่ม
+                        <Button variant="outline" size="sm" onClick={addRow} className="gap-1.5">
+                          <Plus className="w-4 h-4" /> เพิ่มแถวแรก
+                        </Button>
                       </td>
                     </tr>
                   )}
@@ -2021,10 +2035,6 @@ export default function SRROrderB2BInternalPage() {
                   )}
                 </tbody>
               </table>
-
-              <Button variant="outline" size="sm" onClick={addRow} className="mt-2 gap-1.5">
-                <Plus className="w-4 h-4" /> เพิ่ม
-              </Button>
             </div>
           )}
 
