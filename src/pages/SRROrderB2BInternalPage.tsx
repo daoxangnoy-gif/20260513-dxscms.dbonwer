@@ -464,6 +464,8 @@ export default function SRROrderB2BInternalPage() {
   const [orderBrandPickOpen, setOrderBrandPickOpen] = useState(false); // popup เลือก Brand ก่อนเข้า Order
   const [orderBrandLoading, setOrderBrandLoading] = useState(false);
   const [orderPreparing, setOrderPreparing] = useState(false);         // กำลังเตรียมข้อมูลหลังเลือก Brand
+  const [orderPickBrandId, setOrderPickBrandId] = useState<string | null>(null); // แบรนด์ที่ติกใน popup (ทีละ 1)
+  const [orderPickBranch, setOrderPickBranch] = useState("");          // Branch ที่พิมพ์ใน popup (บังคับกรอก)
 
   // ความกว้างคอลัมน์ (จำไว้ใน localStorage)
   const [colW, setColW] = useState<Record<string, number>>(() => {
@@ -1386,26 +1388,33 @@ export default function SRROrderB2BInternalPage() {
 
   // กดปุ่ม Order → เปิด popup เลือก Brand ก่อน
   const openOrderBrandPicker = async () => {
+    setOrderPickBrandId(null);
+    setOrderPickBranch("");
     setOrderBrandPickOpen(true);
     setOrderBrandLoading(true);
     await loadBrandOptions();
     setOrderBrandLoading(false);
   };
 
-  // เลือก Brand แล้ว → ตรวจเงื่อนไข แล้วเข้าหน้า Order
+  // ติก Brand + พิมพ์ Branch แล้วกด "ใส่จำนวน" → ตรวจเงื่อนไข แล้วเข้าหน้า Order
   // กฎ: ต้องมีเอกสาร Monthly Usage ของแบรนด์นั้นก่อน (ไม่มี = บล็อก)
-  //     ถ้าแบรนด์มี Order Doc อยู่แล้ว = เปิดแก้ไขเอกสารเดิม (1 Brand = 1 Order Doc)
-  const handleOrderBrandPick = async (brandId: string) => {
+  //     1 แบรนด์ + 1 Branch = 1 Order Doc (มีแล้ว = เปิดแก้ไขเอกสารเดิม)
+  const handleOrderBrandPick = async (brandId: string, branchInput: string) => {
     const b = brandOptions.find((o) => o.id === brandId);
     if (!b) return;
+    const branch = branchInput.trim();
+    if (!branch) {
+      toast({ title: "กรุณากรอก Branch ก่อน", variant: "destructive" });
+      return;
+    }
     setOrderPreparing(true);
     try {
-      // 1) แบรนด์นี้มี Order Doc แล้วหรือยัง → ถ้ามี เปิดแก้ไขเอกสารเดิม
+      // 1) แบรนด์ + Branch นี้มี Order Doc แล้วหรือยัง → ถ้ามี เปิดแก้ไขเอกสารเดิม
       const { data: existOrder } = await (supabase as any)
         .from("order_doc")
         .select("id, doc_no, doc_label, brand_name, branch, source_doc_id, item_count, created_at")
         .eq("brand_name", b.brand_name)
-        .eq("branch", b.branch)
+        .eq("branch", branch)
         .limit(1);
       if (existOrder && existOrder.length) {
         setOrderBrandPickOpen(false);
@@ -1413,12 +1422,11 @@ export default function SRROrderB2BInternalPage() {
         return;
       }
 
-      // 2) ต้องมี Monthly Usage Doc ของแบรนด์ก่อน
+      // 2) ต้องมี Monthly Usage Doc ของแบรนด์ก่อน (หาแบบ brand-level — Monthly เก็บ branch ว่าง)
       const { data: muDoc } = await (supabase as any)
         .from("monthly_usage_doc")
         .select("id")
         .eq("brand_name", b.brand_name)
-        .eq("branch", b.branch)
         .limit(1);
       if (!muDoc || !muDoc.length) {
         toast({
@@ -1455,7 +1463,7 @@ export default function SRROrderB2BInternalPage() {
       setOrderEditingDocId(null);
       setOrderEditingDocNo(null);
       setOrderEditingDocLabel(null);
-      setOrderBrand({ id: b.id!, brand_name: b.brand_name, branch: b.branch });
+      setOrderBrand({ id: b.id!, brand_name: b.brand_name, branch });
       setOrderSourceDocId(sourceDocId);
       setOrderRows(rows);
       setOrderReadOnly(false);
@@ -1874,6 +1882,7 @@ export default function SRROrderB2BInternalPage() {
                 <tr className="text-left text-muted-foreground border-b">
                   <th className="px-3 py-1.5 font-medium">Doc</th>
                   <th className="px-3 py-1.5 font-medium">Brand</th>
+                  <th className="px-3 py-1.5 font-medium">Branch</th>
                   <th className="px-3 py-1.5 font-medium w-24 text-right">รายการ</th>
                   <th className="px-3 py-1.5 font-medium w-36">วันที่</th>
                   <th className="px-3 py-1.5 font-medium w-48" />
@@ -1884,6 +1893,7 @@ export default function SRROrderB2BInternalPage() {
                   <tr key={d.id} className="border-b last:border-0 hover:bg-muted/40">
                     <td className="px-3 py-1.5 font-medium">{d.doc_label}</td>
                     <td className="px-3 py-1.5">{d.brand_name}</td>
+                    <td className="px-3 py-1.5">{d.branch || "-"}</td>
                     <td className="px-3 py-1.5 text-right tabular-nums">{d.item_count}</td>
                     <td className="px-3 py-1.5 text-muted-foreground">{new Date(d.created_at).toLocaleString("th-TH")}</td>
                     <td className="px-3 py-1.5">
@@ -1903,7 +1913,7 @@ export default function SRROrderB2BInternalPage() {
                 ))}
                 {orderDocs.length === 0 && !orderDocsLoading && (
                   <tr>
-                    <td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">
+                    <td colSpan={6} className="px-3 py-6 text-center text-muted-foreground">
                       ยังไม่มี Order — กด "สร้าง Order" เพื่อเลือกแบรนด์
                     </td>
                   </tr>
@@ -2402,9 +2412,10 @@ export default function SRROrderB2BInternalPage() {
           ) : (
             <div className="space-y-3">
               <div className="space-y-1.5">
-                <Label className="text-xs">Brand</Label>
+                <Label className="text-xs">Brand / Branch</Label>
                 <div className="h-9 flex items-center px-3 border rounded-md bg-muted/40 text-sm">
-                  {orderBrand?.brand_name || "—"}
+                  <span className="font-medium">{orderBrand?.brand_name || "—"}</span>
+                  {orderBrand?.branch && <span className="ml-1.5 text-muted-foreground">· {orderBrand.branch}</span>}
                   <span className="ml-2 text-[11px] text-muted-foreground">(อ้างอิงรายการจาก Monthly Usage — แก้ได้แค่ Order Qty)</span>
                 </div>
               </div>
@@ -2558,7 +2569,7 @@ export default function SRROrderB2BInternalPage() {
         </DialogContent>
       </Dialog>
 
-      {/* เลือก Brand ก่อนเข้า Order */}
+      {/* เลือก Brand (ติกทีละ 1) + พิมพ์ Branch ก่อนเข้า Order */}
       <Dialog open={orderBrandPickOpen} onOpenChange={(o) => { if (!orderPreparing) setOrderBrandPickOpen(o); }}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
@@ -2569,25 +2580,49 @@ export default function SRROrderB2BInternalPage() {
               <Loader2 className="w-6 h-6 animate-spin text-primary" />
             </div>
           ) : (
-            <div className="relative">
-              <Command>
+            <div className="relative space-y-3">
+              <Command className="border rounded-md">
                 <CommandInput placeholder="ค้นหา Brand..." />
                 <CommandList>
                   <CommandEmpty>{brandOptions.length === 0 ? "ยังไม่มี Brand — เพิ่มใน List Brand ก่อน" : "ไม่พบ Brand"}</CommandEmpty>
                   <CommandGroup>
-                    {brandOptions.map((b) => (
-                      <CommandItem
-                        key={b.id}
-                        value={b.brand_name}
-                        disabled={orderPreparing}
-                        onSelect={() => handleOrderBrandPick(b.id!)}
-                      >
-                        {b.brand_name}
-                      </CommandItem>
-                    ))}
+                    {brandOptions.map((b) => {
+                      const checked = orderPickBrandId === b.id;
+                      return (
+                        <CommandItem
+                          key={b.id}
+                          value={b.brand_name}
+                          disabled={orderPreparing}
+                          onSelect={() => setOrderPickBrandId(checked ? null : b.id!)}
+                        >
+                          <span
+                            className={cn(
+                              "mr-2 flex h-4 w-4 items-center justify-center rounded border shrink-0",
+                              checked ? "bg-primary border-primary text-primary-foreground" : "border-muted-foreground/40",
+                            )}
+                          >
+                            {checked && <Check className="h-3 w-3" />}
+                          </span>
+                          {b.brand_name}
+                        </CommandItem>
+                      );
+                    })}
                   </CommandGroup>
                 </CommandList>
               </Command>
+
+              {/* Branch — Enable เมื่อติกแบรนด์แล้ว (บังคับกรอก) */}
+              <div className="space-y-1.5">
+                <Label className="text-xs">Branch <span className="text-destructive">*</span></Label>
+                <Input
+                  value={orderPickBranch}
+                  onChange={(e) => setOrderPickBranch(e.target.value)}
+                  disabled={!orderPickBrandId || orderPreparing}
+                  className="h-9"
+                  placeholder={orderPickBrandId ? "พิมพ์ชื่อ Branch" : "ติกเลือกแบรนด์ก่อน"}
+                />
+              </div>
+
               {orderPreparing && (
                 <div className="absolute inset-0 flex items-center justify-center bg-background/60">
                   <Loader2 className="w-6 h-6 animate-spin text-primary" />
@@ -2596,6 +2631,18 @@ export default function SRROrderB2BInternalPage() {
             </div>
           )}
           <p className="text-[11px] text-muted-foreground">แบรนด์ต้องมีเอกสาร Monthly Usage ก่อน จึงจะ Order ได้</p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOrderBrandPickOpen(false)} disabled={orderPreparing}>
+              ยกเลิก
+            </Button>
+            <Button
+              onClick={() => { if (orderPickBrandId) handleOrderBrandPick(orderPickBrandId, orderPickBranch); }}
+              disabled={!orderPickBrandId || !orderPickBranch.trim() || orderPreparing}
+            >
+              {orderPreparing && <Loader2 className="w-4 h-4 animate-spin mr-1.5" />}
+              ใส่จำนวน
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
