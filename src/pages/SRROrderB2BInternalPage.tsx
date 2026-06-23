@@ -458,6 +458,39 @@ export default function SRROrderB2BInternalPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // แก้ไขแบรนด์ของเอกสาร Monthly usage (เลือกจาก List Brand ให้สะกดตรงกัน) — อัปเดต brand_name + doc_label
+  const [brandEditId, setBrandEditId] = useState<string | null>(null);
+  const changeDocBrand = async (doc: MUDoc, opt: BrandRow) => {
+    const newName = opt.brand_name.trim();
+    setBrandEditId(null);
+    if (!newName || newName === doc.brand_name) return;
+    try {
+      // กฎ 1 Brand = 1 Doc — กันชนกับเอกสารแบรนด์เดียวกันที่มีอยู่แล้ว
+      const { data: exist } = await (supabase as any)
+        .from("monthly_usage_doc").select("id, doc_label").eq("brand_name", newName).neq("id", doc.id).limit(1);
+      if (exist && exist.length) {
+        toast({ title: "แบรนด์นี้มีเอกสารแล้ว", description: `"${newName}" มีเอกสาร ${exist[0].doc_label} อยู่แล้ว`, variant: "destructive" });
+        return;
+      }
+      // doc_label = "stamp - brandname" → แทนที่เฉพาะส่วนชื่อแบรนด์
+      const dash = doc.doc_label.indexOf(" - ");
+      const newLabel = dash >= 0 ? `${doc.doc_label.slice(0, dash)} - ${newName}` : `${doc.doc_label} - ${newName}`;
+      const { error } = await (supabase as any)
+        .from("monthly_usage_doc")
+        .update({ brand_id: opt.id || null, brand_name: newName, doc_label: newLabel, updated_at: new Date().toISOString() })
+        .eq("id", doc.id);
+      if (error) throw error;
+      toast({ title: "แก้ไขแบรนด์แล้ว", description: `${doc.brand_name || "-"} → ${newName}` });
+      loadDocs();
+    } catch (e: any) {
+      toast({ title: "แก้ไขแบรนด์ไม่สำเร็จ", description: e.message, variant: "destructive" });
+    }
+  };
+  // รายชื่อแบรนด์แบบไม่ซ้ำ (ใช้ใน dropdown แก้ไขแบรนด์)
+  const distinctBrandOptions = Array.from(
+    new Map(brandOptions.filter((b) => b.brand_name.trim()).map((b) => [b.brand_name.trim().toLowerCase(), b])).values(),
+  );
+
   const deleteDoc = async (doc: MUDoc) => {
     if (!window.confirm(`ลบเอกสาร "${doc.doc_label}" และรายการทั้งหมด?`)) return;
     try {
@@ -2401,7 +2434,33 @@ export default function SRROrderB2BInternalPage() {
                         />
                       </label>
                     </td>
-                    <td className="px-3 py-1.5">{d.brand_name}</td>
+                    <td className="px-3 py-1.5">
+                      <Popover open={brandEditId === d.id} onOpenChange={(o) => setBrandEditId(o ? d.id : null)}>
+                        <PopoverTrigger asChild>
+                          <button className="inline-flex items-center gap-1 hover:underline decoration-dotted underline-offset-2" title="แก้ไขแบรนด์ (เลือกจาก List Brand)">
+                            {d.brand_name || <span className="text-muted-foreground">-</span>}
+                            <Pencil className="w-3 h-3 text-muted-foreground" />
+                          </button>
+                        </PopoverTrigger>
+                        <PopoverContent align="start" className="w-64 p-0">
+                          <Command>
+                            <CommandInput placeholder="ค้นหาแบรนด์..." />
+                            <CommandList>
+                              <CommandEmpty>{distinctBrandOptions.length === 0 ? "ยังไม่มี Brand — เพิ่มใน List Brand ก่อน" : "ไม่พบ Brand"}</CommandEmpty>
+                              <CommandGroup>
+                                {distinctBrandOptions.map((b) => (
+                                  <CommandItem key={b.brand_name} value={b.brand_name} onSelect={() => changeDocBrand(d, b)}>
+                                    <Check className={cn("mr-2 h-4 w-4", b.brand_name.trim().toLowerCase() === d.brand_name.trim().toLowerCase() ? "opacity-100" : "opacity-0")} />
+                                    <span className="flex-1 truncate">{b.brand_name}</span>
+                                    {b.brand_group && <span className="ml-2 text-[11px] text-muted-foreground shrink-0">{b.brand_group}</span>}
+                                  </CommandItem>
+                                ))}
+                              </CommandGroup>
+                            </CommandList>
+                          </Command>
+                        </PopoverContent>
+                      </Popover>
+                    </td>
                     <td className="px-3 py-1.5 text-right tabular-nums">{d.item_count}</td>
                     <td className="px-3 py-1.5 text-right tabular-nums">
                       {(noOdooMap[d.id] || 0) > 0
