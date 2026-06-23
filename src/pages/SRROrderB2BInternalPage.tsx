@@ -38,7 +38,7 @@ async function uploadPicture(dataUrl: string): Promise<string> {
   return supabase.storage.from(MU_BUCKET).getPublicUrl(path).data.publicUrl;
 }
 
-type BrandRow = { id?: string; code: number; brand_name: string; branch: string };
+type BrandRow = { id?: string; code: number; brand_name: string; branch: string; brand_group: string };
 
 type MonthlyUsageForm = {
   barcode: string;
@@ -249,7 +249,7 @@ export default function SRROrderB2BInternalPage() {
     try {
       const { data, error } = await (supabase as any)
         .from("brand")
-        .select("id, code, brand_name, branch")
+        .select("id, code, brand_name, branch, brand_group")
         .order("code", { ascending: true });
       if (error) throw error;
       setRows(
@@ -258,6 +258,7 @@ export default function SRROrderB2BInternalPage() {
           code: r.code,
           brand_name: r.brand_name ?? "",
           branch: r.branch ?? "",
+          brand_group: r.brand_group ?? "",
         })),
       );
     } catch (e: any) {
@@ -268,7 +269,7 @@ export default function SRROrderB2BInternalPage() {
   };
 
   const addRow = () => {
-    setRows((prev) => [...prev, { code: prev.length ? Math.max(...prev.map((r) => r.code)) + 1 : 1, brand_name: "", branch: "" }]);
+    setRows((prev) => [...prev, { code: prev.length ? Math.max(...prev.map((r) => r.code)) + 1 : 1, brand_name: "", branch: "", brand_group: "" }]);
   };
 
   const removeRow = (idx: number) => setRows((prev) => prev.filter((_, i) => i !== idx));
@@ -278,7 +279,7 @@ export default function SRROrderB2BInternalPage() {
     setRows((prev) => {
       const newCode = prev.length ? Math.max(...prev.map((r) => r.code)) + 1 : 1;
       const next = [...prev];
-      next.splice(idx + 1, 0, { code: newCode, brand_name: "", branch: "" });
+      next.splice(idx + 1, 0, { code: newCode, brand_name: "", branch: "", brand_group: "" });
       return next;
     });
 
@@ -286,13 +287,13 @@ export default function SRROrderB2BInternalPage() {
     setRows((prev) => {
       const src = prev[idx];
       const newCode = prev.length ? Math.max(...prev.map((r) => r.code)) + 1 : 1;
-      const copy: BrandRow = { code: newCode, brand_name: src.brand_name, branch: src.branch };
+      const copy: BrandRow = { code: newCode, brand_name: src.brand_name, branch: src.branch, brand_group: src.brand_group };
       const next = [...prev];
       next.splice(idx + 1, 0, copy);
       return next;
     });
 
-  const updateRow = (idx: number, field: "brand_name" | "branch", value: string) =>
+  const updateRow = (idx: number, field: "brand_name" | "branch" | "brand_group", value: string) =>
     setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, [field]: value } : r)));
 
   const q = search.trim().toLowerCase();
@@ -303,6 +304,7 @@ export default function SRROrderB2BInternalPage() {
         !q ||
         row.brand_name.toLowerCase().includes(q) ||
         row.branch.toLowerCase().includes(q) ||
+        row.brand_group.toLowerCase().includes(q) ||
         String(row.code).includes(q),
     );
 
@@ -318,7 +320,7 @@ export default function SRROrderB2BInternalPage() {
 
     setSaving(true);
     try {
-      const payload = rows.map((r) => ({ code: r.code, brand_name: r.brand_name.trim(), branch: r.branch.trim() }));
+      const payload = rows.map((r) => ({ code: r.code, brand_name: r.brand_name.trim(), branch: r.branch.trim(), brand_group: r.brand_group.trim() }));
       // upsert แถวที่เหลือในจอ
       if (payload.length) {
         const { error } = await (supabase as any).from("brand").upsert(payload, { onConflict: "code" });
@@ -734,7 +736,7 @@ export default function SRROrderB2BInternalPage() {
     try {
       const { data, error } = await (supabase as any)
         .from("brand")
-        .select("id, code, brand_name, branch")
+        .select("id, code, brand_name, branch, brand_group")
         .order("code", { ascending: true });
       if (error) throw error;
       const opts = (data || []).map((r: any) => ({
@@ -742,6 +744,7 @@ export default function SRROrderB2BInternalPage() {
         code: r.code,
         brand_name: r.brand_name ?? "",
         branch: r.branch ?? "",
+        brand_group: r.brand_group ?? "",
       }));
       setBrandOptions(opts);
       return opts;
@@ -2599,12 +2602,20 @@ export default function SRROrderB2BInternalPage() {
                 />
               </div>
 
+              {/* รายชื่อ Group ที่มีอยู่แล้ว — ช่วยพิมพ์ซ้ำให้ตรงกัน */}
+              <datalist id="brand-group-options">
+                {[...new Set(rows.map((r) => r.brand_group.trim()).filter(Boolean))].map((g) => (
+                  <option key={g} value={g} />
+                ))}
+              </datalist>
+
               <table className="w-full text-sm">
                 <thead className="sticky top-0 bg-muted">
                   <tr className="text-left">
                     <th className="px-2 py-1.5 w-20 font-medium">Code</th>
                     <th className="px-2 py-1.5 font-medium">Brand name</th>
                     {SHOW_BRAND_BRANCH && <th className="px-2 py-1.5 font-medium">Branch</th>}
+                    <th className="px-2 py-1.5 font-medium">Group</th>
                     <th className="px-2 py-1.5 w-20" />
                   </tr>
                 </thead>
@@ -2631,6 +2642,15 @@ export default function SRROrderB2BInternalPage() {
                         </td>
                       )}
                       <td className="px-2 py-1">
+                        <Input
+                          value={row.brand_group}
+                          onChange={(e) => updateRow(idx, "brand_group", e.target.value)}
+                          className="h-8"
+                          placeholder="Group"
+                          list="brand-group-options"
+                        />
+                      </td>
+                      <td className="px-2 py-1">
                         <div className="flex items-center gap-0.5">
                           {SHOW_BRAND_DUPLICATE && (
                             <Button variant="ghost" size="icon" className="h-7 w-7" title="Duplicate" onClick={() => duplicateRow(idx)}>
@@ -2649,7 +2669,7 @@ export default function SRROrderB2BInternalPage() {
                   ))}
                   {rows.length === 0 && (
                     <tr>
-                      <td colSpan={SHOW_BRAND_BRANCH ? 4 : 3} className="px-2 py-6 text-center text-muted-foreground">
+                      <td colSpan={SHOW_BRAND_BRANCH ? 5 : 4} className="px-2 py-6 text-center text-muted-foreground">
                         <Button variant="outline" size="sm" onClick={addRow} className="gap-1.5">
                           <Plus className="w-4 h-4" /> เพิ่มแถวแรก
                         </Button>
@@ -2658,7 +2678,7 @@ export default function SRROrderB2BInternalPage() {
                   )}
                   {rows.length > 0 && visibleRows.length === 0 && (
                     <tr>
-                      <td colSpan={SHOW_BRAND_BRANCH ? 4 : 3} className="px-2 py-6 text-center text-muted-foreground">
+                      <td colSpan={SHOW_BRAND_BRANCH ? 5 : 4} className="px-2 py-6 text-center text-muted-foreground">
                         ไม่พบรายการที่ค้นหา
                       </td>
                     </tr>
