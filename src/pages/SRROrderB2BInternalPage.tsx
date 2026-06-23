@@ -3581,31 +3581,33 @@ const PO_RECEIVE_COLS = [
 let poDataCache: { rows: PORow[]; brands: string[] } | null = null;
 
 // meta คอลัมน์ตาราง PO (def = แสดงค่าเริ่มต้นตามไฟล์ template) — brands แทรกก่อน Total qty (def hidden)
-type POColMeta = { key: string; label: string; def: boolean; thCls?: string; tdCls?: string };
+type POColMeta = { key: string; label: string; def: boolean; w: number; thCls?: string; tdCls?: string };
 const PO_FIXED_COLS: POColMeta[] = [
-  { key: "division", label: "Division", def: true, tdCls: "text-muted-foreground" },
-  { key: "department", label: "Department", def: true, tdCls: "text-muted-foreground" },
-  { key: "remark", label: "Remark", def: false, tdCls: "text-muted-foreground" },
-  { key: "action", label: "Action", def: false, thCls: "text-center", tdCls: "text-center text-muted-foreground/50" },
-  { key: "sku", label: "SKU", def: false },
-  { key: "vendor", label: "Vendor (code-name-currency)", def: true },
-  { key: "vendor_origin", label: "Vendor origin", def: true, tdCls: "text-muted-foreground" },
-  { key: "po_number", label: "PO NUMBER", def: false, thCls: "text-muted-foreground/70", tdCls: "text-muted-foreground/80" },
-  { key: "po_date", label: "PO DATE", def: false, thCls: "text-muted-foreground/70", tdCls: "text-muted-foreground/80" },
-  { key: "po_status", label: "PO Status", def: false, thCls: "text-muted-foreground/70", tdCls: "text-muted-foreground/80" },
-  { key: "po_qty", label: "PO QTY", def: false, thCls: "text-right text-muted-foreground/70", tdCls: "text-right tabular-nums text-muted-foreground/80" },
-  { key: "rec_po", label: "REC PO", def: false, thCls: "text-right text-muted-foreground/70", tdCls: "text-right tabular-nums text-muted-foreground/80" },
-  { key: "moq_1x", label: "1x", def: false, thCls: "text-right", tdCls: "text-right tabular-nums" },
-  { key: "pocost", label: "Pocost", def: false, thCls: "text-right", tdCls: "text-right tabular-nums" },
-  { key: "id", label: "ID", def: true, tdCls: "font-medium" },
-  { key: "barcode", label: "Barcode", def: true },
-  { key: "product_name_en", label: "Product name EN", def: true },
-  { key: "stock_dc", label: "Stock DC", def: true, thCls: "text-right", tdCls: "text-right tabular-nums" },
-  { key: "stock_dc_kr", label: "Stock DC (KR)", def: true, thCls: "text-right", tdCls: "text-right tabular-nums" },
-  { key: "total", label: "Total qty", def: true, thCls: "text-right bg-emerald-50", tdCls: "text-right tabular-nums font-semibold bg-emerald-50/40" },
-  { key: "diff", label: "DIFF", def: false, thCls: "text-right text-muted-foreground/70", tdCls: "text-right tabular-nums text-muted-foreground/40" },
+  { key: "division", label: "Division", def: true, w: 110, tdCls: "text-muted-foreground" },
+  { key: "department", label: "Department", def: true, w: 140, tdCls: "text-muted-foreground" },
+  { key: "remark", label: "Remark", def: false, w: 80, tdCls: "text-muted-foreground" },
+  { key: "action", label: "Action", def: false, w: 70, thCls: "text-center", tdCls: "text-center text-muted-foreground/50" },
+  { key: "sku", label: "SKU", def: false, w: 120 },
+  { key: "vendor", label: "Vendor (code-name-currency)", def: true, w: 360 },
+  { key: "vendor_origin", label: "Vendor origin", def: true, w: 110, tdCls: "text-muted-foreground" },
+  { key: "po_number", label: "PO NUMBER", def: false, w: 120, thCls: "text-muted-foreground/70", tdCls: "text-muted-foreground/80" },
+  { key: "po_date", label: "PO DATE", def: false, w: 110, thCls: "text-muted-foreground/70", tdCls: "text-muted-foreground/80" },
+  { key: "po_status", label: "PO Status", def: false, w: 100, thCls: "text-muted-foreground/70", tdCls: "text-muted-foreground/80" },
+  { key: "po_qty", label: "PO QTY", def: false, w: 80, thCls: "text-right text-muted-foreground/70", tdCls: "text-right tabular-nums text-muted-foreground/80" },
+  { key: "rec_po", label: "REC PO", def: false, w: 80, thCls: "text-right text-muted-foreground/70", tdCls: "text-right tabular-nums text-muted-foreground/80" },
+  { key: "moq_1x", label: "1x", def: false, w: 70, thCls: "text-right", tdCls: "text-right tabular-nums" },
+  { key: "pocost", label: "Pocost", def: false, w: 90, thCls: "text-right", tdCls: "text-right tabular-nums" },
+  { key: "id", label: "ID", def: true, w: 120, tdCls: "font-medium" },
+  { key: "barcode", label: "Barcode", def: true, w: 130 },
+  { key: "product_name_en", label: "Product name EN", def: true, w: 240 },
+  { key: "stock_dc", label: "Stock DC", def: true, w: 90, thCls: "text-right", tdCls: "text-right tabular-nums" },
+  { key: "stock_dc_kr", label: "Stock DC (KR)", def: true, w: 110, thCls: "text-right", tdCls: "text-right tabular-nums" },
+  { key: "total", label: "Total qty", def: true, w: 90, thCls: "text-right bg-emerald-50", tdCls: "text-right tabular-nums font-semibold bg-emerald-50/40" },
+  { key: "diff", label: "DIFF", def: false, w: 80, thCls: "text-right text-muted-foreground/70", tdCls: "text-right tabular-nums text-muted-foreground/40" },
 ];
+const PO_BRAND_W = 90; // ความกว้างเริ่มต้นของคอลัมน์แบรนด์
 const PO_VIS_LS = "po_vis_cols";
+const PO_W_LS = "po_col_widths";
 const poDefaultVis = () => new Set(PO_FIXED_COLS.filter((c) => c.def).map((c) => c.key));
 
 // ค่าที่จะแสดงในแต่ละ cell ตาม key
@@ -3627,7 +3629,7 @@ const poCellValue = (key: string, r: PORow): React.ReactNode => {
     case "pocost": return r.pocost ?? "-";
     case "id": return r.id || "-";
     case "barcode": return r.barcode || "-";
-    case "product_name_en": return <span className="block max-w-[260px] truncate" title={r.product_name_en}>{r.product_name_en || "-"}</span>;
+    case "product_name_en": return <span className="block truncate" title={r.product_name_en}>{r.product_name_en || "-"}</span>;
     case "stock_dc": return r.stock_dc ?? "-";
     case "stock_dc_kr": return r.stock_dc_kr ?? "-";
     case "total": return r.total;
@@ -3657,6 +3659,34 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   });
   useEffect(() => { try { localStorage.setItem(PO_VIS_LS, JSON.stringify([...visCols])); } catch { /* ignore */ } }, [visCols]);
   const toggleCol = (key: string) => setVisCols((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+
+  // ---- ความกว้างคอลัมน์ (ลากยืด/หดหัวคอลัมน์ได้) — จำค่าใน localStorage ----
+  const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
+    try { const raw = localStorage.getItem(PO_W_LS); if (raw) return JSON.parse(raw); } catch { /* ignore */ }
+    return {};
+  });
+  useEffect(() => { try { localStorage.setItem(PO_W_LS, JSON.stringify(colWidths)); } catch { /* ignore */ } }, [colWidths]);
+  const defaultW = (key: string) => (key.startsWith("brand:") ? PO_BRAND_W : (PO_FIXED_COLS.find((c) => c.key === key)?.w ?? 110));
+  const widthOf = (key: string) => colWidths[key] ?? defaultW(key);
+  const resizing = useRef<{ key: string; startX: number; startW: number } | null>(null);
+  const startResize = (e: React.MouseEvent, key: string) => {
+    e.preventDefault(); e.stopPropagation();
+    resizing.current = { key, startX: e.clientX, startW: widthOf(key) };
+    const onMove = (ev: MouseEvent) => {
+      const r = resizing.current; if (!r) return;
+      const w = Math.max(50, r.startW + (ev.clientX - r.startX));
+      setColWidths((prev) => ({ ...prev, [r.key]: w }));
+    };
+    const onUp = () => {
+      resizing.current = null;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = ""; document.body.style.userSelect = "";
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    document.body.style.cursor = "col-resize"; document.body.style.userSelect = "none";
+  };
 
   // กู้ข้อมูล PO จาก cache ตอน mount (ข้ามการสลับ tab/หน้า)
   useEffect(() => {
@@ -4037,18 +4067,31 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         </div>
 
         <div className="border rounded-lg flex-1 overflow-auto min-h-0">
-          <table className="text-sm border-collapse whitespace-nowrap">
+          <table className="text-sm border-collapse whitespace-nowrap table-fixed" style={{ width: 48 + visibleCols.reduce((s, c) => s + widthOf(c.key), 0) }}>
+            <colgroup>
+              <col style={{ width: 48 }} />
+              {visibleCols.map((c) => (
+                <col key={c.key} style={{ width: widthOf(c.key) }} />
+              ))}
+            </colgroup>
             <thead className="sticky top-0 z-30">
               <tr className="text-left text-muted-foreground [&_th]:bg-background [&_th]:shadow-[0_1px_0_0_hsl(var(--border))] [&_th]:px-3 [&_th]:py-1.5 [&_th]:font-medium">
                 <th>#</th>
                 {visibleCols.map((c) => (
-                  <th key={c.key} className={c.thCls}>{c.label}</th>
+                  <th key={c.key} className={cn("relative overflow-hidden", c.thCls)}>
+                    <span className="block truncate pr-1.5">{c.label}</span>
+                    <span
+                      onMouseDown={(e) => startResize(e, c.key)}
+                      title="ลากเพื่อปรับความกว้าง"
+                      className="absolute top-0 right-0 z-10 h-full w-1.5 cursor-col-resize hover:bg-primary/50"
+                    />
+                  </th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {filteredPoRows.map((r, i) => (
-                <tr key={r.id || i} className="border-b last:border-0 hover:bg-muted/40 [&_td]:px-3 [&_td]:py-1.5">
+                <tr key={r.id || i} className="border-b last:border-0 hover:bg-muted/40 [&_td]:px-3 [&_td]:py-1.5 [&_td]:overflow-hidden [&_td]:text-ellipsis">
                   <td className="text-muted-foreground tabular-nums">{i + 1}</td>
                   {visibleCols.map((c) => (
                     <td key={c.key} className={c.tdCls}>{c.brand ? (r.byBrand.get(c.brand) ?? "") : poCellValue(c.key, r)}</td>
