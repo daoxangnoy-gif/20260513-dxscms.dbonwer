@@ -3658,6 +3658,7 @@ type PORow = {
   division: string;
   department: string;
   sku: string;
+  inDM: boolean;         // พบใน data_master หรือไม่ (ใช้คำนวณ Remark/Action)
   vendor_code: string;
   vendor_name: string;
   vendor_currency: string;
@@ -3709,8 +3710,8 @@ type POColMeta = { key: string; label: string; def: boolean; w: number; thCls?: 
 const PO_FIXED_COLS: POColMeta[] = [
   { key: "division", label: "Division", def: true, w: 110, tdCls: "text-muted-foreground" },
   { key: "department", label: "Department", def: true, w: 140, tdCls: "text-muted-foreground" },
-  { key: "remark", label: "Remark", def: false, w: 80, tdCls: "text-muted-foreground" },
-  { key: "action", label: "Action", def: false, w: 70, thCls: "text-center", tdCls: "text-center text-muted-foreground/50" },
+  { key: "remark", label: "Remark", def: true, w: 230, tdCls: "text-muted-foreground" },
+  { key: "action", label: "Action", def: true, w: 300, tdCls: "text-muted-foreground" },
   { key: "sku", label: "SKU", def: false, w: 120 },
   { key: "vendor_code", label: "Vendor code", def: true, w: 120 },
   { key: "vendor_name", label: "Vendor name", def: true, w: 220 },
@@ -3732,10 +3733,41 @@ const PO_FIXED_COLS: POColMeta[] = [
   { key: "diff", label: "DIFF", def: false, w: 80, thCls: "text-right text-muted-foreground/70", tdCls: "text-right tabular-nums text-muted-foreground/40" },
 ];
 const PO_BRAND_W = 90; // ความกว้างเริ่มต้นของคอลัมน์แบรนด์
-const PO_VIS_LS = "po_vis_cols_v3"; // bump version → ล้างค่าเก่าใน localStorage ให้ default ใหม่ทำงาน
-const PO_VIS_MIGRATED = "po_vis_migrated_v2"; // ล้างค่าคอลัมน์เก่าทิ้งครั้งเดียวตอนโหลดหน้าจริง
+const PO_VIS_LS = "po_vis_cols_v4"; // bump version → ล้างค่าเก่าใน localStorage ให้ default ใหม่ทำงาน
+const PO_VIS_MIGRATED = "po_vis_migrated_v3"; // ล้างค่าคอลัมน์เก่าทิ้งครั้งเดียวตอนโหลดหน้าจริง
 const PO_W_LS = "po_col_widths";
-const PO_VENDOR_OV_LS = "po_vendor_overrides_v1"; // override vendor code ที่ผู้ใช้คีย์ไว้ (key = sku)
+const PO_VENDOR_OV_LS = "po_vendor_overrides_v2"; // override vendor code ที่ผู้ใช้คีย์ไว้ (key = sku)
+
+// vendor code ที่ถือว่า "ผู้สนองในระบบผิด" (ผูกผิดคน)
+const PO_WRONG_VENDOR_CODES = new Set(["DC0288", "DC0504", "DC0426", "DC0287", "DC0290", "DC0188", "DC0505", "DC0506"]);
+// vendor code ที่ถือว่า "ไม่ได้ผูกผู้สนอง"
+const PO_EMPTY_VENDOR_VALUES = new Set(["", "0", "0-0", "-"]);
+
+// คำนวณ Remark + Action ตามเงื่อนไข (priority: ไม่พบ DM > ผู้สนองผิด > ไม่ผูก > อิมพอด > ครบถ้วน)
+function getPoRemarkAction(r: PORow): { remark: string; action: string } {
+  if (!r.inDM) return {
+    remark: "รหัสสินค้าไม่มีข้อมูลในระบบ",
+    action: "ร้านอาหารหาบา หรือ รูปสินค้าให้ (ถ้าเป็นรหัสสินค้าจริงแล้ว แปลว่าไม่มีในระบบ ให้ประสารกับทีมจัดชื้อ หาแหล่งชื้อก่อน)",
+  };
+  const vc = r.vendor_code.trim();
+  if (PO_WRONG_VENDOR_CODES.has(vc)) return {
+    remark: "ผู้สนองในระบบ ผิด",
+    action: "จัดชื้อใส่ผู้สนอง และ ผูกในระบบ",
+  };
+  if (PO_EMPTY_VENDOR_VALUES.has(vc)) return {
+    remark: "รายการสินค้าในระบบ ไม่ได้ผูกผู้สนอง",
+    action: "จัดชื้อใส่ผู้สนอง และ ผูกในระบบ",
+  };
+  const origin = r.vendor_origin.trim().toLowerCase();
+  if (origin !== "laos" && origin !== "thailand") return {
+    remark: "สินค้าอิมพอด",
+    action: "เบิกจากดีชี หากไม่มี ขอชื้อในลาวก่อน",
+  };
+  return {
+    remark: "ข้อมูลครบถ้วน",
+    action: "Spc สั่งสินค้า และ ติดตาม",
+  };
+}
 const poDefaultVis = () => new Set(PO_FIXED_COLS.filter((c) => c.def).map((c) => c.key));
 
 // ค่าที่จะแสดงในแต่ละ cell ตาม key
@@ -3743,8 +3775,8 @@ const poCellValue = (key: string, r: PORow): React.ReactNode => {
   switch (key) {
     case "division": return r.division || "-";
     case "department": return r.department || "-";
-    case "remark": return "-";
-    case "action": return "-";
+    case "remark": return <span className="block truncate" title={getPoRemarkAction(r).remark}>{getPoRemarkAction(r).remark}</span>;
+    case "action": return <span className="block truncate" title={getPoRemarkAction(r).action}>{getPoRemarkAction(r).action}</span>;
     case "sku": return r.sku || "-";
     case "vendor_code": return r.vendor_code || "-";
     case "vendor_name": return r.vendor_name || "-";
@@ -3783,7 +3815,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   const [poSearch, setPoSearch] = useState("");
 
   // ---- Vendor override (คีย์ Vendor code ใหม่ได้ → ดึง name/currency มาอัตโนมัติ + จำไว้ข้ามโหลด) ----
-  const vendorOvRef = useRef<Record<string, { code: string; name: string; currency: string }>>(
+  const vendorOvRef = useRef<Record<string, { code: string; name: string; currency: string; origin: string }>>(
     (() => {
       try { const raw = localStorage.getItem(PO_VENDOR_OV_LS); if (raw) return JSON.parse(raw); } catch {}
       return {};
@@ -3795,29 +3827,31 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     const trimmed = newCode.trim();
     let vendorName = "";
     let vendorCurrency = "";
+    let vendorOrigin = "";
     if (trimmed) {
       setVendorLookupSkus((prev) => new Set([...prev, sku]));
       try {
         const { data } = await (supabase as any)
           .from("vendor_master")
-          .select("vendor_display_name, supplier_currency")
+          .select("vendor_display_name, supplier_currency, vendor_origin")
           .eq("vendor_code", trimmed)
           .limit(1);
         vendorName = data?.[0]?.vendor_display_name || "";
         vendorCurrency = data?.[0]?.supplier_currency || "";
+        vendorOrigin = data?.[0]?.vendor_origin || "";
       } catch { /* ไม่เจอก็ใช้ค่าว่าง */ }
       setVendorLookupSkus((prev) => { const n = new Set(prev); n.delete(sku); return n; });
     }
     // บันทึก override (ถ้า code ว่าง = ลบ override)
     const ov = { ...vendorOvRef.current };
-    if (trimmed) ov[sku] = { code: trimmed, name: vendorName, currency: vendorCurrency };
+    if (trimmed) ov[sku] = { code: trimmed, name: vendorName, currency: vendorCurrency, origin: vendorOrigin };
     else delete ov[sku];
     vendorOvRef.current = ov;
     try { localStorage.setItem(PO_VENDOR_OV_LS, JSON.stringify(ov)); } catch {}
-    // อัปแถวใน state + cache
+    // อัปแถวใน state + cache (vendor_origin ด้วย → Remark/Action อัปเดตทันที)
     setPoRows((prev) => {
       const updated = prev.map((r) =>
-        r.sku === sku ? { ...r, vendor_code: trimmed, vendor_name: vendorName, vendor_currency: vendorCurrency } : r,
+        r.sku === sku ? { ...r, vendor_code: trimmed, vendor_name: vendorName, vendor_currency: vendorCurrency, vendor_origin: trimmed ? vendorOrigin : r.vendor_origin } : r,
       );
       if (poDataCache) poDataCache = { ...poDataCache, rows: updated };
       return updated;
@@ -4043,10 +4077,12 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         const pc = pcMap.get(a.sku) || {};
         const rec = recMap.get(a.sku) || {};
         const str = (x: any) => (x == null || x === "" ? "" : String(x));
+        const inDM = a.sku !== "" && dmMap.has(a.sku);
         return {
           division: d.division || "",
           department: d.department || "",
           sku: a.sku,
+          inDM,
           vendor_code: d.vendor_code || "",
           vendor_name: d.vendor_display_name || "",
           vendor_currency: v.supplier_currency || "",
@@ -4069,10 +4105,10 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       });
       rows.sort((x, y) => (x.product_name_en || x.id).localeCompare(y.product_name_en || y.id, undefined, { sensitivity: "base" }));
 
-      // apply vendor overrides ที่ผู้ใช้คีย์ไว้ก่อนหน้า
+      // apply vendor overrides ที่ผู้ใช้คีย์ไว้ก่อนหน้า (รวม origin → Remark/Action ถูกต้อง)
       for (const r of rows) {
         const ov = vendorOvRef.current[r.sku];
-        if (ov) { r.vendor_code = ov.code; r.vendor_name = ov.name; r.vendor_currency = ov.currency; }
+        if (ov) { r.vendor_code = ov.code; r.vendor_name = ov.name; r.vendor_currency = ov.currency; if (ov.origin !== undefined) r.vendor_origin = ov.origin; }
       }
 
       setPoBrands(brands);
@@ -4104,12 +4140,13 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   const exportPO = () => {
     if (filteredPoRows.length === 0) { toast({ title: "ไม่มีข้อมูลให้ export", variant: "destructive" }); return; }
     const out = filteredPoRows.map((r, i) => {
+      const { remark, action } = getPoRemarkAction(r);
       const base: Record<string, any> = {
         "#": i + 1,
         Division: r.division,
         Department: r.department,
-        Remark: "",
-        Action: "",
+        Remark: remark,
+        Action: action,
         SKU: r.sku, // ซ่อนคอลัมน์ไว้ก่อน (ตั้ง hidden ด้านล่าง)
         "Vendor code": r.vendor_code,
         "Vendor name": r.vendor_name,
