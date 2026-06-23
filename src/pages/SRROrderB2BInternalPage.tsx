@@ -3831,14 +3831,24 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     if (trimmed) {
       setVendorLookupSkus((prev) => new Set([...prev, sku]));
       try {
-        const { data } = await (supabase as any)
-          .from("vendor_master")
-          .select("vendor_display_name, supplier_currency, vendor_origin")
-          .eq("vendor_code", trimmed)
-          .limit(1);
-        vendorName = data?.[0]?.vendor_display_name || "";
-        vendorCurrency = data?.[0]?.supplier_currency || "";
-        vendorOrigin = data?.[0]?.vendor_origin || "";
+        // vendor_master: currency + origin (ไม่มี vendor_display_name ในตารางนี้)
+        // data_master: vendor_display_name (เก็บ denormalized ไว้ที่นี่)
+        const [vmRes, dmRes] = await Promise.all([
+          (supabase as any)
+            .from("vendor_master")
+            .select("supplier_currency, vendor_origin")
+            .eq("vendor_code", trimmed)
+            .limit(1),
+          (supabase as any)
+            .from("data_master")
+            .select("vendor_display_name")
+            .eq("vendor_code", trimmed)
+            .not("vendor_display_name", "is", null)
+            .limit(1),
+        ]);
+        vendorCurrency = vmRes.data?.[0]?.supplier_currency || "";
+        vendorOrigin = vmRes.data?.[0]?.vendor_origin || "";
+        vendorName = dmRes.data?.[0]?.vendor_display_name || "";
       } catch { /* ไม่เจอก็ใช้ค่าว่าง */ }
       setVendorLookupSkus((prev) => { const n = new Set(prev); n.delete(sku); return n; });
     }
@@ -4037,7 +4047,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       }
       const vendorCodes = [...new Set(dm.map((d: any) => d.vendor_code).filter(Boolean))] as string[];
       const vm = vendorCodes.length
-        ? await fetchInChunks("vendor_master", "vendor_code, supplier_currency", "vendor_code", vendorCodes)
+        ? await fetchInChunks("vendor_master", "vendor_code, supplier_currency, vendor_origin", "vendor_code", vendorCodes)
         : [];
       const vmMap = new Map<string, any>();
       for (const v of vm) if (v.vendor_code && !vmMap.has(v.vendor_code)) vmMap.set(v.vendor_code, v);
@@ -4073,7 +4083,8 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       const rows: PORow[] = [...map.values()].map((a) => {
         const d = dmMap.get(a.sku) || {};
         const v = vmMap.get(d.vendor_code) || {};
-        const origin = (d.vendor_code && vendorOriginMap.current[d.vendor_code]) || "";
+        // ใช้ vendor_origin จาก vendor_master (fresh) ก่อน แล้ว fallback ไป parent ref
+        const origin = v.vendor_origin || (d.vendor_code && vendorOriginMap.current[d.vendor_code]) || "";
         const pc = pcMap.get(a.sku) || {};
         const rec = recMap.get(a.sku) || {};
         const str = (x: any) => (x == null || x === "" ? "" : String(x));
