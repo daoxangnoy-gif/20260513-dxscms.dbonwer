@@ -3696,6 +3696,7 @@ function SCMPOTab({ vendorOriginMap }: { vendorOriginMap: React.MutableRefObject
         Department: r.department,
         Remark: "",
         SKU: r.sku,
+        Action: "",
         "Vendor (code-name-currency)": r.vendor,
         "Vendor origin": r.vendor_origin,
         ID: r.id,
