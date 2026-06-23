@@ -3704,10 +3704,17 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       // 3) enrich จาก data_master / vendor_master / stock (เฉพาะที่มี SKU)
       const skus = [...map.keys()].filter((k) => !k.startsWith("bc:"));
       const dm = skus.length
-        ? await fetchInChunks("data_master", "sku_code, division, department, product_name_en, vendor_code, vendor_display_name, main_barcode", "sku_code", skus)
+        ? await fetchInChunks("data_master", "sku_code, division, department, product_name_en, vendor_code, vendor_display_name, main_barcode, packing_size_qty", "sku_code", skus)
         : [];
       const dmMap = new Map<string, any>();
       for (const d of dm) if (d.sku_code && !dmMap.has(d.sku_code)) dmMap.set(d.sku_code, d);
+      // Barcode = main_barcode จากแถวที่ packing_size_qty = 1 (หน่วยฐาน) เท่านั้น
+      const barcodeMap = new Map<string, string>();
+      for (const d of dm) {
+        if (d.sku_code && Number(d.packing_size_qty) === 1 && d.main_barcode && !barcodeMap.has(d.sku_code)) {
+          barcodeMap.set(d.sku_code, String(d.main_barcode));
+        }
+      }
       const vendorCodes = [...new Set(dm.map((d: any) => d.vendor_code).filter(Boolean))] as string[];
       const vm = vendorCodes.length
         ? await fetchInChunks("vendor_master", "vendor_code, supplier_currency", "vendor_code", vendorCodes)
@@ -3760,7 +3767,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           vendor: vendorStr,
           vendor_origin: origin,
           id: a.sku,
-          barcode: d.main_barcode || a.barcode || "",
+          barcode: barcodeMap.get(a.sku) || d.main_barcode || a.barcode || "",
           product_name_en: d.product_name_en || a.product_name || "",
           stock_dc: stockDcMap.has(a.sku) ? (stockDcMap.get(a.sku) as number) : null,
           stock_dc_kr: krMap.has(a.sku) ? (krMap.get(a.sku) as number) : null,
