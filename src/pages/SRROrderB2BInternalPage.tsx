@@ -486,10 +486,6 @@ export default function SRROrderB2BInternalPage() {
       toast({ title: "แก้ไขแบรนด์ไม่สำเร็จ", description: e.message, variant: "destructive" });
     }
   };
-  // รายชื่อแบรนด์แบบไม่ซ้ำ (ใช้ใน dropdown แก้ไขแบรนด์)
-  const distinctBrandOptions = Array.from(
-    new Map(brandOptions.filter((b) => b.brand_name.trim()).map((b) => [b.brand_name.trim().toLowerCase(), b])).values(),
-  );
 
   const deleteDoc = async (doc: MUDoc) => {
     if (!window.confirm(`ลบเอกสาร "${doc.doc_label}" และรายการทั้งหมด?`)) return;
@@ -2260,6 +2256,11 @@ export default function SRROrderB2BInternalPage() {
     selectedBrand && selectedBrand.id && !brandOptions.find((o) => o.id === selectedBrand.id)
       ? [{ id: selectedBrand.id, code: 0, brand_name: selectedBrand.brand_name, branch: selectedBrand.branch }, ...brandOptions]
       : brandOptions;
+
+  // รายชื่อแบรนด์แบบไม่ซ้ำ (ใช้ใน dropdown แก้ไขแบรนด์ของเอกสาร Monthly usage)
+  const distinctBrandOptions = Array.from(
+    new Map(brandOptions.filter((b) => b.brand_name.trim()).map((b) => [b.brand_name.trim().toLowerCase(), b])).values(),
+  );
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
