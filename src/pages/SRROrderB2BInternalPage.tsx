@@ -9,7 +9,7 @@ import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, Command
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download, Pencil, ChevronsUpDown, Check, FileSpreadsheet, Columns3, Image as ImageIcon, Printer, FileSignature, ShoppingCart, Boxes, Route } from "lucide-react";
+import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download, Pencil, ChevronsUpDown, Check, FileSpreadsheet, Columns3, Image as ImageIcon, Printer, FileSignature, ShoppingCart, Boxes, Route, Save } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { remapRowsByTemplate } from "@/lib/exportTemplate";
 import * as XLSX from "xlsx";
@@ -3589,6 +3589,57 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   const [poReceiveRows, setPoReceiveRows] = useState<Record<string, string>[]>([]);
   const [importingKr, setImportingKr] = useState(false);
   const [importingRec, setImportingRec] = useState(false);
+  const [savingKr, setSavingKr] = useState(false);
+  const [savingRec, setSavingRec] = useState(false);
+
+  // โหลดข้อมูลที่ Save ไว้ใน Supabase กลับมาแสดง (ทุก user เห็นชุดเดียวกัน)
+  useEffect(() => {
+    (async () => {
+      try {
+        const [kr, rec] = await Promise.all([
+          (supabase as any).from("scm_stock_kr").select("*").order("created_at", { ascending: true }),
+          (supabase as any).from("scm_po_receive").select("*").order("created_at", { ascending: true }),
+        ]);
+        if (kr?.data) setStockKrRows(kr.data.map((r: any) => pickCols(r, STOCK_KR_COLS)));
+        if (rec?.data) setPoReceiveRows(rec.data.map((r: any) => pickCols(r, PO_RECEIVE_COLS)));
+      } catch { /* ตารางอาจยังไม่ถูกสร้าง — เงียบไว้ */ }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // เก็บเฉพาะคอลัมน์ตาม config (string) จาก record ของ Supabase
+  const pickCols = (r: any, cols: readonly { key: string }[]): Record<string, string> => {
+    const o: Record<string, string> = {};
+    for (const c of cols) o[c.key] = r[c.key] == null ? "" : String(r[c.key]);
+    return o;
+  };
+
+  // Save = แทนที่ข้อมูลทั้งตารางด้วยรายการปัจจุบัน (replace all)
+  const saveImport = async (
+    table: string,
+    cols: readonly { key: string }[],
+    rows: Record<string, string>[],
+    setSaving: (b: boolean) => void,
+    label: string,
+  ) => {
+    setSaving(true);
+    try {
+      // ลบของเดิมทั้งหมด (row_id เป็น PK ไม่เคย null → match ทุกแถว)
+      const del = await (supabase as any).from(table).delete().not("row_id", "is", null);
+      if (del.error) throw del.error;
+      // insert ชุดใหม่ทีละ 500 แถว
+      const payload = rows.map((r) => { const o: Record<string, any> = {}; for (const c of cols) o[c.key] = r[c.key] ?? ""; return o; });
+      for (let i = 0; i < payload.length; i += 500) {
+        const ins = await (supabase as any).from(table).insert(payload.slice(i, i + 500));
+        if (ins.error) throw ins.error;
+      }
+      toast({ title: `บันทึก ${label} แล้ว`, description: `${rows.length} รายการ` });
+    } catch (e: any) {
+      toast({ title: `บันทึกไม่สำเร็จ`, description: e.message || String(e), variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const fetchInChunks = async (table: string, select: string, col: string, ids: string[]): Promise<any[]> => {
     const out: any[] = [];
@@ -3885,10 +3936,13 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           title="Stock Kr"
           cols={STOCK_KR_COLS as any}
           rows={stockKrRows}
+          setRows={setStockKrRows}
           importing={importingKr}
           onImport={handleKrImport}
           onClear={() => setStockKrRows([])}
           onTemplate={() => downloadImportTemplate(STOCK_KR_COLS as any, "StockKr_Template")}
+          saving={savingKr}
+          onSave={() => saveImport("scm_stock_kr", STOCK_KR_COLS as any, stockKrRows, setSavingKr, "Stock Kr")}
         />
       </TabsContent>
 
@@ -3898,28 +3952,58 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           title="PO Receive"
           cols={PO_RECEIVE_COLS as any}
           rows={poReceiveRows}
+          setRows={setPoReceiveRows}
           importing={importingRec}
           onImport={handleRecImport}
           onClear={() => setPoReceiveRows([])}
           onTemplate={() => downloadImportTemplate(PO_RECEIVE_COLS as any, "POReceive_Template")}
+          saving={savingRec}
+          onSave={() => saveImport("scm_po_receive", PO_RECEIVE_COLS as any, poReceiveRows, setSavingRec, "PO Receive")}
         />
       </TabsContent>
     </Tabs>
   );
 }
 
-// แผง Import ทั่วไป (อัปโหลด Excel → แสดงตารางตามคอลัมน์ที่กำหนด)
+// แผง Import ทั่วไป (อัปโหลด Excel → แสดงตาราง + ค้นหา + เลือกหลายแถวเพื่อลบ + Save ลง Supabase)
 function POImportPanel({
-  title, cols, rows, importing, onImport, onClear, onTemplate,
+  title, cols, rows, setRows, importing, onImport, onClear, onTemplate, saving, onSave,
 }: {
   title: string;
   cols: { key: string; label: string }[];
   rows: Record<string, string>[];
+  setRows: React.Dispatch<React.SetStateAction<Record<string, string>[]>>;
   importing: boolean;
   onImport: (f: File) => void;
   onClear: () => void;
   onTemplate: () => void;
+  saving: boolean;
+  onSave: () => void;
 }) {
+  const { toast } = useToast();
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+
+  // รายการที่ผ่านการค้นหา (คงดัชนีเดิมไว้เพื่อใช้กับ checkbox)
+  const filtered = (() => {
+    const q = search.trim().toLowerCase();
+    const indexed = rows.map((r, idx) => ({ r, idx }));
+    if (!q) return indexed;
+    return indexed.filter(({ r }) => cols.some((c) => String(r[c.key] ?? "").toLowerCase().includes(q)));
+  })();
+
+  const allFilteredChecked = filtered.length > 0 && filtered.every(({ idx }) => selected.has(idx));
+  const toggleOne = (idx: number) => setSelected((prev) => { const n = new Set(prev); n.has(idx) ? n.delete(idx) : n.add(idx); return n; });
+  const toggleAll = (check: boolean) => setSelected(check ? new Set(filtered.map(({ idx }) => idx)) : new Set());
+
+  const deleteSelected = () => {
+    if (selected.size === 0) return;
+    const n = selected.size;
+    setRows((prev) => prev.filter((_, idx) => !selected.has(idx)));
+    setSelected(new Set());
+    toast({ title: `ลบ ${n} แถว`, description: `กด Save เพื่อบันทึกถาวร` });
+  };
+
   return (
     <>
       <div className="flex items-center gap-2 flex-wrap">
@@ -3931,17 +4015,32 @@ function POImportPanel({
         <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={onTemplate}>
           <FileSpreadsheet className="w-3.5 h-3.5" /> Template
         </Button>
-        {rows.length > 0 && (
-          <Button size="sm" variant="ghost" className="h-8 gap-1.5 text-xs text-destructive" onClick={onClear}>
-            <Trash2 className="w-3.5 h-3.5" /> ล้าง
+        <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={onSave} disabled={saving}>
+          {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />} Save
+        </Button>
+        {selected.size > 0 && (
+          <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs text-destructive border-destructive/40" onClick={deleteSelected}>
+            <Trash2 className="w-3.5 h-3.5" /> ลบที่เลือก ({selected.size})
           </Button>
         )}
-        <span className="text-xs text-muted-foreground ml-auto">{rows.length} รายการ</span>
+        {rows.length > 0 && (
+          <Button size="sm" variant="ghost" className="h-8 gap-1.5 text-xs text-destructive" onClick={() => { onClear(); setSelected(new Set()); }}>
+            <Trash2 className="w-3.5 h-3.5" /> ล้างทั้งหมด
+          </Button>
+        )}
+        <div className="relative flex-1 min-w-[200px] max-w-xs">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input value={search} onChange={(e) => setSearch(e.target.value)} className="h-8 pl-8" placeholder="ค้นหา ID / Barcode / Description ..." />
+        </div>
+        <span className="text-xs text-muted-foreground ml-auto">{filtered.length} / {rows.length} รายการ</span>
       </div>
       <div className="border rounded-lg flex-1 overflow-auto min-h-0">
         <table className="text-sm border-collapse whitespace-nowrap w-full">
           <thead className="sticky top-0 z-30">
             <tr className="text-left text-muted-foreground [&_th]:bg-background [&_th]:shadow-[0_1px_0_0_hsl(var(--border))] [&_th]:px-3 [&_th]:py-1.5 [&_th]:font-medium">
+              <th className="w-10">
+                <input type="checkbox" className="h-4 w-4 align-middle" checked={allFilteredChecked} onChange={(e) => toggleAll(e.target.checked)} />
+              </th>
               <th>#</th>
               {cols.map((c) => (
                 <th key={c.key}>{c.label}</th>
@@ -3949,18 +4048,21 @@ function POImportPanel({
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, i) => (
-              <tr key={i} className="border-b last:border-0 hover:bg-muted/40 [&_td]:px-3 [&_td]:py-1.5">
+            {filtered.map(({ r, idx }, i) => (
+              <tr key={idx} className={cn("border-b last:border-0 hover:bg-muted/40 [&_td]:px-3 [&_td]:py-1.5", selected.has(idx) && "bg-primary/5")}>
+                <td>
+                  <input type="checkbox" className="h-4 w-4 align-middle" checked={selected.has(idx)} onChange={() => toggleOne(idx)} />
+                </td>
                 <td className="text-muted-foreground tabular-nums">{i + 1}</td>
                 {cols.map((c) => (
                   <td key={c.key}>{r[c.key] || "-"}</td>
                 ))}
               </tr>
             ))}
-            {rows.length === 0 && (
+            {filtered.length === 0 && (
               <tr>
-                <td colSpan={cols.length + 1} className="px-3 py-8 text-center text-muted-foreground">
-                  ยังไม่มีข้อมูล — กด "Import {title}" เพื่ออัปโหลด Excel
+                <td colSpan={cols.length + 2} className="px-3 py-8 text-center text-muted-foreground">
+                  {rows.length === 0 ? `ยังไม่มีข้อมูล — กด "Import ${title}" เพื่ออัปโหลด Excel` : "ไม่พบรายการที่ค้นหา"}
                 </td>
               </tr>
             )}
