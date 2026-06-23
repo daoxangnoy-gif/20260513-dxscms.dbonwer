@@ -3739,7 +3739,7 @@ const PO_W_LS = "po_col_widths";
 const PO_VENDOR_OV_LS = "po_vendor_overrides_v2"; // override vendor code ที่ผู้ใช้คีย์ไว้ (key = sku)
 
 // vendor code ที่ถือว่า "ผู้สนองในระบบผิด" (ผูกผิดคน)
-const PO_WRONG_VENDOR_CODES = new Set(["DC0288", "DC0504", "DC0426", "DC0287", "DC0290", "DC0188", "DC0505", "DC0506"]);
+const PO_WRONG_VENDOR_CODES = new Set(["DC0288", "DC0504", "DC0426", "DC0287", "DC0290", "DC0188", "DC0505", "DC0506", "DM0001", "DM0002", "DM0003"]);
 // vendor code ที่ถือว่า "ไม่ได้ผูกผู้สนอง"
 const PO_EMPTY_VENDOR_VALUES = new Set(["", "0", "0-0", "-"]);
 
