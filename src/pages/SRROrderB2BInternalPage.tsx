@@ -1592,17 +1592,16 @@ export default function SRROrderB2BInternalPage() {
     }
     setMuSaving(true);
     try {
-      // 0) กฎ 1 Brand = 1 Doc — กันชนกับเอกสารแบรนด์เดียวกันที่มีอยู่แล้ว (ทั้งตอนสร้างใหม่ และตอนแก้ไขที่เปลี่ยน Brand)
-      {
-        let dupQ = (supabase as any)
+      // 0) กฎ 1 Brand = 1 Doc — ตอนสร้างใหม่ ถ้า brand นี้มีเอกสารแล้ว ห้ามสร้างซ้ำ (ให้แก้ไขเอกสารเดิมแทน)
+      if (!editingDocId) {
+        const { data: existing } = await (supabase as any)
           .from("monthly_usage_doc")
           .select("doc_label")
           .eq("brand_name", selectedBrand.brand_name)
-          .eq("branch", selectedBrand.branch);
-        if (editingDocId) dupQ = dupQ.neq("id", editingDocId);
-        const { data: existing } = await dupQ.limit(1);
+          .eq("branch", selectedBrand.branch)
+          .limit(1);
         if (existing && existing.length) {
-          toast({ title: "Brand นี้มีเอกสารแล้ว", description: `"${selectedBrand.brand_name}" มีเอกสาร ${existing[0].doc_label} อยู่แล้ว — 1 Brand มีได้ 1 Doc`, variant: "destructive" });
+          toast({ title: "Brand นี้มีเอกสารแล้ว", description: `"${selectedBrand.brand_name}" มีเอกสาร ${existing[0].doc_label} อยู่แล้ว — 1 Brand สร้างได้ 1 Doc (ให้แก้ไขเอกสารเดิมแทน)`, variant: "destructive" });
           setMuSaving(false);
           return;
         }
@@ -1635,12 +1634,12 @@ export default function SRROrderB2BInternalPage() {
           .limit(1);
         docNo = (maxd?.[0]?.doc_no || 0) + 1;
       }
-      // ชื่อ doc รูปแบบ yyyymmddhhmm - brandname (ตอนแก้ไขเอกสารเดิม คงส่วน stamp เดิม แต่อัปเดตชื่อ Brand ให้ตรงปัจจุบัน)
+      // ชื่อ doc รูปแบบ yyyymmddhhmm - brandname (ตอนแก้ไขเอกสารเดิม ใช้ชื่อเดิม ไม่เปลี่ยน)
       const pad = (n: number) => String(n).padStart(2, "0");
       const now = new Date();
       const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`;
       const label = editingDocId && editingDocLabel
-        ? (editingDocLabel.includes(" - ") ? `${editingDocLabel.slice(0, editingDocLabel.indexOf(" - "))} - ${selectedBrand.brand_name}` : editingDocLabel)
+        ? editingDocLabel
         : `${stamp} - ${selectedBrand.brand_name}`.trim();
       const docPayload: any = {
         doc_no: docNo,
@@ -2919,9 +2918,12 @@ export default function SRROrderB2BInternalPage() {
               {/* Brand selector */}
               <div className="space-y-1.5">
                 <Label className="text-xs">Brand</Label>
-                {muReadOnly ? (
+                {(muReadOnly || editingDocId) ? (
                   <div className="h-9 flex items-center px-3 border rounded-md bg-muted/40 text-sm">
                     {selectedBrand?.brand_name || "—"}
+                    {editingDocId && !muReadOnly && (
+                      <span className="ml-2 text-[11px] text-muted-foreground">(แก้ไขเอกสารเดิม — เปลี่ยน Brand ไม่ได้)</span>
+                    )}
                   </div>
                 ) : (
                   <Popover open={brandPickerOpen} onOpenChange={setBrandPickerOpen}>
