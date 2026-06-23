@@ -3577,6 +3577,64 @@ const PO_RECEIVE_COLS = [
   { key: "status", label: "Status", aliases: ["status"] },
 ] as const;
 
+// cache ข้อมูล PO ไว้ข้ามการสลับ tab/หน้า (ไม่ต้องกดโหลดใหม่ทุกครั้ง)
+let poDataCache: { rows: PORow[]; brands: string[] } | null = null;
+
+// meta คอลัมน์ตาราง PO (def = แสดงค่าเริ่มต้นตามไฟล์ template) — brands แทรกก่อน Total qty (def hidden)
+type POColMeta = { key: string; label: string; def: boolean; thCls?: string; tdCls?: string };
+const PO_FIXED_COLS: POColMeta[] = [
+  { key: "division", label: "Division", def: true, tdCls: "text-muted-foreground" },
+  { key: "department", label: "Department", def: true, tdCls: "text-muted-foreground" },
+  { key: "remark", label: "Remark", def: false, tdCls: "text-muted-foreground" },
+  { key: "action", label: "Action", def: false, thCls: "text-center", tdCls: "text-center text-muted-foreground/50" },
+  { key: "sku", label: "SKU", def: false },
+  { key: "vendor", label: "Vendor (code-name-currency)", def: true },
+  { key: "vendor_origin", label: "Vendor origin", def: true, tdCls: "text-muted-foreground" },
+  { key: "po_number", label: "PO NUMBER", def: false, thCls: "text-muted-foreground/70", tdCls: "text-muted-foreground/80" },
+  { key: "po_date", label: "PO DATE", def: false, thCls: "text-muted-foreground/70", tdCls: "text-muted-foreground/80" },
+  { key: "po_status", label: "PO Status", def: false, thCls: "text-muted-foreground/70", tdCls: "text-muted-foreground/80" },
+  { key: "po_qty", label: "PO QTY", def: false, thCls: "text-right text-muted-foreground/70", tdCls: "text-right tabular-nums text-muted-foreground/80" },
+  { key: "rec_po", label: "REC PO", def: false, thCls: "text-right text-muted-foreground/70", tdCls: "text-right tabular-nums text-muted-foreground/80" },
+  { key: "moq_1x", label: "1x", def: false, thCls: "text-right", tdCls: "text-right tabular-nums" },
+  { key: "pocost", label: "Pocost", def: false, thCls: "text-right", tdCls: "text-right tabular-nums" },
+  { key: "id", label: "ID", def: true, tdCls: "font-medium" },
+  { key: "barcode", label: "Barcode", def: true },
+  { key: "product_name_en", label: "Product name EN", def: true },
+  { key: "stock_dc", label: "Stock DC", def: true, thCls: "text-right", tdCls: "text-right tabular-nums" },
+  { key: "stock_dc_kr", label: "Stock DC (KR)", def: true, thCls: "text-right", tdCls: "text-right tabular-nums" },
+  { key: "total", label: "Total qty", def: true, thCls: "text-right bg-emerald-50", tdCls: "text-right tabular-nums font-semibold bg-emerald-50/40" },
+  { key: "diff", label: "DIFF", def: false, thCls: "text-right text-muted-foreground/70", tdCls: "text-right tabular-nums text-muted-foreground/40" },
+];
+const PO_VIS_LS = "po_vis_cols";
+const poDefaultVis = () => new Set(PO_FIXED_COLS.filter((c) => c.def).map((c) => c.key));
+
+// ค่าที่จะแสดงในแต่ละ cell ตาม key
+const poCellValue = (key: string, r: PORow): React.ReactNode => {
+  switch (key) {
+    case "division": return r.division || "-";
+    case "department": return r.department || "-";
+    case "remark": return "-";
+    case "action": return "-";
+    case "sku": return r.sku || "-";
+    case "vendor": return r.vendor || "-";
+    case "vendor_origin": return r.vendor_origin || "-";
+    case "po_number": return r.po_number || "-";
+    case "po_date": return r.po_date || "-";
+    case "po_status": return r.po_status || "-";
+    case "po_qty": return r.po_qty || "-";
+    case "rec_po": return r.rec_po || "-";
+    case "moq_1x": return r.moq_1x ?? "-";
+    case "pocost": return r.pocost ?? "-";
+    case "id": return r.id || "-";
+    case "barcode": return r.barcode || "-";
+    case "product_name_en": return <span className="block max-w-[260px] truncate" title={r.product_name_en}>{r.product_name_en || "-"}</span>;
+    case "stock_dc": return r.stock_dc ?? "-";
+    case "stock_dc_kr": return r.stock_dc_kr ?? "-";
+    case "total": return r.total;
+    case "diff": return "-";
+    default: return "";
+  }
+};
 
 function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   vendorOriginMap: React.MutableRefObject<Record<string, string>>;
@@ -3591,6 +3649,24 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   const [poLoading, setPoLoading] = useState(false);
   const [poLoaded, setPoLoaded] = useState(false);
   const [poSearch, setPoSearch] = useState("");
+
+  // ---- คอลัมน์ที่แสดง (Show/Hide) — จำค่าไว้ใน localStorage ----
+  const [visCols, setVisCols] = useState<Set<string>>(() => {
+    try { const raw = localStorage.getItem(PO_VIS_LS); if (raw) return new Set(JSON.parse(raw)); } catch { /* ignore */ }
+    return poDefaultVis();
+  });
+  useEffect(() => { try { localStorage.setItem(PO_VIS_LS, JSON.stringify([...visCols])); } catch { /* ignore */ } }, [visCols]);
+  const toggleCol = (key: string) => setVisCols((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+
+  // กู้ข้อมูล PO จาก cache ตอน mount (ข้ามการสลับ tab/หน้า)
+  useEffect(() => {
+    if (poDataCache && poRows.length === 0) {
+      setPoRows(poDataCache.rows);
+      setPoBrands(poDataCache.brands);
+      setPoLoaded(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ---- Import sub-tabs ----
   const [stockKrRows, setStockKrRows] = useState<Record<string, string>[]>([]);
@@ -3787,6 +3863,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       setPoBrands(brands);
       setPoRows(rows);
       setPoLoaded(true);
+      poDataCache = { rows, brands }; // เก็บ cache ไว้ข้ามการสลับ tab/หน้า
       toast({ title: "โหลด PO สำเร็จ", description: `${rows.length} SKU · ${brands.length} แบรนด์` });
     } catch (e: any) {
       toast({ title: "โหลด PO ไม่สำเร็จ", description: e.message, variant: "destructive" });
@@ -3908,6 +3985,17 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     XLSX.writeFile(wb, `${name}.xlsx`);
   };
 
+  // ลำดับคอลัมน์ทั้งหมด (brands แทรกก่อน Total qty) + ชุดที่กำลังแสดง
+  const orderedCols = (() => {
+    const list: { key: string; label: string; thCls: string; tdCls: string; brand?: string }[] = [];
+    for (const c of PO_FIXED_COLS) {
+      if (c.key === "total") for (const b of poBrands) list.push({ key: `brand:${b}`, label: b, thCls: "text-right bg-amber-50", tdCls: "text-right tabular-nums bg-amber-50/40", brand: b });
+      list.push({ key: c.key, label: c.label, thCls: c.thCls || "", tdCls: c.tdCls || "" });
+    }
+    return list;
+  })();
+  const visibleCols = orderedCols.filter((c) => visCols.has(c.key));
+
   return (
     <Tabs value={poSubTab} onValueChange={setPoSubTab} className="flex-1 flex flex-col overflow-hidden min-h-0 gap-3">
       {/* ===== PO list ===== */}
@@ -3922,7 +4010,28 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
             <Input value={poSearch} onChange={(e) => setPoSearch(e.target.value)} className="h-8 pl-8" placeholder="ค้นหา ID / Barcode / Product / Vendor" />
           </div>
           <span className="text-xs text-muted-foreground">{filteredPoRows.length} / {poRows.length} SKU</span>
-          <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs ml-auto" onClick={exportPO} disabled={filteredPoRows.length === 0}>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs ml-auto">
+                <Columns3 className="w-3.5 h-3.5" /> คอลัมน์ ({visibleCols.length})
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-60 p-0">
+              <div className="flex items-center justify-between px-3 py-2 border-b">
+                <span className="text-xs font-medium">แสดง/ซ่อน คอลัมน์</span>
+                <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => setVisCols(poDefaultVis())}>ค่าเริ่มต้น</Button>
+              </div>
+              <div className="max-h-72 overflow-auto py-1">
+                {orderedCols.map((c) => (
+                  <label key={c.key} className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted/50 cursor-pointer">
+                    <input type="checkbox" className="h-3.5 w-3.5" checked={visCols.has(c.key)} onChange={() => toggleCol(c.key)} />
+                    <span>{c.label}</span>
+                  </label>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
+          <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={exportPO} disabled={filteredPoRows.length === 0}>
             <Download className="w-3.5 h-3.5" /> Export
           </Button>
         </div>
@@ -3932,65 +4041,23 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
             <thead className="sticky top-0 z-30">
               <tr className="text-left text-muted-foreground [&_th]:bg-background [&_th]:shadow-[0_1px_0_0_hsl(var(--border))] [&_th]:px-3 [&_th]:py-1.5 [&_th]:font-medium">
                 <th>#</th>
-                <th>Division</th>
-                <th>Department</th>
-                <th>Remark</th>
-                <th className="text-center">Action</th>
-                <th className="hidden">SKU</th>
-                <th>Vendor (code-name-currency)</th>
-                <th>Vendor origin</th>
-                <th className="text-muted-foreground/70">PO NUMBER</th>
-                <th className="text-muted-foreground/70">PO DATE</th>
-                <th className="text-muted-foreground/70">PO Status</th>
-                <th className="text-right text-muted-foreground/70">PO QTY</th>
-                <th className="text-right text-muted-foreground/70">REC PO</th>
-                <th className="text-right">1x</th>
-                <th className="text-right">Pocost</th>
-                <th>ID</th>
-                <th>Barcode</th>
-                <th>Product name EN</th>
-                <th className="text-right">Stock DC</th>
-                <th className="text-right">Stock DC (KR)</th>
-                {poBrands.map((b) => (
-                  <th key={b} className="text-right bg-amber-50">{b}</th>
+                {visibleCols.map((c) => (
+                  <th key={c.key} className={c.thCls}>{c.label}</th>
                 ))}
-                <th className="text-right bg-emerald-50">Total qty</th>
-                <th className="text-right text-muted-foreground/70">DIFF</th>
               </tr>
             </thead>
             <tbody>
               {filteredPoRows.map((r, i) => (
                 <tr key={r.id || i} className="border-b last:border-0 hover:bg-muted/40 [&_td]:px-3 [&_td]:py-1.5">
                   <td className="text-muted-foreground tabular-nums">{i + 1}</td>
-                  <td className="text-muted-foreground">{r.division || "-"}</td>
-                  <td className="text-muted-foreground">{r.department || "-"}</td>
-                  <td className="text-muted-foreground">-</td>
-                  <td className="text-center text-muted-foreground/50">-</td>
-                  <td className="hidden">{r.sku || "-"}</td>
-                  <td>{r.vendor || "-"}</td>
-                  <td className="text-muted-foreground">{r.vendor_origin || "-"}</td>
-                  <td className="text-muted-foreground/80">{r.po_number || "-"}</td>
-                  <td className="text-muted-foreground/80">{r.po_date || "-"}</td>
-                  <td className="text-muted-foreground/80">{r.po_status || "-"}</td>
-                  <td className="text-right tabular-nums text-muted-foreground/80">{r.po_qty || "-"}</td>
-                  <td className="text-right tabular-nums text-muted-foreground/80">{r.rec_po || "-"}</td>
-                  <td className="text-right tabular-nums">{r.moq_1x ?? "-"}</td>
-                  <td className="text-right tabular-nums">{r.pocost ?? "-"}</td>
-                  <td className="font-medium">{r.id || "-"}</td>
-                  <td>{r.barcode || "-"}</td>
-                  <td className="max-w-[260px] truncate" title={r.product_name_en}>{r.product_name_en || "-"}</td>
-                  <td className="text-right tabular-nums">{r.stock_dc ?? "-"}</td>
-                  <td className="text-right tabular-nums">{r.stock_dc_kr ?? "-"}</td>
-                  {poBrands.map((b) => (
-                    <td key={b} className="text-right tabular-nums bg-amber-50/40">{r.byBrand.get(b) ?? ""}</td>
+                  {visibleCols.map((c) => (
+                    <td key={c.key} className={c.tdCls}>{c.brand ? (r.byBrand.get(c.brand) ?? "") : poCellValue(c.key, r)}</td>
                   ))}
-                  <td className="text-right tabular-nums font-semibold bg-emerald-50/40">{r.total}</td>
-                  <td className="text-right tabular-nums text-muted-foreground/40">-</td>
                 </tr>
               ))}
               {filteredPoRows.length === 0 && (
                 <tr>
-                  <td colSpan={21 + poBrands.length} className="px-3 py-8 text-center text-muted-foreground">
+                  <td colSpan={visibleCols.length + 1} className="px-3 py-8 text-center text-muted-foreground">
                     {!poLoaded ? "กด \"โหลด / คำนวณ\" เพื่อดึงรายการจาก Monthly usage ทุกแบรนด์" : poRows.length === 0 ? "ไม่มีข้อมูล" : "ไม่พบรายการที่ค้นหา"}
                   </td>
                 </tr>
