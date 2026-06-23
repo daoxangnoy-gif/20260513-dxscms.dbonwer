@@ -573,6 +573,8 @@ export default function SRROrderB2BInternalPage() {
   // SCM Control → tab SO
   // ============================================================
   const [scmSubTab, setScmSubTab] = useState("so");
+  // sub-tab ของ PO (PO / Stock Kr / PO Receive) — ยกขึ้นมาที่ parent เพื่อแสดงปุ่มมุมขวาบนแถว SO/PO
+  const [poSubTab, setPoSubTab] = useState("list");
   const [soDocs, setSoDocs] = useState<SODoc[]>([]);
   const [soDocsLoading, setSoDocsLoading] = useState(false);
   const [soSearch, setSoSearch] = useState("");
@@ -3117,6 +3119,23 @@ export default function SRROrderB2BInternalPage() {
                   <FileSignature className="w-3.5 h-3.5" /> PO
                 </TabsTrigger>
               </TabsList>
+
+              {/* sub-tab ของ PO ย้ายมาไว้มุมขวา (โชว์เฉพาะตอนอยู่ที่ tab PO) */}
+              {scmSubTab === "po" && (
+                <Tabs value={poSubTab} onValueChange={setPoSubTab}>
+                  <TabsList className="h-8 w-fit">
+                    <TabsTrigger value="list" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+                      <FileSignature className="w-3.5 h-3.5" /> PO
+                    </TabsTrigger>
+                    <TabsTrigger value="stock_kr" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+                      <Boxes className="w-3.5 h-3.5" /> Stock Kr
+                    </TabsTrigger>
+                    <TabsTrigger value="po_receive" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+                      <Download className="w-3.5 h-3.5" /> PO Receive
+                    </TabsTrigger>
+                  </TabsList>
+                </Tabs>
+              )}
             </div>
 
             <TabsContent value="so" className="mt-0 flex-1 flex-col overflow-hidden min-h-0 data-[state=active]:flex gap-2">
@@ -3230,7 +3249,7 @@ export default function SRROrderB2BInternalPage() {
 
             {/* ============ PO (รวมจาก Monthly usage ทุกแบรนด์ + 2 sub-tab Import) ============ */}
             <TabsContent value="po" className="mt-0 flex-1 flex-col overflow-hidden min-h-0 data-[state=active]:flex">
-              <SCMPOTab vendorOriginMap={vendorOriginMapRef} />
+              <SCMPOTab vendorOriginMap={vendorOriginMapRef} poSubTab={poSubTab} setPoSubTab={setPoSubTab} />
             </TabsContent>
           </Tabs>
         </TabsContent>
@@ -3551,9 +3570,12 @@ const PO_RECEIVE_COLS = [
 // คอลัมน์ PO tracking (รอบนี้ว่างไว้ก่อน — placeholder)
 const PO_TRACK_COLS = ["PO NUMBER", "PO DATE", "PO Status", "PO QTY", "REC PO", "DIFF", "1x", "Pocost"] as const;
 
-function SCMPOTab({ vendorOriginMap }: { vendorOriginMap: React.MutableRefObject<Record<string, string>> }) {
+function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
+  vendorOriginMap: React.MutableRefObject<Record<string, string>>;
+  poSubTab: string;
+  setPoSubTab: (v: string) => void;
+}) {
   const { toast } = useToast();
-  const [poSubTab, setPoSubTab] = useState("list");
 
   // ---- PO list (aggregation) ----
   const [poRows, setPoRows] = useState<PORow[]>([]);
@@ -3774,18 +3796,6 @@ function SCMPOTab({ vendorOriginMap }: { vendorOriginMap: React.MutableRefObject
 
   return (
     <Tabs value={poSubTab} onValueChange={setPoSubTab} className="flex-1 flex flex-col overflow-hidden min-h-0 gap-3">
-      <TabsList className="h-8 w-fit">
-        <TabsTrigger value="list" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
-          <FileSignature className="w-3.5 h-3.5" /> PO
-        </TabsTrigger>
-        <TabsTrigger value="stock_kr" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
-          <Boxes className="w-3.5 h-3.5" /> Stock Kr
-        </TabsTrigger>
-        <TabsTrigger value="po_receive" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
-          <Download className="w-3.5 h-3.5" /> PO Receive
-        </TabsTrigger>
-      </TabsList>
-
       {/* ===== PO list ===== */}
       <TabsContent value="list" className="mt-0 flex-1 flex-col overflow-hidden min-h-0 data-[state=active]:flex gap-2">
         <div className="flex items-center gap-2 flex-wrap">
