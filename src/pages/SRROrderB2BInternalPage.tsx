@@ -342,6 +342,55 @@ export default function SRROrderB2BInternalPage() {
     }
   };
 
+  // ดาวน์โหลด Template (หัวคอลัมน์ Code / Brand name / Branch / Group)
+  const downloadBrandTemplate = () => {
+    const ws = XLSX.utils.aoa_to_sheet([["Code", "Brand name", "Branch", "Group"]]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "List Brand");
+    XLSX.writeFile(wb, "ListBrand_Template.xlsx");
+  };
+
+  // นำเข้า Excel → merge เข้ารายการในจอ (จับหัวคอลัมน์ตาม alias) แล้วให้ผู้ใช้กด Save
+  const importBrandFile = async (file: File) => {
+    try {
+      const ab = await file.arrayBuffer();
+      const wb = XLSX.read(ab);
+      const raw: any[][] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
+      if (raw.length < 2) { toast({ title: "ไม่พบข้อมูลในไฟล์", variant: "destructive" }); return; }
+      const headers = (raw[0] as any[]).map((h) => String(h ?? "").toLowerCase().trim());
+      const findIdx = (aliases: string[]) => headers.findIndex((h) => aliases.some((a) => h.includes(a)));
+      const ci = { code: findIdx(["code", "รหัส"]), name: findIdx(["brand name", "brand", "แบรนด์", "ชื่อ"]), branch: findIdx(["branch", "สาขา"]), group: findIdx(["group", "กลุ่ม"]) };
+      if (ci.name < 0) { toast({ title: "ไม่พบคอลัมน์ Brand name ในไฟล์", variant: "destructive" }); return; }
+
+      const parsed = raw.slice(1)
+        .filter((r) => r.some((v) => String(v ?? "").trim()))
+        .map((r) => ({
+          code: ci.code >= 0 && String(r[ci.code] ?? "").trim() ? Number(r[ci.code]) : NaN,
+          brand_name: ci.name >= 0 ? String(r[ci.name] ?? "").trim() : "",
+          branch: ci.branch >= 0 ? String(r[ci.branch] ?? "").trim() : "",
+          brand_group: ci.group >= 0 ? String(r[ci.group] ?? "").trim() : "",
+        }))
+        .filter((r) => r.brand_name);
+      if (parsed.length === 0) { toast({ title: "ไม่พบรายการที่นำเข้าได้", variant: "destructive" }); return; }
+
+      setRows((prev) => {
+        const next = [...prev];
+        let nextCode = next.length ? Math.max(...next.map((r) => r.code)) + 1 : 1;
+        for (const p of parsed) {
+          // merge: ถ้ามี Code ตรงกัน → อัปเดต, ไม่งั้นเทียบ Brand+Branch ซ้ำ, สุดท้ายเพิ่มใหม่
+          let i = !isNaN(p.code) ? next.findIndex((r) => r.code === p.code) : -1;
+          if (i < 0) i = next.findIndex((r) => r.brand_name.trim().toLowerCase() === p.brand_name.toLowerCase() && r.branch.trim().toLowerCase() === p.branch.toLowerCase());
+          if (i >= 0) next[i] = { ...next[i], brand_name: p.brand_name, branch: p.branch, brand_group: p.brand_group };
+          else next.push({ code: !isNaN(p.code) ? p.code : nextCode++, brand_name: p.brand_name, branch: p.branch, brand_group: p.brand_group });
+        }
+        return next;
+      });
+      toast({ title: "นำเข้าสำเร็จ", description: `${parsed.length} รายการ — ตรวจสอบแล้วกด Save เพื่อบันทึก` });
+    } catch (e: any) {
+      toast({ title: "นำเข้าไม่สำเร็จ", description: e.message, variant: "destructive" });
+    }
+  };
+
   // ============================================================
   // Monthly usage — docs list + dialog
   // ============================================================
@@ -2626,14 +2675,23 @@ export default function SRROrderB2BInternalPage() {
             </div>
           ) : (
             <div className="max-h-[55vh] overflow-auto">
-              <div className="relative mb-2">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <Input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="h-8 pl-8"
-                  placeholder="ค้นหา Code / Brand name / Branch"
-                />
+              <div className="flex items-center gap-2 mb-2">
+                <div className="relative flex-1">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    className="h-8 pl-8"
+                    placeholder="ค้นหา Code / Brand name / Branch / Group"
+                  />
+                </div>
+                <label className="flex items-center gap-1.5 h-8 px-3 rounded-md border bg-background hover:bg-muted transition-colors cursor-pointer text-xs font-medium shrink-0">
+                  <Upload className="w-3.5 h-3.5" /> Import
+                  <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) importBrandFile(f); e.target.value = ""; }} />
+                </label>
+                <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs shrink-0" onClick={downloadBrandTemplate}>
+                  <FileSpreadsheet className="w-3.5 h-3.5" /> Template
+                </Button>
               </div>
 
               {/* รายชื่อ Group ที่มีอยู่แล้ว — ช่วยพิมพ์ซ้ำให้ตรงกัน */}
