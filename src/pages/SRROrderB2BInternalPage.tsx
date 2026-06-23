@@ -3729,6 +3729,7 @@ const PO_FIXED_COLS: POColMeta[] = [
 ];
 const PO_BRAND_W = 90; // ความกว้างเริ่มต้นของคอลัมน์แบรนด์
 const PO_VIS_LS = "po_vis_cols_v2"; // bump version → ล้างค่าเก่าใน localStorage ให้ default ใหม่ทำงาน
+const PO_VIS_MIGRATED = "po_vis_migrated_v1"; // ล้างค่าคอลัมน์เก่าทิ้งครั้งเดียวตอนโหลดหน้าจริง
 const PO_W_LS = "po_col_widths";
 const poDefaultVis = () => new Set(PO_FIXED_COLS.filter((c) => c.def).map((c) => c.key));
 
@@ -3776,7 +3777,15 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
 
   // ---- คอลัมน์ที่แสดง (Show/Hide) — จำค่าไว้ใน localStorage ----
   const [visCols, setVisCols] = useState<Set<string>>(() => {
-    try { const raw = localStorage.getItem(PO_VIS_LS); if (raw) return new Set(JSON.parse(raw)); } catch { /* ignore */ }
+    try {
+      // one-time migration: ล้างค่าคอลัมน์เก่าที่ค้างอยู่ทิ้ง 1 ครั้ง → บังคับใช้ default ตาม template
+      if (!localStorage.getItem(PO_VIS_MIGRATED)) {
+        localStorage.removeItem(PO_VIS_LS);
+        localStorage.setItem(PO_VIS_MIGRATED, "1");
+        return poDefaultVis();
+      }
+      const raw = localStorage.getItem(PO_VIS_LS); if (raw) return new Set(JSON.parse(raw));
+    } catch { /* ignore */ }
     return poDefaultVis();
   });
   useEffect(() => { try { localStorage.setItem(PO_VIS_LS, JSON.stringify([...visCols])); } catch { /* ignore */ } }, [visCols]);
