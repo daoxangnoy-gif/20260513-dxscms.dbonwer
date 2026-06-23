@@ -2832,6 +2832,7 @@ export default function SRROrderB2BInternalPage() {
                     {muRows.map((row, idx) => {
                       const daily =
                         row.monthly_qty.trim() && !isNaN(Number(row.monthly_qty)) ? (Number(row.monthly_qty) / 30).toFixed(2) : "";
+                      const notFound = row.product_name === "ไม่พบข้อมูล";
                       return (
                         <tr key={idx} className="border-t align-middle">
                           <td className="px-2 py-1 text-center text-muted-foreground tabular-nums">{idx + 1}</td>
@@ -2859,10 +2860,11 @@ export default function SRROrderB2BInternalPage() {
                               <Input
                                 data-r={idx}
                                 data-c={1}
-                                value={row.sku_code}
+                                value={notFound ? "ไม่พบข้อมูลในระบบ" : row.sku_code}
                                 readOnly
+                                title={notFound ? "ไม่พบข้อมูลในระบบ" : row.sku_code}
                                 onKeyDown={(e) => handleCellKey(e, idx, 1)}
-                                className="h-8 w-full bg-muted/50 pr-6"
+                                className={`h-8 w-full bg-muted/50 pr-6 ${notFound ? "text-destructive" : ""}`}
                                 placeholder="auto"
                               />
                               {lookup[idx] && <Loader2 className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 animate-spin" />}
@@ -2890,11 +2892,19 @@ export default function SRROrderB2BInternalPage() {
                               placeholder="auto"
                             />
                           </td>}
-                          {isColShown("pname_en") && (() => {
-                            const notFound = row.product_name === "ไม่พบข้อมูล";
-                            const txt = notFound ? "ไม่พบข้อมูลในระบบ" : (row.product_name_en || "-");
-                            return <td className={`px-2 py-1 text-xs truncate ${notFound ? "text-destructive" : ""}`} title={txt}>{txt}</td>;
-                          })()}
+                          {isColShown("pname_en") && (
+                            notFound
+                              ? <td className="px-1 py-1">
+                                  <Input
+                                    value={row.product_name_en}
+                                    onChange={(e) => updateMuField(idx, "product_name_en", e.target.value)}
+                                    title={row.product_name_en}
+                                    className="h-8 w-full"
+                                    placeholder="คีย์ชื่อสินค้า"
+                                  />
+                                </td>
+                              : <td className="px-2 py-1 text-xs truncate" title={row.product_name_en || "-"}>{row.product_name_en || "-"}</td>
+                          )}
                           {isColShown("pname") && <td className="px-1 py-1">
                             <Input
                               data-r={idx}
