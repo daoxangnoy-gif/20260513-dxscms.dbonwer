@@ -3728,7 +3728,7 @@ const PO_FIXED_COLS: POColMeta[] = [
   { key: "diff", label: "DIFF", def: false, w: 80, thCls: "text-right text-muted-foreground/70", tdCls: "text-right tabular-nums text-muted-foreground/40" },
 ];
 const PO_BRAND_W = 90; // ความกว้างเริ่มต้นของคอลัมน์แบรนด์
-const PO_VIS_LS = "po_vis_cols";
+const PO_VIS_LS = "po_vis_cols_v2"; // bump version → ล้างค่าเก่าใน localStorage ให้ default ใหม่ทำงาน
 const PO_W_LS = "po_col_widths";
 const poDefaultVis = () => new Set(PO_FIXED_COLS.filter((c) => c.def).map((c) => c.key));
 
