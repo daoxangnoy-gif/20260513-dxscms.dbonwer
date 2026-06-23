@@ -3653,6 +3653,7 @@ type POAgg = {
   product_name: string;
   total: number;
   byBrand: Map<string, number>;
+  picByBrand: Map<string, string>; // brand → picture URL (เก็บ URL แรกที่เจอต่อแบรนด์)
 };
 type PORow = {
   division: string;
@@ -3679,6 +3680,7 @@ type PORow = {
   pocost: number | null;
   byBrand: Map<string, number>;
   total: number;
+  pictures: Array<{ url: string; brand: string }>; // รูปสินค้า (URL แรกต่อแบรนด์)
 };
 
 // คอลัมน์ของ 2 sub-tab Import (key + label + alias สำหรับจับหัวคอลัมน์ Excel)
@@ -3727,6 +3729,7 @@ const PO_FIXED_COLS: POColMeta[] = [
   { key: "id", label: "ID", def: true, w: 120, tdCls: "font-medium" },
   { key: "barcode", label: "Barcode", def: true, w: 130 },
   { key: "product_name_en", label: "Product name EN", def: true, w: 240 },
+  { key: "picture", label: "Picture", def: true, w: 90 },
   { key: "stock_dc", label: "Stock DC", def: true, w: 90, thCls: "text-right", tdCls: "text-right tabular-nums" },
   { key: "stock_dc_kr", label: "Stock DC (KR)", def: true, w: 110, thCls: "text-right", tdCls: "text-right tabular-nums" },
   { key: "total", label: "Total qty", def: true, w: 90, thCls: "text-right bg-emerald-50", tdCls: "text-right tabular-nums font-semibold bg-emerald-50/40" },
@@ -3792,6 +3795,17 @@ const poCellValue = (key: string, r: PORow): React.ReactNode => {
     case "id": return r.id || "-";
     case "barcode": return r.barcode || "-";
     case "product_name_en": return <span className="block truncate" title={r.product_name_en}>{r.product_name_en || "-"}</span>;
+    case "picture": {
+      if (!r.pictures || r.pictures.length === 0) return <span className="text-muted-foreground">-</span>;
+      const first = r.pictures[0];
+      const multi = r.pictures.length > 1;
+      return (
+        <a href={first.url} target="_blank" rel="noopener noreferrer" className="flex flex-col items-center gap-0.5 group w-fit">
+          <img src={first.url} alt={first.brand} className="w-14 h-14 object-contain rounded border border-border group-hover:opacity-80 transition-opacity" />
+          <span className="text-[10px] text-muted-foreground leading-tight text-center max-w-[72px] truncate">{first.brand}{multi ? ` +${r.pictures.length - 1}` : ""}</span>
+        </a>
+      );
+    }
     case "stock_dc": return r.stock_dc ?? "-";
     case "stock_dc_kr": return r.stock_dc_kr ?? "-";
     case "total": return r.total;
@@ -4002,7 +4016,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       for (let from = 0; ; from += PAGE) {
         const { data, error } = await (supabase as any)
           .from("monthly_usage_item")
-          .select("sku_code, barcode, product_name, monthly_qty, doc_id")
+          .select("sku_code, barcode, product_name, monthly_qty, doc_id, picture")
           .range(from, from + PAGE - 1);
         if (error) throw error;
         if (!data || data.length === 0) break;
@@ -4023,10 +4037,11 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         const brand = brandByDoc.get(it.doc_id) || "";
         if (brand) brandSet.add(brand);
         const qty = Number(it.monthly_qty) || 0;
-        if (!map.has(key)) map.set(key, { sku, barcode: it.barcode || "", product_name: it.product_name || "", total: 0, byBrand: new Map() });
+        if (!map.has(key)) map.set(key, { sku, barcode: it.barcode || "", product_name: it.product_name || "", total: 0, byBrand: new Map(), picByBrand: new Map() });
         const a = map.get(key)!;
         a.total += qty;
         if (brand) a.byBrand.set(brand, (a.byBrand.get(brand) || 0) + qty);
+        if (brand && it.picture && !a.picByBrand.has(brand)) a.picByBrand.set(brand, it.picture);
         if (!a.barcode && it.barcode) a.barcode = it.barcode;
         if (!a.product_name && it.product_name) a.product_name = it.product_name;
       }
@@ -4112,6 +4127,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           pocost: (pc as any).po_cost ?? null,
           byBrand: a.byBrand,
           total: a.total,
+          pictures: [...a.picByBrand.entries()].map(([brand, url]) => ({ url, brand })),
         };
       });
       rows.sort((x, y) => (x.product_name_en || x.id).localeCompare(y.product_name_en || y.id, undefined, { sensitivity: "base" }));
