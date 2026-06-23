@@ -3542,6 +3542,16 @@ type PORow = {
   barcode: string;
   product_name_en: string;
   stock_dc: number | null;
+  stock_dc_kr: number | null;
+  // จาก PO Receive (เอา line วันที่ PO ล่าสุดของ ID นั้น)
+  po_number: string;
+  po_date: string;
+  po_status: string;
+  po_qty: string;
+  rec_po: string;
+  // จาก PO Cost (match ด้วย id อย่างเดียว)
+  moq_1x: number | null;
+  pocost: number | null;
   byBrand: Map<string, number>;
   total: number;
 };
@@ -3567,8 +3577,6 @@ const PO_RECEIVE_COLS = [
   { key: "status", label: "Status", aliases: ["status"] },
 ] as const;
 
-// คอลัมน์ PO tracking (รอบนี้ว่างไว้ก่อน — placeholder)
-const PO_TRACK_COLS = ["PO NUMBER", "PO DATE", "PO Status", "PO QTY", "REC PO", "DIFF", "1x", "Pocost"] as const;
 
 function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   vendorOriginMap: React.MutableRefObject<Record<string, string>>;
@@ -3712,6 +3720,28 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         if (String(s.type_store) === "DC") stockDcMap.set(s.item_id, (stockDcMap.get(s.item_id) || 0) + (Number(s.quantity) || 0));
       }
 
+      // PO Cost — 1x = moq, Pocost = po_cost (match ด้วย item_id อย่างเดียว, ไม่ match vendor)
+      const pcMap = new Map<string, { moq: number | null; po_cost: number | null }>();
+      try {
+        const pc = skus.length ? await fetchInChunks("po_cost", "item_id, moq, po_cost", "item_id", skus) : [];
+        for (const p of pc) { const id = String(p.item_id ?? ""); if (id && !pcMap.has(id)) pcMap.set(id, { moq: p.moq == null ? null : Number(p.moq), po_cost: p.po_cost == null ? null : Number(p.po_cost) }); }
+      } catch { /* ตาราง/สิทธิ์ไม่พร้อม — ข้าม */ }
+
+      // Stock DC (KR) — SUMIF qty จาก scm_stock_kr where id = id
+      const krMap = new Map<string, number>();
+      try {
+        const kr = skus.length ? await fetchInChunks("scm_stock_kr", "id, qty", "id", skus) : [];
+        for (const k of kr) { const id = String(k.id ?? ""); if (id) krMap.set(id, (krMap.get(id) || 0) + (Number(k.qty) || 0)); }
+      } catch { /* ตารางยังไม่ถูกสร้าง — ข้าม */ }
+
+      // PO Receive — เอา line ที่ created_date (วันที่ PO) ล่าสุดของแต่ละ id
+      const recMap = new Map<string, any>();
+      try {
+        const rec = skus.length ? await fetchInChunks("scm_po_receive", "id, order_ref, created_date, status, quantity, received_qty", "id", skus) : [];
+        const ts = (v: any) => { const t = Date.parse(String(v)); return isNaN(t) ? -Infinity : t; };
+        for (const r of rec) { const id = String(r.id ?? ""); if (!id) continue; const cur = recMap.get(id); if (!cur || ts(r.created_date) >= ts(cur.created_date)) recMap.set(id, r); }
+      } catch { /* ตารางยังไม่ถูกสร้าง — ข้าม */ }
+
       const brands = [...brandSet].sort((a, b) => a.localeCompare(b));
       const rows: PORow[] = [...map.values()].map((a) => {
         const d = dmMap.get(a.sku) || {};
@@ -3720,6 +3750,9 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         const vendorStr = d.vendor_code
           ? `${d.vendor_code}${d.vendor_display_name ? ` - ${d.vendor_display_name}` : ""}${v.supplier_currency ? ` - ${v.supplier_currency}` : ""}`
           : "";
+        const pc = pcMap.get(a.sku) || {};
+        const rec = recMap.get(a.sku) || {};
+        const str = (x: any) => (x == null || x === "" ? "" : String(x));
         return {
           division: d.division || "",
           department: d.department || "",
@@ -3730,6 +3763,14 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           barcode: d.main_barcode || a.barcode || "",
           product_name_en: d.product_name_en || a.product_name || "",
           stock_dc: stockDcMap.has(a.sku) ? (stockDcMap.get(a.sku) as number) : null,
+          stock_dc_kr: krMap.has(a.sku) ? (krMap.get(a.sku) as number) : null,
+          po_number: str(rec.order_ref),
+          po_date: str(rec.created_date),
+          po_status: str(rec.status),
+          po_qty: str(rec.quantity),
+          rec_po: str(rec.received_qty),
+          moq_1x: (pc as any).moq ?? null,
+          pocost: (pc as any).po_cost ?? null,
           byBrand: a.byBrand,
           total: a.total,
         };
@@ -3768,22 +3809,37 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         Division: r.division,
         Department: r.department,
         Remark: "",
-        SKU: r.sku,
         Action: "",
+        SKU: r.sku, // ซ่อนคอลัมน์ไว้ก่อน (ตั้ง hidden ด้านล่าง)
         "Vendor (code-name-currency)": r.vendor,
         "Vendor origin": r.vendor_origin,
+        "PO NUMBER": r.po_number,
+        "PO DATE": r.po_date,
+        "PO Status": r.po_status,
+        "PO QTY": r.po_qty,
+        "REC PO": r.rec_po,
+        "1x": r.moq_1x ?? "",
+        Pocost: r.pocost ?? "",
         ID: r.id,
         Barcode: r.barcode,
         "Product name EN": r.product_name_en,
         "Stock DC": r.stock_dc ?? "",
-        "Stock DC (KR)": "",
+        "Stock DC (KR)": r.stock_dc_kr ?? "",
       };
       for (const b of poBrands) base[b] = r.byBrand.get(b) ?? "";
       base["Total qty"] = r.total;
-      for (const t of PO_TRACK_COLS) base[t] = "";
+      base["DIFF"] = ""; // ว่างไว้ก่อน
       return base;
     });
     const ws = XLSX.utils.json_to_sheet(out);
+    // ซ่อนคอลัมน์ SKU (ลำดับที่ 6 → index 5)
+    const skuIdx = Object.keys(out[0] || {}).indexOf("SKU");
+    if (skuIdx >= 0) {
+      const cols: any[] = [];
+      for (let c = 0; c <= skuIdx; c++) cols[c] = cols[c] || {};
+      cols[skuIdx] = { hidden: true };
+      ws["!cols"] = cols;
+    }
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "PO");
     const pad = (n: number) => String(n).padStart(2, "0");
@@ -3872,10 +3928,17 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                 <th>Division</th>
                 <th>Department</th>
                 <th>Remark</th>
-                <th>SKU</th>
                 <th className="text-center">Action</th>
+                <th className="hidden">SKU</th>
                 <th>Vendor (code-name-currency)</th>
                 <th>Vendor origin</th>
+                <th className="text-muted-foreground/70">PO NUMBER</th>
+                <th className="text-muted-foreground/70">PO DATE</th>
+                <th className="text-muted-foreground/70">PO Status</th>
+                <th className="text-right text-muted-foreground/70">PO QTY</th>
+                <th className="text-right text-muted-foreground/70">REC PO</th>
+                <th className="text-right">1x</th>
+                <th className="text-right">Pocost</th>
                 <th>ID</th>
                 <th>Barcode</th>
                 <th>Product name EN</th>
@@ -3885,9 +3948,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                   <th key={b} className="text-right bg-amber-50">{b}</th>
                 ))}
                 <th className="text-right bg-emerald-50">Total qty</th>
-                {PO_TRACK_COLS.map((t) => (
-                  <th key={t} className="text-muted-foreground/60">{t}</th>
-                ))}
+                <th className="text-right text-muted-foreground/70">DIFF</th>
               </tr>
             </thead>
             <tbody>
@@ -3897,27 +3958,32 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                   <td className="text-muted-foreground">{r.division || "-"}</td>
                   <td className="text-muted-foreground">{r.department || "-"}</td>
                   <td className="text-muted-foreground">-</td>
-                  <td>{r.sku || "-"}</td>
                   <td className="text-center text-muted-foreground/50">-</td>
+                  <td className="hidden">{r.sku || "-"}</td>
                   <td>{r.vendor || "-"}</td>
                   <td className="text-muted-foreground">{r.vendor_origin || "-"}</td>
+                  <td className="text-muted-foreground/80">{r.po_number || "-"}</td>
+                  <td className="text-muted-foreground/80">{r.po_date || "-"}</td>
+                  <td className="text-muted-foreground/80">{r.po_status || "-"}</td>
+                  <td className="text-right tabular-nums text-muted-foreground/80">{r.po_qty || "-"}</td>
+                  <td className="text-right tabular-nums text-muted-foreground/80">{r.rec_po || "-"}</td>
+                  <td className="text-right tabular-nums">{r.moq_1x ?? "-"}</td>
+                  <td className="text-right tabular-nums">{r.pocost ?? "-"}</td>
                   <td className="font-medium">{r.id || "-"}</td>
                   <td>{r.barcode || "-"}</td>
                   <td className="max-w-[260px] truncate" title={r.product_name_en}>{r.product_name_en || "-"}</td>
                   <td className="text-right tabular-nums">{r.stock_dc ?? "-"}</td>
-                  <td className="text-right tabular-nums text-muted-foreground/50">-</td>
+                  <td className="text-right tabular-nums">{r.stock_dc_kr ?? "-"}</td>
                   {poBrands.map((b) => (
                     <td key={b} className="text-right tabular-nums bg-amber-50/40">{r.byBrand.get(b) ?? ""}</td>
                   ))}
                   <td className="text-right tabular-nums font-semibold bg-emerald-50/40">{r.total}</td>
-                  {PO_TRACK_COLS.map((t) => (
-                    <td key={t} className="text-muted-foreground/40">-</td>
-                  ))}
+                  <td className="text-right tabular-nums text-muted-foreground/40">-</td>
                 </tr>
               ))}
               {filteredPoRows.length === 0 && (
                 <tr>
-                  <td colSpan={13 + poBrands.length + 1 + PO_TRACK_COLS.length} className="px-3 py-8 text-center text-muted-foreground">
+                  <td colSpan={21 + poBrands.length} className="px-3 py-8 text-center text-muted-foreground">
                     {!poLoaded ? "กด \"โหลด / คำนวณ\" เพื่อดึงรายการจาก Monthly usage ทุกแบรนด์" : poRows.length === 0 ? "ไม่มีข้อมูล" : "ไม่พบรายการที่ค้นหา"}
                   </td>
                 </tr>
@@ -3926,7 +3992,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           </table>
         </div>
         <p className="text-[11px] text-muted-foreground">
-          Stock DC (KR) และคอลัมน์ PO tracking (PO NUMBER, PO DATE, ...) เว้นว่างไว้ก่อน — จะเชื่อมจาก sub-tab Stock Kr / PO Receive ภายหลัง
+          PO NUMBER/DATE/Status/QTY/REC PO ดึงจาก PO Receive (line วันที่ล่าสุดของ ID) · 1x/Pocost จาก PO Cost (match ID) · Stock DC (KR) รวมจาก Stock Kr · DIFF เว้นว่างไว้ก่อน
         </p>
       </TabsContent>
 
