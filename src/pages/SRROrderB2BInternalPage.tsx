@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, Fragment } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -405,6 +405,7 @@ export default function SRROrderB2BInternalPage() {
     loadOrderDocs();
     loadRouteplan();
     loadSoDocs();
+    loadBrandOptions(); // โหลด brand (รวม brand_group) ไว้ใช้จัดกลุ่มหัวข้อในรายการเอกสาร
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -752,6 +753,25 @@ export default function SRROrderB2BInternalPage() {
       setBrandOptions([]);
       return [];
     }
+  };
+
+  // จัดกลุ่มเอกสารตาม Group ของแบรนด์ (สำหรับหัวข้อกลุ่มในรายการ Monthly usage / Order)
+  const NO_GROUP_LABEL = "ไม่ระบุกลุ่ม";
+  const groupOfBrand = (name: string) => {
+    const key = (name || "").trim().toLowerCase();
+    const b = brandOptions.find((o) => o.brand_name.trim().toLowerCase() === key);
+    return (b?.brand_group || "").trim();
+  };
+  const groupDocsByBrand = <T extends { brand_name: string }>(list: T[]): { group: string; items: T[] }[] => {
+    const map = new Map<string, T[]>();
+    for (const d of list) {
+      const g = groupOfBrand(d.brand_name) || NO_GROUP_LABEL;
+      if (!map.has(g)) map.set(g, []);
+      map.get(g)!.push(d);
+    }
+    return [...map.entries()]
+      .sort((a, b) => (a[0] === NO_GROUP_LABEL ? 1 : b[0] === NO_GROUP_LABEL ? -1 : a[0].localeCompare(b[0])))
+      .map(([group, items]) => ({ group, items }));
   };
 
   const openMuNew = async () => {
@@ -2300,7 +2320,12 @@ export default function SRROrderB2BInternalPage() {
                 </tr>
               </thead>
               <tbody>
-                {docs.map((d) => (
+                {groupDocsByBrand(docs).map(({ group, items }) => (
+                  <Fragment key={group}>
+                    <tr className="bg-muted/60 border-b">
+                      <td colSpan={8} className="px-3 py-1 text-xs font-semibold text-primary/80">{group} · {items.length}</td>
+                    </tr>
+                    {items.map((d) => (
                   <tr key={d.id} className="border-b last:border-0 hover:bg-muted/40">
                     <td className="px-3 py-1.5 font-medium">{d.doc_label}</td>
                     <td className="px-3 py-1.5">
@@ -2405,6 +2430,8 @@ export default function SRROrderB2BInternalPage() {
                       </div>
                     </td>
                   </tr>
+                    ))}
+                  </Fragment>
                 ))}
                 {docs.length === 0 && !docsLoading && (
                   <tr>
@@ -2440,7 +2467,12 @@ export default function SRROrderB2BInternalPage() {
                 </tr>
               </thead>
               <tbody>
-                {orderDocs.map((d) => (
+                {groupDocsByBrand(orderDocs).map(({ group, items }) => (
+                  <Fragment key={group}>
+                    <tr className="bg-muted/60 border-b">
+                      <td colSpan={6} className="px-3 py-1 text-xs font-semibold text-primary/80">{group} · {items.length}</td>
+                    </tr>
+                    {items.map((d) => (
                   <tr key={d.id} className="border-b last:border-0 hover:bg-muted/40">
                     <td className="px-3 py-1.5 font-medium">{d.doc_label}</td>
                     <td className="px-3 py-1.5">{d.brand_name}</td>
@@ -2461,6 +2493,8 @@ export default function SRROrderB2BInternalPage() {
                       </div>
                     </td>
                   </tr>
+                    ))}
+                  </Fragment>
                 ))}
                 {orderDocs.length === 0 && !orderDocsLoading && (
                   <tr>
