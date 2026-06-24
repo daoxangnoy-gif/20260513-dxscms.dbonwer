@@ -4079,6 +4079,71 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     });
   };
 
+  // Import Excel 2 คอลัมน์ (ID + Vendor code) → อัปเดต Vendor code ของ SKU ที่ตรงกันแบบ bulk
+  // เซลล์ Vendor code ที่ว่าง = ไม่เปลี่ยน (ข้าม)
+  const [vendorImporting, setVendorImporting] = useState(false);
+  const handleVendorImport = async (file: File) => {
+    setVendorImporting(true);
+    try {
+      const ab = await file.arrayBuffer();
+      const wb = XLSX.read(ab);
+      const raw: any[][] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
+      if (raw.length < 2) { toast({ title: "ไฟล์ว่าง", variant: "destructive" }); return; }
+      const headers = (raw[0] as string[]).map((h) => String(h ?? "").toLowerCase().trim());
+      const idIdx = headers.findIndex((h) => h === "id" || h === "item_id" || h.includes("sku") || h.includes("รหัส"));
+      const vcIdx = headers.findIndex((h) => h.includes("vendor code") || h.includes("vendor_code") || h.includes("ผู้สนอง") || h === "vendor");
+      if (idIdx < 0) { toast({ title: "ไม่พบคอลัมน์ ID", variant: "destructive" }); return; }
+      if (vcIdx < 0) { toast({ title: "ไม่พบคอลัมน์ Vendor code", variant: "destructive" }); return; }
+      // sku → vendor code (เอาแถวหลังสุดถ้าซ้ำ, ข้ามแถวที่ไม่ได้กรอก vendor code)
+      const pairs = new Map<string, string>();
+      for (const r of raw.slice(1)) {
+        const sku = String(r[idIdx] ?? "").trim();
+        const vc = String(r[vcIdx] ?? "").trim();
+        if (!sku || !vc) continue;
+        pairs.set(sku, vc);
+      }
+      if (pairs.size === 0) { toast({ title: "ไม่พบข้อมูล (ต้องมีทั้ง ID และ Vendor code)", variant: "destructive" }); return; }
+      // batch lookup: vendor_master (currency, origin) + data_master (display name) ของ vendor code ที่ไม่ซ้ำ
+      const codes = [...new Set([...pairs.values()])];
+      const vmMap = new Map<string, { currency: string; origin: string }>();
+      const nameMap = new Map<string, string>();
+      try {
+        const [vmRes, dmRes] = await Promise.all([
+          (supabase as any).from("vendor_master").select("vendor_code, supplier_currency, vendor_origin").in("vendor_code", codes),
+          (supabase as any).from("data_master").select("vendor_code, vendor_display_name").in("vendor_code", codes).not("vendor_display_name", "is", null),
+        ]);
+        for (const v of (vmRes.data || [])) if (v.vendor_code && !vmMap.has(v.vendor_code)) vmMap.set(v.vendor_code, { currency: v.supplier_currency || "", origin: v.vendor_origin || "" });
+        for (const d of (dmRes.data || [])) if (d.vendor_code && !nameMap.has(d.vendor_code)) nameMap.set(d.vendor_code, d.vendor_display_name || "");
+      } catch { /* lookup พลาด → ใช้ค่าว่าง */ }
+      // อัปเดต override (localStorage) เฉพาะ SKU ที่อยู่ในตาราง PO
+      const skuSet = new Set(poRows.map((r) => r.sku));
+      const ov = { ...vendorOvRef.current };
+      let updated = 0, notFound = 0;
+      for (const [sku, vc] of pairs) {
+        if (!skuSet.has(sku)) { notFound++; continue; }
+        ov[sku] = { code: vc, name: nameMap.get(vc) || "", currency: vmMap.get(vc)?.currency || "", origin: vmMap.get(vc)?.origin || "" };
+        updated++;
+      }
+      vendorOvRef.current = ov;
+      try { localStorage.setItem(PO_VENDOR_OV_LS, JSON.stringify(ov)); } catch {}
+      // อัปแถวใน state + cache ทีเดียว
+      setPoRows((prev) => {
+        const next = prev.map((r) => {
+          const vc = pairs.get(r.sku);
+          if (!vc) return r;
+          return { ...r, vendor_code: vc, vendor_name: nameMap.get(vc) || "", vendor_currency: vmMap.get(vc)?.currency || "", vendor_origin: vmMap.get(vc)?.origin || r.vendor_origin };
+        });
+        if (poDataCache) poDataCache = { ...poDataCache, rows: next };
+        return next;
+      });
+      toast({ title: "อัปเดต Vendor เสร็จ", description: `อัปเดต ${updated} รายการ${notFound ? ` · ไม่พบใน PO ${notFound}` : ""}` });
+    } catch (e: any) {
+      toast({ title: "Import ไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setVendorImporting(false);
+    }
+  };
+
   // ---- คอลัมน์ที่แสดง (Show/Hide) — จำค่าไว้ใน localStorage ----
   const [visCols, setVisCols] = useState<Set<string>>(() => {
     try {
@@ -4563,6 +4628,24 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
               </div>
             </PopoverContent>
           </Popover>
+          <Button
+            size="sm" variant="outline"
+            className="h-8 gap-1.5 text-xs"
+            onClick={() => {
+              const ws = XLSX.utils.json_to_sheet([{ ID: "0527049969", "Vendor code": "DC0193" }]);
+              ws["!cols"] = [{ wch: 16 }, { wch: 16 }];
+              const wb = XLSX.utils.book_new();
+              XLSX.utils.book_append_sheet(wb, ws, "Template");
+              XLSX.writeFile(wb, "UpdateVendor_Template.xlsx");
+            }}
+            title="ดาวน์โหลด Template (ID + Vendor code)"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5" /> Template
+          </Button>
+          <label className={cn("inline-flex items-center gap-1.5 h-8 px-3 rounded-md border text-xs cursor-pointer hover:bg-muted/50", vendorImporting && "opacity-60 pointer-events-none")} title="Import Excel 2 คอลัมน์ (ID + Vendor code) เพื่ออัปเดต Vendor">
+            <input type="file" accept=".xlsx,.xls" className="hidden" disabled={vendorImporting} onChange={(e) => { const f = e.target.files?.[0]; if (f) handleVendorImport(f); e.target.value = ""; }} />
+            {vendorImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />} Import Vendor
+          </label>
           <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={exportPO} disabled={filteredPoRows.length === 0}>
             <Download className="w-3.5 h-3.5" /> Export
           </Button>
