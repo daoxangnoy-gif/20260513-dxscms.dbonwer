@@ -4102,8 +4102,8 @@ function getPoRemarkAction(r: PORow): { remark: string; action: string } {
 function getPoAction2(r: PORow): string {
   // 1. ไม่พบใน data_master
   if (!r.inDM) return "รหัสสินค้าไม่มีข้อมูลในระบบ จัดชื้อประสารแบรนใส่บารที่มีในระบบ";
-  // 2. Diff (Total - Stock KR) <= 0 → เบิกไป KR ครบแล้ว (คิดเฉพาะเมื่อมีค่า Stock KR)
-  if (r.stock_dc_kr != null && (r.total - r.stock_dc_kr) <= 0) return "เบิกไปสาง KR แล้ว";
+  // 2. Diff (Total - Stock KR) <= 0 → เบิกไป KR ครบแล้ว (Stock KR ว่าง = 0)
+  if ((r.total - (r.stock_dc_kr ?? 0)) <= 0) return "เบิกไปสาง KR แล้ว";
   // 3-4. มีเลข PO
   const hasPo = r.po_number.trim() !== "" && r.po_number.trim() !== "-";
   const recQty = parseFloat(r.rec_po) || 0;
@@ -4217,8 +4217,8 @@ const poCellValue = (key: string, r: PORow): React.ReactNode => {
     case "stock_dc_kr": return r.stock_dc_kr ?? "-";
     case "total": return r.total;
     case "diff": {
-      if (r.stock_dc_kr == null) return "-";
-      const diff = r.total - r.stock_dc_kr;
+      // Stock KR ว่าง = 0 → DIFF = Total - Stock KR
+      const diff = r.total - (r.stock_dc_kr ?? 0);
       return <span className={diff > 0 ? "text-red-500 font-semibold" : "text-emerald-600"}>{diff}</span>;
     }
     default: return "";
@@ -4716,7 +4716,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       };
       for (const b of poBrands) base[b] = r.byBrand.get(b) ?? "";
       base["Total qty"] = r.total;
-      base["DIFF"] = r.stock_dc_kr != null ? r.total - r.stock_dc_kr : "";
+      base["DIFF"] = r.total - (r.stock_dc_kr ?? 0);
       return base;
     });
     const ws = XLSX.utils.json_to_sheet(out);
@@ -4955,7 +4955,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           </table>
         </div>
         <p className="text-[11px] text-muted-foreground">
-          PO NUMBER/DATE/Status/QTY/REC PO ดึงจาก PO Receive (line วันที่ล่าสุดของ ID) · 1x/Pocost จาก PO Cost (match ID) · Stock DC (KR) รวมจาก Stock Kr · DIFF เว้นว่างไว้ก่อน
+          PO NUMBER/DATE/Status/QTY/REC PO ดึงจาก PO Receive (line วันที่ล่าสุดของ ID) · 1x/Pocost จาก PO Cost (match ID) · Stock DC (KR) รวมจาก Stock Kr · DIFF = Total qty − Stock DC (KR) (KR ว่าง = 0)
         </p>
       </TabsContent>
 
