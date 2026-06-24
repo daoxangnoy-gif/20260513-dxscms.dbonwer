@@ -4086,7 +4086,7 @@ const PO_FIXED_COLS: POColMeta[] = [
 ];
 const PO_BRAND_W = 90; // ความกว้างเริ่มต้นของคอลัมน์แบรนด์
 const PO_VIS_LS = "po_vis_cols_v4"; // bump version → ล้างค่าเก่าใน localStorage ให้ default ใหม่ทำงาน
-const PO_VIS_MIGRATED = "po_vis_migrated_v3"; // ล้างค่าคอลัมน์เก่าทิ้งครั้งเดียวตอนโหลดหน้าจริง
+const PO_VIS_MIGRATED = "po_vis_migrated_v4"; // ล้างค่าคอลัมน์เก่าทิ้งครั้งเดียว → กลับไป default ที่กำหนด
 const PO_W_LS = "po_col_widths";
 const PO_VENDOR_OV_LS = "po_vendor_overrides_v2"; // override vendor code ที่ผู้ใช้คีย์ไว้ (key = sku)
 
@@ -4400,7 +4400,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     } catch { /* ignore */ }
     return poDefaultVis();
   });
-  useEffect(() => { try { localStorage.setItem(PO_VIS_LS, JSON.stringify([...visCols])); } catch { /* ignore */ } }, [visCols]);
+  // ไม่ auto-save แล้ว — บันทึกเมื่อกดปุ่ม "Save View" เท่านั้น (ดู saveView ด้านล่าง)
   const toggleCol = (key: string) => setVisCols((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
 
   // ---- ความกว้างคอลัมน์ (ลากยืด/หดหัวคอลัมน์ได้) — จำค่าใน localStorage ----
@@ -4408,7 +4408,14 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     try { const raw = localStorage.getItem(PO_W_LS); if (raw) return JSON.parse(raw); } catch { /* ignore */ }
     return {};
   });
-  useEffect(() => { try { localStorage.setItem(PO_W_LS, JSON.stringify(colWidths)); } catch { /* ignore */ } }, [colWidths]);
+  // บันทึก View (เฉพาะเครื่องนี้): คอลัมน์ที่แสดง/ซ่อน + ความกว้าง
+  const saveView = () => {
+    try {
+      localStorage.setItem(PO_VIS_LS, JSON.stringify([...visCols]));
+      localStorage.setItem(PO_W_LS, JSON.stringify(colWidths));
+      toast({ title: "บันทึก View แล้ว", description: "คอลัมน์ที่แสดง + ความกว้าง (เฉพาะเครื่องนี้)" });
+    } catch { toast({ title: "บันทึก View ไม่สำเร็จ", variant: "destructive" }); }
+  };
   const defaultW = (key: string) => (key.startsWith("brand:") ? PO_BRAND_W : (PO_FIXED_COLS.find((c) => c.key === key)?.w ?? 110));
   const widthOf = (key: string) => colWidths[key] ?? defaultW(key);
   const resizing = useRef<{ key: string; startX: number; startW: number } | null>(null);
@@ -4893,6 +4900,9 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
               </div>
             </PopoverContent>
           </Popover>
+          <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={saveView} title="บันทึกคอลัมน์ที่แสดง + ความกว้าง (เฉพาะเครื่องนี้)">
+            <Save className="w-3.5 h-3.5" /> Save View
+          </Button>
           <Button
             size="sm" variant="outline"
             className="h-8 gap-1.5 text-xs"
