@@ -738,6 +738,10 @@ export default function SRROrderB2BInternalPage() {
   const [brandLogoUploadingId, setBrandLogoUploadingId] = useState<string | null>(null); // doc_id ที่กำลังอัปโลโก้แบรนด์
   const [signedUploadingId, setSignedUploadingId] = useState<string | null>(null); // doc_id ที่กำลังอัปไฟล์เซ็น
   const [printingId, setPrintingId] = useState<string | null>(null); // doc_id ที่กำลังเตรียมพิมพ์
+  // ป๊อปอัปถามวันที่ Need ตอนกด Print (สำหรับ doc ที่ยังไม่มี need_date เช่นมาจากการ Import)
+  const [printNeedOpen, setPrintNeedOpen] = useState(false);
+  const [printNeedDate, setPrintNeedDate] = useState(""); // yyyy-mm-dd
+  const [pendingPrintDoc, setPendingPrintDoc] = useState<MUDoc | null>(null);
   // Import Monthly Excel หลายแบรนด์พร้อมกัน
   const [multiImporting, setMultiImporting] = useState(false);
   const [importSkips, setImportSkips] = useState<{ brand: string; reason: string; count: number }[]>([]);
@@ -1509,8 +1513,19 @@ export default function SRROrderB2BInternalPage() {
     }
   };
 
-  // พิมพ์ฟอร์มเอกสารเดิมซ้ำ (ดึงรายการ + need_date + logo จาก DB โดยไม่ต้องเข้าไปแก้ไข)
-  const printDoc = async (doc: MUDoc) => {
+  // กด Print → ถ้า doc ยังไม่มี need_date (เช่นมาจาก Import) ให้ป๊อปอัปถามวันที่ก่อนทุกครั้ง
+  const printDoc = (doc: MUDoc) => {
+    if (!doc.need_date) {
+      setPendingPrintDoc(doc);
+      setPrintNeedDate("");
+      setPrintNeedOpen(true);
+      return;
+    }
+    doPrintDoc(doc, doc.need_date);
+  };
+
+  // พิมพ์ฟอร์มเอกสารเดิมซ้ำ (ดึงรายการ + logo จาก DB โดยไม่ต้องเข้าไปแก้ไข) — ใช้ needDateISO ที่ส่งเข้ามา
+  const doPrintDoc = async (doc: MUDoc, needDateISO: string) => {
     setPrintingId(doc.id);
     try {
       const { data, error } = await (supabase as any)
@@ -1535,7 +1550,7 @@ export default function SRROrderB2BInternalPage() {
         picture: it.picture ?? "",
         remark: it.remark ?? "",
       }));
-      openPrintForm(formRows, doc.brand_name, doc.need_date || "", doc.logo_url || "");
+      openPrintForm(formRows, doc.brand_name, needDateISO || "", doc.logo_url || "");
     } catch (e: any) {
       toast({ title: "พิมพ์ไม่สำเร็จ", description: e.message, variant: "destructive" });
     } finally {
@@ -3601,6 +3616,37 @@ export default function SRROrderB2BInternalPage() {
             >
               {muSaving && <Loader2 className="w-4 h-4 animate-spin mr-1.5" />}
               บันทึก & ออกฟอร์ม
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ป๊อปอัปถามวันที่ Need ตอนกด Print (doc ที่ยังไม่มี need_date เช่นมาจาก Import) */}
+      <Dialog open={printNeedOpen} onOpenChange={(o) => { if (printingId === null) setPrintNeedOpen(o); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>วันที่คาดว่าจะเบิก (DATE Need)</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <Label className="text-xs">เอกสารนี้ยังไม่มีวันที่ Need — เลือกวันที่ก่อนพิมพ์</Label>
+            <Input
+              type="date"
+              value={printNeedDate}
+              onChange={(e) => setPrintNeedDate(e.target.value)}
+              className="h-9"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPrintNeedOpen(false)}>ยกเลิก</Button>
+            <Button
+              onClick={() => {
+                if (!printNeedDate) { toast({ title: "กรุณาเลือกวันที่คาดว่าจะเบิก", variant: "destructive" }); return; }
+                const doc = pendingPrintDoc;
+                setPrintNeedOpen(false);
+                if (doc) doPrintDoc(doc, printNeedDate);
+              }}
+            >
+              ออกฟอร์ม
             </Button>
           </DialogFooter>
         </DialogContent>
