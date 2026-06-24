@@ -111,17 +111,14 @@ async function extractImagesFromXlsx(ab: ArrayBuffer): Promise<Map<number, { dat
           rIdToMedia.set(id, resolved);
         }
       }
-      console.log("[IMG2] rIdToMedia size:", rIdToMedia.size, "| first entry:", [...rIdToMedia.entries()][0]);
-      // 2. richValueRel.xml: rich value index → rId
+      // 2. richValueRel.xml: rich value index = ตำแหน่งของ <rel> (0-based) → rId
+      //    WPS ไม่ใส่ attribute i= ใน <rel> จึงต้องนับตำแหน่งเอง
       const rvIdxToRId = new Map<number, string>();
-      for (const m of rvRelXml.matchAll(/<rel\b([^/>]*)\/?>/g)) {
-        const attrs = m[1];
-        const iM = attrs.match(/\bi="(\d+)"/);
-        const rIdM = attrs.match(/(?:r:|:)id="([^"]+)"/i);
-        if (iM && rIdM) rvIdxToRId.set(parseInt(iM[1]), rIdM[1]);
+      let relPos = 0;
+      for (const m of rvRelXml.matchAll(/<rel\b([^>]*?)\/?>/g)) {
+        const rIdM = m[1].match(/(?:r:)?id="([^"]+)"/i);
+        if (rIdM) { rvIdxToRId.set(relPos, rIdM[1]); relPos++; }
       }
-      console.log("[IMG2] rvIdxToRId size:", rvIdxToRId.size, "| first entry:", [...rvIdxToRId.entries()][0]);
-      console.log("[IMG2] rvRelXml snippet:", rvRelXml.slice(0, 400));
       // 3. metadata.xml futureMetadata XLRICHVALUE: fmIdx → rv index (rvb/@i)
       const fmIdxToRvIdx = new Map<number, number>();
       const fmSection = metaXml.match(/<futureMetadata\b[^>]*name="XLRICHVALUE"[^>]*>([\s\S]*?)<\/futureMetadata>/)?.[1] ?? "";
@@ -131,20 +128,17 @@ async function extractImagesFromXlsx(ab: ArrayBuffer): Promise<Map<number, { dat
         if (rvbM) fmIdxToRvIdx.set(fmIdx, parseInt(rvbM[1]));
         fmIdx++;
       }
-      console.log("[IMG2] fmIdxToRvIdx size:", fmIdxToRvIdx.size, "| fmSection length:", fmSection.length, "| snippet:", fmSection.slice(0, 300));
-      // 4. metadata.xml cellMetadata: cmIdx → fmIdx (rc t="1" v=fmIdx)
-      const cmIdxToFmIdx = new Map<number, number>();
-      const cmSection = metaXml.match(/<cellMetadata\b[^>]*>([\s\S]*?)<\/cellMetadata>/)?.[1] ?? "";
-      let cmIdx = 0;
-      for (const bkM of cmSection.matchAll(/<bk>([\s\S]*?)<\/bk>/g)) {
-        const rcM = bkM[1].match(/<rc\b[^>]*\bt="1"[^>]*\bv="(\d+)"/) ?? bkM[1].match(/<rc\b[^>]*\bv="(\d+)"[^>]*\bt="1"/);
-        if (rcM) cmIdxToFmIdx.set(cmIdx, parseInt(rcM[1]));
-        cmIdx++;
+      // 4. metadata.xml valueMetadata: vmIdx (0-based) → fmIdx (rc/@v)
+      //    cell ใช้ vm="N" (1-based) ชี้มาที่ valueMetadata ไม่ใช่ cellMetadata
+      const vmIdxToFmIdx = new Map<number, number>();
+      const vmSection = metaXml.match(/<valueMetadata\b[^>]*>([\s\S]*?)<\/valueMetadata>/)?.[1] ?? "";
+      let vmPos = 0;
+      for (const bkM of vmSection.matchAll(/<bk>([\s\S]*?)<\/bk>/g)) {
+        const rcM = bkM[1].match(/<rc\b[^>]*\bv="(\d+)"/);
+        if (rcM) vmIdxToFmIdx.set(vmPos, parseInt(rcM[1]));
+        vmPos++;
       }
-      console.log("[IMG2] cmIdxToFmIdx size:", cmIdxToFmIdx.size, "| cmSection snippet:", cmSection.slice(0, 300));
-      // 5. sheet XML: cells with vm → check how many match
-      const vmCells = [...sheetXml.matchAll(/<c\b([^>]*)>/g)].filter(m => m[1].includes("vm="));
-      console.log("[IMG2] cells with vm attr:", vmCells.length, "| first:", vmCells[0]?.[0]);
+      // 5. sheet XML: <c r="COLROW" vm="N"> → vmIdx=N-1 → fmIdx → rvIdx → rId → media
       const result = new Map<number, { data: Uint8Array; ext: string }>();
       for (const m of sheetXml.matchAll(/<c\b([^>]*)>/g)) {
         const attrs = m[1];
@@ -153,7 +147,7 @@ async function extractImagesFromXlsx(ab: ArrayBuffer): Promise<Map<number, { dat
         if (!rM || !vmM) continue;
         const xdrRow = parseInt(rM[2]) - 1;
         if (result.has(xdrRow)) continue;
-        const fmIdx2 = cmIdxToFmIdx.get(parseInt(vmM[1]));
+        const fmIdx2 = vmIdxToFmIdx.get(parseInt(vmM[1]) - 1);
         if (fmIdx2 === undefined) continue;
         const rvIdx = fmIdxToRvIdx.get(fmIdx2);
         if (rvIdx === undefined) continue;
@@ -167,13 +161,11 @@ async function extractImagesFromXlsx(ab: ArrayBuffer): Promise<Map<number, { dat
         const ext = mediaPath.split(".").pop()?.toLowerCase() || "png";
         result.set(xdrRow, { data, ext });
       }
-      console.log("[IMG2] result size:", result.size);
       if (result.size > 0) return result;
     }
 
     return new Map();
-  } catch (e) {
-    console.error("[IMG] extract error:", e);
+  } catch {
     return new Map();
   }
 }
@@ -1030,7 +1022,8 @@ export default function SRROrderB2BInternalPage() {
           sku_code: it.sku_code ?? "",
           barcode_unit: it.barcode_unit ?? "",
           product_name: it.product_name ?? "",
-          product_name_en: d.product_name_en ?? "",
+          // ถ้าพบใน master ใช้ EN จาก master, ถ้าไม่พบ fallback เป็นชื่อที่ import มา (เก็บใน it.product_name)
+          product_name_en: d.product_name_en ?? (it.product_name ?? ""),
           uom: it.uom ?? "",
           monthly_qty: it.monthly_qty != null ? String(it.monthly_qty) : "",
           order_group: it.order_group ?? "",

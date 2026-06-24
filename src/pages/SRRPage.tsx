@@ -152,43 +152,32 @@ function ElapsedTimer({ startedAt }: { startedAt: number }) {
   return <span className="text-[11px] font-mono tabular-nums text-primary font-semibold">⏱ {s}s</span>;
 }
 
+// Lazy sub-pages — ประกาศที่ module level (นอก component) ให้ reference คงที่
+// ถ้าประกาศในตัว render ทุก re-render จะสร้าง component ใหม่ → remount → state หาย
+const LazyDirectPage = React.lazy(() => import("@/pages/SRRDirectPage"));
+const LazySpecialOrderPage = React.lazy(() => import("@/pages/SRRSpecialOrderPage"));
+const LazyOrderB2BPage = React.lazy(() => import("@/pages/SRROrderB2BPage"));
+const LazyOrderB2BInternalPage = React.lazy(() => import("@/pages/SRROrderB2BInternalPage"));
+const LazyPaymentOverduePage = React.lazy(() => import("@/pages/SRRPaymentOverduePage"));
+const LazyJobAssignPage = React.lazy(() => import("@/pages/SRRJobAssignPage"));
+const LazySendDocsPage = React.lazy(() => import("@/pages/SRRSendDocsPage"));
+const LazySARPage = React.lazy(() => import("@/pages/SARPage"));
+const LazyHelpPage = React.lazy(() => import("@/pages/SRRHelpPage"));
+
+const SrrSuspense = ({ children }: { children: React.ReactNode }) => (
+  <React.Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>}>{children}</React.Suspense>
+);
+
 export default function SRRPage({ activeSub = "dc_item" }: { activeSub?: string }) {
-  if (activeSub === "direct_item") {
-    const SRRDirectPage = React.lazy(() => import("@/pages/SRRDirectPage"));
-    return <React.Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>}><SRRDirectPage /></React.Suspense>;
-  }
-  if (activeSub === "special_order") {
-    const SRRSpecialOrderPage = React.lazy(() => import("@/pages/SRRSpecialOrderPage"));
-    return <React.Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>}><SRRSpecialOrderPage /></React.Suspense>;
-  }
-  if (activeSub === "order_b2b") {
-    const SRROrderB2BPage = React.lazy(() => import("@/pages/SRROrderB2BPage"));
-    return <React.Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>}><SRROrderB2BPage /></React.Suspense>;
-  }
-  if (activeSub === "order_b2b_internal") {
-    const SRROrderB2BInternalPage = React.lazy(() => import("@/pages/SRROrderB2BInternalPage"));
-    return <React.Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>}><SRROrderB2BInternalPage /></React.Suspense>;
-  }
-  if (activeSub === "srr_payment_overdue") {
-    const SRRPaymentOverduePage = React.lazy(() => import("@/pages/SRRPaymentOverduePage"));
-    return <React.Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>}><SRRPaymentOverduePage /></React.Suspense>;
-  }
-  if (activeSub === "srr_job_assign") {
-    const SRRJobAssignPage = React.lazy(() => import("@/pages/SRRJobAssignPage"));
-    return <React.Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>}><SRRJobAssignPage /></React.Suspense>;
-  }
-  if (activeSub === "srr_send_docs") {
-    const SRRSendDocsPage = React.lazy(() => import("@/pages/SRRSendDocsPage"));
-    return <React.Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>}><SRRSendDocsPage /></React.Suspense>;
-  }
-  if (activeSub === "sar") {
-    const SARPage = React.lazy(() => import("@/pages/SARPage"));
-    return <React.Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>}><SARPage /></React.Suspense>;
-  }
-  if (activeSub === "help") {
-    const SRRHelpPage = React.lazy(() => import("@/pages/SRRHelpPage"));
-    return <React.Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>}><SRRHelpPage /></React.Suspense>;
-  }
+  if (activeSub === "direct_item") return <SrrSuspense><LazyDirectPage /></SrrSuspense>;
+  if (activeSub === "special_order") return <SrrSuspense><LazySpecialOrderPage /></SrrSuspense>;
+  if (activeSub === "order_b2b") return <SrrSuspense><LazyOrderB2BPage /></SrrSuspense>;
+  if (activeSub === "order_b2b_internal") return <SrrSuspense><LazyOrderB2BInternalPage /></SrrSuspense>;
+  if (activeSub === "srr_payment_overdue") return <SrrSuspense><LazyPaymentOverduePage /></SrrSuspense>;
+  if (activeSub === "srr_job_assign") return <SrrSuspense><LazyJobAssignPage /></SrrSuspense>;
+  if (activeSub === "srr_send_docs") return <SrrSuspense><LazySendDocsPage /></SrrSuspense>;
+  if (activeSub === "sar") return <SrrSuspense><LazySARPage /></SrrSuspense>;
+  if (activeSub === "help") return <SrrSuspense><LazyHelpPage /></SrrSuspense>;
   return <SRRDCItemPage />;
 }
 
