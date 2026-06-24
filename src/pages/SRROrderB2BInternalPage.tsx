@@ -1114,10 +1114,10 @@ export default function SRROrderB2BInternalPage() {
   // template สำหรับ Import หลายแบรนด์ (ชีตเดียว มีคอลัมน์ Brand)
   const downloadMultiTemplate = () => {
     const ws = XLSX.utils.json_to_sheet([
-      { Brand: "Bonchon", Barcode: "8851123212021", "จำนวน/เดือน": 1000, หมายเหตุ: "", "ชื่อสินค้า (ถ้าไม่พบใน Master)": "", "Picture (ฝังรูปใน cell นี้)": "" },
-      { Brand: "Khiang", Barcode: "8059495230180", "จำนวน/เดือน": 2, หมายเหตุ: "", "ชื่อสินค้า (ถ้าไม่พบใน Master)": "", "Picture (ฝังรูปใน cell นี้)": "" },
+      { Brand: "Bonchon", Barcode: "8851123212021", "จำนวน/เดือน": 1000, "Order group": "A", หมายเหตุ: "", "ชื่อสินค้า (ถ้าไม่พบใน Master)": "", "Picture (ฝังรูปใน cell นี้)": "" },
+      { Brand: "Khiang", Barcode: "8059495230180", "จำนวน/เดือน": 2, "Order group": "B", หมายเหตุ: "", "ชื่อสินค้า (ถ้าไม่พบใน Master)": "", "Picture (ฝังรูปใน cell นี้)": "" },
     ]);
-    ws["!cols"] = [{ wch: 18 }, { wch: 18 }, { wch: 12 }, { wch: 20 }, { wch: 28 }, { wch: 30 }];
+    ws["!cols"] = [{ wch: 18 }, { wch: 18 }, { wch: 12 }, { wch: 12 }, { wch: 20 }, { wch: 28 }, { wch: 30 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Template");
     XLSX.writeFile(wb, "MonthlyUsage_MultiBrand_Template.xlsx");
@@ -1492,11 +1492,12 @@ export default function SRROrderB2BInternalPage() {
       const qIdx = headers.findIndex((h) => h.includes("qty") || h.includes("quantity") || h.includes("จำนวน"));
       const rIdx = headers.findIndex((h) => h.includes("remark") || h.includes("หมายเหตุ") || h.includes("note"));
       const nIdx2 = headers.findIndex((h) => h.includes("ชื่อสินค้า") || h.includes("product name") || h.includes("product_name") || h.includes("name"));
+      const gIdx2 = headers.findIndex((h) => h.includes("order group") || h.includes("order_group") || h.includes("group") || h.includes("กลุ่ม"));
       if (brIdx < 0) { toast({ title: "ไม่พบคอลัมน์ Brand", variant: "destructive" }); return; }
       if (bIdx < 0) { toast({ title: "ไม่พบคอลัมน์ Barcode", variant: "destructive" }); return; }
 
       // จัดกลุ่มแถวตาม Brand
-      const groups = new Map<string, { brand: string; rows: { code: string; qty: string; remark: string; name: string }[] }>();
+      const groups = new Map<string, { brand: string; rows: { code: string; qty: string; remark: string; name: string; orderGroup: string }[] }>();
       for (const r of raw.slice(1)) {
         const brand = String(r[brIdx] ?? "").trim();
         const code = String(r[bIdx] ?? "").trim();
@@ -1508,6 +1509,7 @@ export default function SRROrderB2BInternalPage() {
           qty: qIdx >= 0 ? String(r[qIdx] ?? "").trim() : "",
           remark: rIdx >= 0 ? String(r[rIdx] ?? "").trim() : "",
           name: nIdx2 >= 0 ? String(r[nIdx2] ?? "").trim() : "",
+          orderGroup: gIdx2 >= 0 ? String(r[gIdx2] ?? "").trim() : "",
         });
       }
       if (groups.size === 0) { toast({ title: "ไม่พบข้อมูล", variant: "destructive" }); return; }
@@ -1564,6 +1566,7 @@ export default function SRROrderB2BInternalPage() {
               product_name: res.found ? res.product_name : (rr.name || "ไม่พบข้อมูล"),
               product_name_en: res.found ? (res.product_name_en || "") : rr.name,
               monthly_qty: rr.qty,
+              order_group: rr.orderGroup,
               remark: rr.remark,
             };
           }),
@@ -1605,6 +1608,7 @@ export default function SRROrderB2BInternalPage() {
           uom: x.uom || null,
           monthly_qty: x.monthly_qty.trim() ? Number(x.monthly_qty) : null,
           daily_qty: x.monthly_qty.trim() ? Number(x.monthly_qty) / 30 : null,
+          order_group: (x as any).order_group?.trim() || null,
           picture: null,
           remark: x.remark.trim() || null,
         }));
