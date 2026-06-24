@@ -1661,18 +1661,8 @@ export default function SRROrderB2BInternalPage() {
             };
           }),
         );
-        // dedup เฉพาะรายการที่ resolve เป็น SKU เดียวกันจริงๆ (สินค้าตัวเดียวกันคีย์ซ้ำ → เอาแถวหลังสุด)
-        // ส่วนรายการที่หา SKU ไม่เจอ (เช่น "No Barcode" หลายตัว) เก็บแยกทุกแถว ไม่ยุบรวม
-        const map = new Map<string, any>();
-        const items: any[] = [];
-        for (const x of resolved) {
-          const sku = x.sku_code?.trim();
-          if (sku) {
-            if (map.has(sku)) { items[map.get(sku)] = x; continue; } // อัปเดตแถวเดิม
-            map.set(sku, items.length);
-          }
-          items.push(x);
-        }
+        // ไม่ dedup — เก็บทุกแถวตามไฟล์ (สินค้าตัวเดียวกัน/ไม่มีบาร์โค้ดก็เก็บแยกทุกแถว)
+        const items = resolved;
         if (items.length === 0) { skips.push({ brand, reason: "ไม่มีรายการ", count: 0 }); continue; }
 
         const label = `${stamp} - ${master.brand_name}`.trim();
