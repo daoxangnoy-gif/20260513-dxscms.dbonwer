@@ -3714,6 +3714,7 @@ const PO_FIXED_COLS: POColMeta[] = [
   { key: "department", label: "Department", def: true, w: 140, tdCls: "text-muted-foreground" },
   { key: "remark", label: "Remark", def: true, w: 230, tdCls: "text-muted-foreground" },
   { key: "action", label: "Action", def: true, w: 300, tdCls: "text-muted-foreground" },
+  { key: "action2", label: "Action2", def: true, w: 200 },
   { key: "sku", label: "SKU", def: false, w: 120 },
   { key: "vendor_code", label: "Vendor code", def: true, w: 120 },
   { key: "vendor_name", label: "Vendor name", def: true, w: 220 },
@@ -3780,6 +3781,7 @@ const poCellValue = (key: string, r: PORow): React.ReactNode => {
     case "department": return r.department || "-";
     case "remark": return <span className="block truncate" title={getPoRemarkAction(r).remark}>{getPoRemarkAction(r).remark}</span>;
     case "action": return <span className="block truncate" title={getPoRemarkAction(r).action}>{getPoRemarkAction(r).action}</span>;
+    case "action2": return "";
     case "sku": return r.sku || "-";
     case "vendor_code": return r.vendor_code || "-";
     case "vendor_name": return r.vendor_name || "-";
