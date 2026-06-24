@@ -16,6 +16,29 @@ import * as XLSX from "xlsx";
 
 const MU_BUCKET = "monthly-usage-pictures";
 
+// แปลงค่า cell (Excel serial number / Date / string) → Date
+function excelCellToDate(v: any): Date | null {
+  if (v == null || v === "") return null;
+  if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
+  const s = String(v).trim();
+  const num = typeof v === "number" ? v : (/^\d+(\.\d+)?$/.test(s) ? Number(s) : null);
+  if (num != null) {
+    const o = (XLSX as any).SSF?.parse_date_code?.(num);
+    if (o && o.y) return new Date(o.y, o.m - 1, o.d, o.H || 0, o.M || 0, Math.floor(o.S || 0));
+    return null;
+  }
+  const t = Date.parse(s);
+  return isNaN(t) ? null : new Date(t);
+}
+
+// แปลงค่า cell วันที่ → "dd-Mmm-yy" (ถ้าแปลงไม่ได้คืนค่าเดิม)
+function excelToDDMMMYY(v: any): string {
+  const d = excelCellToDate(v);
+  if (!d) return String(v ?? "").trim();
+  const MM = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${String(d.getDate()).padStart(2, "0")}-${MM[d.getMonth()]}-${String(d.getFullYear()).slice(-2)}`;
+}
+
 // วันที่ Need ขั้นต่ำ = วันนี้ + 7 วัน (yyyy-mm-dd, อิงเวลาท้องถิ่น)
 function minNeedDateISO(): string {
   const d = new Date();
@@ -4019,7 +4042,7 @@ const STOCK_KR_COLS = [
 ] as const;
 const PO_RECEIVE_COLS = [
   { key: "id", label: "ID", aliases: ["id"] },
-  { key: "created_date", label: "Order Lines/Purchase Created Date", aliases: ["purchase created date", "created date"] },
+  { key: "created_date", label: "Order Lines/Purchase Created Date", aliases: ["purchase created date", "created date"], date: true },
   { key: "order_ref", label: "Order Lines/Order Reference", aliases: ["order reference", "reference"] },
   { key: "partner", label: "Order Lines/Partner", aliases: ["partner"] },
   { key: "barcode", label: "Order Lines/Barcode", aliases: ["barcode"] },
@@ -4750,7 +4773,12 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       .filter((r) => r.some((v) => String(v ?? "").trim()))
       .map((r) => {
         const o: Record<string, string> = {};
-        for (const c of cols) o[c.key] = idxOf[c.key] >= 0 ? String(r[idxOf[c.key]] ?? "").trim() : "";
+        for (const c of cols) {
+          if (idxOf[c.key] < 0) { o[c.key] = ""; continue; }
+          const cell = r[idxOf[c.key]];
+          // คอลัมน์วันที่ (เช่น Purchase Created Date) → แปลง Excel serial เป็น dd-Mmm-yy
+          o[c.key] = (c as any).date ? excelToDDMMMYY(cell) : String(cell ?? "").trim();
+        }
         return o;
       });
   };
