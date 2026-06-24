@@ -1102,11 +1102,10 @@ export default function SRROrderB2BInternalPage() {
   // ดาวน์โหลด template สำหรับนำเข้า Monthly usage
   const downloadMuTemplate = () => {
     const ws = XLSX.utils.json_to_sheet([
-      { Barcode: "8857000000001", "จำนวน/เดือน": 10, "Order group": "A", หมายเหตุ: "", "Barcode ทดแทน": "", "Picture (ฝังรูปใน cell นี้)": "" },
-      { Barcode: "8857000000002", "จำนวน/เดือน": 5, "Order group": "B", หมายเหตุ: "", "Barcode ทดแทน": "8857000000099", "Picture (ฝังรูปใน cell นี้)": "" },
+      { Barcode: "8857000000001", "จำนวน/เดือน": 10, "Order group": "A", หมายเหตุ: "", "Barcode ทดแทน": "", "ชื่อสินค้า (ถ้าไม่พบใน Master)": "", "Picture (ฝังรูปใน cell นี้)": "" },
+      { Barcode: "8857000000002", "จำนวน/เดือน": 5, "Order group": "B", หมายเหตุ: "", "Barcode ทดแทน": "8857000000099", "ชื่อสินค้า (ถ้าไม่พบใน Master)": "", "Picture (ฝังรูปใน cell นี้)": "" },
     ]);
-    // ปรับความกว้างคอลัมน์ Picture ให้กว้างพอสำหรับรูป
-    ws["!cols"] = [{ wch: 18 }, { wch: 14 }, { wch: 12 }, { wch: 20 }, { wch: 18 }, { wch: 30 }];
+    ws["!cols"] = [{ wch: 18 }, { wch: 14 }, { wch: 12 }, { wch: 20 }, { wch: 18 }, { wch: 28 }, { wch: 30 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Template");
     XLSX.writeFile(wb, "MonthlyUsage_Template.xlsx");
@@ -1115,10 +1114,10 @@ export default function SRROrderB2BInternalPage() {
   // template สำหรับ Import หลายแบรนด์ (ชีตเดียว มีคอลัมน์ Brand)
   const downloadMultiTemplate = () => {
     const ws = XLSX.utils.json_to_sheet([
-      { Brand: "Bonchon", Barcode: "8851123212021", "จำนวน/เดือน": 1000, หมายเหตุ: "", "Picture (ฝังรูปใน cell นี้)": "" },
-      { Brand: "Khiang", Barcode: "8059495230180", "จำนวน/เดือน": 2, หมายเหตุ: "", "Picture (ฝังรูปใน cell นี้)": "" },
+      { Brand: "Bonchon", Barcode: "8851123212021", "จำนวน/เดือน": 1000, หมายเหตุ: "", "ชื่อสินค้า (ถ้าไม่พบใน Master)": "", "Picture (ฝังรูปใน cell นี้)": "" },
+      { Brand: "Khiang", Barcode: "8059495230180", "จำนวน/เดือน": 2, หมายเหตุ: "", "ชื่อสินค้า (ถ้าไม่พบใน Master)": "", "Picture (ฝังรูปใน cell นี้)": "" },
     ]);
-    ws["!cols"] = [{ wch: 18 }, { wch: 18 }, { wch: 12 }, { wch: 20 }, { wch: 30 }];
+    ws["!cols"] = [{ wch: 18 }, { wch: 18 }, { wch: 12 }, { wch: 20 }, { wch: 28 }, { wch: 30 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Template");
     XLSX.writeFile(wb, "MonthlyUsage_MultiBrand_Template.xlsx");
@@ -1139,6 +1138,7 @@ export default function SRROrderB2BInternalPage() {
       const qIdx = headers.findIndex((h) => h.includes("qty") || h.includes("quantity") || h.includes("จำนวน"));
       const rIdx = headers.findIndex((h) => h.includes("remark") || h.includes("หมายเหตุ") || h.includes("note"));
       const gIdx = headers.findIndex((h) => h.includes("order group") || h.includes("order_group") || h.includes("group") || h.includes("กลุ่ม"));
+      const nIdx = headers.findIndex((h) => h.includes("ชื่อสินค้า") || h.includes("product name") || h.includes("product_name") || h.includes("name"));
       if (bIdx < 0) { toast({ title: "ไม่พบคอลัมน์ Barcode", variant: "destructive" }); return; }
       // ดึงรูปที่ฝังใน Excel (ถ้ามี) — key = xdrRow(0-based), ค่า xdrRow 1 = data row แรก
       const imagesByRow = await extractImagesFromXlsx(ab);
@@ -1153,6 +1153,7 @@ export default function SRROrderB2BInternalPage() {
           const qty = qIdx >= 0 ? String(r[qIdx] ?? "").trim() : "";
           const remark = rIdx >= 0 ? String(r[rIdx] ?? "").trim() : "";
           const orderGroup = gIdx >= 0 ? String(r[gIdx] ?? "").trim() : "";
+          const importedName = nIdx >= 0 ? String(r[nIdx] ?? "").trim() : "";
           const res = await resolveBarcode(code);
           // รายการทดแทน (ถ้ามีคอลัมน์)
           const replCode = replIdx >= 0 ? String(r[replIdx] ?? "").trim() : "";
@@ -1168,8 +1169,8 @@ export default function SRROrderB2BInternalPage() {
             sku_code: res.found ? res.sku_code : "",
             barcode_unit: res.found ? res.barcode_unit : "",
             uom: res.found ? res.uom : "",
-            product_name: res.found ? res.product_name : "ไม่พบข้อมูล",
-            product_name_en: res.found ? res.product_name_en : "",
+            product_name: res.found ? res.product_name : (importedName || "ไม่พบข้อมูล"),
+            product_name_en: res.found ? res.product_name_en : importedName,
             monthly_qty: qty,
             order_group: orderGroup,
             picture,
@@ -1490,11 +1491,12 @@ export default function SRROrderB2BInternalPage() {
       const bIdx = headers.findIndex((h) => h.includes("barcode") || h.includes("sku") || h.includes("code"));
       const qIdx = headers.findIndex((h) => h.includes("qty") || h.includes("quantity") || h.includes("จำนวน"));
       const rIdx = headers.findIndex((h) => h.includes("remark") || h.includes("หมายเหตุ") || h.includes("note"));
+      const nIdx2 = headers.findIndex((h) => h.includes("ชื่อสินค้า") || h.includes("product name") || h.includes("product_name") || h.includes("name"));
       if (brIdx < 0) { toast({ title: "ไม่พบคอลัมน์ Brand", variant: "destructive" }); return; }
       if (bIdx < 0) { toast({ title: "ไม่พบคอลัมน์ Barcode", variant: "destructive" }); return; }
 
       // จัดกลุ่มแถวตาม Brand
-      const groups = new Map<string, { brand: string; rows: { code: string; qty: string; remark: string }[] }>();
+      const groups = new Map<string, { brand: string; rows: { code: string; qty: string; remark: string; name: string }[] }>();
       for (const r of raw.slice(1)) {
         const brand = String(r[brIdx] ?? "").trim();
         const code = String(r[bIdx] ?? "").trim();
@@ -1505,6 +1507,7 @@ export default function SRROrderB2BInternalPage() {
           code,
           qty: qIdx >= 0 ? String(r[qIdx] ?? "").trim() : "",
           remark: rIdx >= 0 ? String(r[rIdx] ?? "").trim() : "",
+          name: nIdx2 >= 0 ? String(r[nIdx2] ?? "").trim() : "",
         });
       }
       if (groups.size === 0) { toast({ title: "ไม่พบข้อมูล", variant: "destructive" }); return; }
@@ -1558,7 +1561,8 @@ export default function SRROrderB2BInternalPage() {
               sku_code: res.found ? res.sku_code : "",
               barcode_unit: res.found ? res.barcode_unit : "",
               uom: res.found ? res.uom : "",
-              product_name: res.found ? res.product_name : "ไม่พบข้อมูล",
+              product_name: res.found ? res.product_name : (rr.name || "ไม่พบข้อมูล"),
+              product_name_en: res.found ? (res.product_name_en || "") : rr.name,
               monthly_qty: rr.qty,
               remark: rr.remark,
             };
