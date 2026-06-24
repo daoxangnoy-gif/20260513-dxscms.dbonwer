@@ -4017,9 +4017,13 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   // ---- PO list (aggregation) ----
   const [poRows, setPoRows] = useState<PORow[]>([]);
   const [poBrands, setPoBrands] = useState<string[]>([]);
+  const [poSelBrands, setPoSelBrands] = useState<Set<string>>(new Set()); // แบรนด์ที่ติ๊กรวมใน Total qty (ว่าง = ยังไม่ init)
   const [poLoading, setPoLoading] = useState(false);
   const [poLoaded, setPoLoaded] = useState(false);
   const [poSearch, setPoSearch] = useState("");
+
+  // เมื่อรายชื่อแบรนด์เปลี่ยน (โหลด/โหลดใหม่) → ติ๊กครบทุกแบรนด์เป็นค่าเริ่มต้น
+  useEffect(() => { setPoSelBrands(new Set(poBrands)); }, [poBrands]);
 
   // ---- Vendor override (คีย์ Vendor code ใหม่ได้ → ดึง name/currency มาอัตโนมัติ + จำไว้ข้ามโหลด) ----
   const vendorOvRef = useRef<Record<string, { code: string; name: string; currency: string; origin: string }>>(
@@ -4353,10 +4357,22 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     }
   };
 
+  const allBrandsSelected = poBrands.length > 0 && poBrands.every((b) => poSelBrands.has(b));
   const filteredPoRows = (() => {
+    let rows = poRows;
+    // กรองตามแบรนด์ที่ติ๊ก — คำนวณ Total qty ใหม่จากเฉพาะแบรนด์ที่เลือก แล้วตัดแถวที่เหลือ 0
+    if (!allBrandsSelected) {
+      rows = rows
+        .map((r) => {
+          let t = 0;
+          for (const b of poSelBrands) t += r.byBrand.get(b) ?? 0;
+          return { ...r, total: t };
+        })
+        .filter((r) => r.total !== 0);
+    }
     const q = poSearch.trim().toLowerCase();
-    if (!q) return poRows;
-    return poRows.filter(
+    if (!q) return rows;
+    return rows.filter(
       (r) =>
         r.id.toLowerCase().includes(q) ||
         r.barcode.toLowerCase().includes(q) ||
@@ -4498,7 +4514,37 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           <span className="text-xs text-muted-foreground">{filteredPoRows.length} / {poRows.length} SKU</span>
           <Popover>
             <PopoverTrigger asChild>
-              <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs ml-auto">
+              <Button size="sm" variant="outline" className={cn("h-8 gap-1.5 text-xs ml-auto", !allBrandsSelected && "border-primary text-primary")}>
+                <Tag className="w-3.5 h-3.5" /> แบรนด์ ({poSelBrands.size}/{poBrands.length})
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-56 p-0">
+              <div className="px-3 py-2 border-b">
+                <span className="text-xs font-medium">รวม Total qty เฉพาะแบรนด์ที่ติ๊ก</span>
+              </div>
+              <div className="flex items-center gap-1 px-3 py-1.5 border-b">
+                <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => setPoSelBrands(new Set(poBrands))}>เลือกทั้งหมด</Button>
+                <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => setPoSelBrands(new Set())}>ล้าง</Button>
+              </div>
+              <div className="max-h-72 overflow-auto py-1">
+                {poBrands.length === 0 && <div className="px-3 py-2 text-xs text-muted-foreground">ยังไม่มีแบรนด์ (กดโหลดก่อน)</div>}
+                {poBrands.map((b) => (
+                  <label key={b} className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted/50 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="h-3.5 w-3.5"
+                      checked={poSelBrands.has(b)}
+                      onChange={() => setPoSelBrands((prev) => { const n = new Set(prev); if (n.has(b)) n.delete(b); else n.add(b); return n; })}
+                    />
+                    <span className="truncate">{b}</span>
+                  </label>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs">
                 <Columns3 className="w-3.5 h-3.5" /> คอลัมน์ ({visibleCols.length})
               </Button>
             </PopoverTrigger>
