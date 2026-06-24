@@ -280,9 +280,13 @@ const ORDER_COLS = [
 const ORDER_TOTAL_W = ORDER_COLS.reduce((s, c) => s + c.w, 0);
 
 export default function SRROrderB2BInternalPage() {
-  const [activeTab, setActiveTab] = useState("brand");
-  const [brandSubTab, setBrandSubTab] = useState("monthly"); // sub-tab ใต้ Brand control: monthly | order
+  const [activeTab, setActiveTab] = useState(() => localStorage.getItem("b2b_active_tab") || "brand");
+  const [brandSubTab, setBrandSubTab] = useState(() => localStorage.getItem("b2b_brand_sub_tab") || "monthly"); // sub-tab ใต้ Brand control: monthly | order
   const { toast } = useToast();
+  // จำ tab ที่อยู่ไว้ใน localStorage (กันเด้งกลับ tab แรกตอนสลับเมนู)
+  useEffect(() => { localStorage.setItem("b2b_active_tab", activeTab); }, [activeTab]);
+  useEffect(() => { localStorage.setItem("b2b_brand_sub_tab", brandSubTab); }, [brandSubTab]);
+
 
   // ============================================================
   // List Brand dialog
@@ -675,9 +679,11 @@ export default function SRROrderB2BInternalPage() {
   // ============================================================
   // SCM Control → tab SO
   // ============================================================
-  const [scmSubTab, setScmSubTab] = useState("so");
+  const [scmSubTab, setScmSubTab] = useState(() => localStorage.getItem("b2b_scm_sub_tab") || "so");
   // sub-tab ของ PO (PO / Stock Kr / PO Receive) — ยกขึ้นมาที่ parent เพื่อแสดงปุ่มมุมขวาบนแถว SO/PO
-  const [poSubTab, setPoSubTab] = useState("list");
+  const [poSubTab, setPoSubTab] = useState(() => localStorage.getItem("b2b_po_sub_tab") || "list");
+  useEffect(() => { localStorage.setItem("b2b_scm_sub_tab", scmSubTab); }, [scmSubTab]);
+  useEffect(() => { localStorage.setItem("b2b_po_sub_tab", poSubTab); }, [poSubTab]);
   const [soDocs, setSoDocs] = useState<SODoc[]>([]);
   const [soDocsLoading, setSoDocsLoading] = useState(false);
   const [soSearch, setSoSearch] = useState("");
