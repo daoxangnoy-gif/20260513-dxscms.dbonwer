@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, Fragment } from "react";
+import { useEffect, useRef, useState, useMemo, Fragment } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -328,6 +328,48 @@ type OrderDoc = {
   updated_at: string | null; // เวลาแก้ไขล่าสุด
 };
 
+// Dropdown เลือกลูกค้า (ค้นหาได้) — ดึงรายชื่อจากตาราง customers
+type CustomerOpt = { code: string; name: string };
+function CustomerCombo({ value, options, onChange }: { value: string; options: CustomerOpt[]; onChange: (name: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    const base = s ? options.filter((o) => o.name.toLowerCase().includes(s) || o.code.toLowerCase().includes(s)) : options;
+    return base.slice(0, 50);
+  }, [q, options]);
+  return (
+    <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setQ(""); }}>
+      <PopoverTrigger asChild>
+        <button className="flex items-center gap-1 text-left text-muted-foreground hover:text-foreground truncate max-w-[230px]">
+          <span className="truncate">{value || SO_DEFAULT_CUSTOMER}</span>
+          <ChevronsUpDown className="w-3 h-3 shrink-0 opacity-50" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-80 p-0" align="start">
+        <Command shouldFilter={false}>
+          <CommandInput placeholder="ค้นหาลูกค้า / รหัส" value={q} onValueChange={setQ} />
+          <CommandList>
+            <CommandEmpty>ไม่พบลูกค้า</CommandEmpty>
+            <CommandGroup>
+              {filtered.map((o) => (
+                <CommandItem key={o.code} value={o.code} onSelect={() => { onChange(o.name); setOpen(false); setQ(""); }}>
+                  <Check className={cn("mr-2 h-3.5 w-3.5", value === o.name ? "opacity-100" : "opacity-0")} />
+                  <span className="truncate">{o.name}</span>
+                  <span className="ml-auto pl-2 text-[10px] text-muted-foreground shrink-0">{o.code}</span>
+                </CommandItem>
+              ))}
+              {q.trim() === "" && options.length > 50 && (
+                <div className="px-2 py-1.5 text-[11px] text-muted-foreground">พิมพ์เพื่อค้นหา (แสดง 50 จาก {options.length})</div>
+              )}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 // ===== SO Doc (SCM Control → tab SO) — สร้างอัตโนมัติตอน Save Order, แยกตาม order_group =====
 type SODoc = {
   id: string;
@@ -606,6 +648,7 @@ export default function SRROrderB2BInternalPage() {
     loadOrderDocs();
     loadRouteplan();
     loadSoDocs();
+    loadCustomers(); // โหลดรายชื่อลูกค้าไว้ใช้ใน dropdown ของ SO
     loadBrandOptions(); // โหลด brand (รวม brand_group) ไว้ใช้จัดกลุ่มหัวข้อในรายการเอกสาร
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -788,6 +831,7 @@ export default function SRROrderB2BInternalPage() {
   const [soDocs, setSoDocs] = useState<SODoc[]>([]);
   const [soDocsLoading, setSoDocsLoading] = useState(false);
   const [soSearch, setSoSearch] = useState("");
+  const [customerOpts, setCustomerOpts] = useState<CustomerOpt[]>([]); // รายชื่อลูกค้า (dropdown)
   const [soItemHitIds, setSoItemHitIds] = useState<Set<string> | null>(null); // doc_id ที่ item match คำค้น (barcode/id/product)
   const [soSelected, setSoSelected] = useState<Set<string>>(new Set());
   const [soExporting, setSoExporting] = useState(false);
@@ -2170,6 +2214,37 @@ export default function SRROrderB2BInternalPage() {
   // ============================================================
   // SO functions (SCM Control → tab SO)
   // ============================================================
+  // โหลดรายชื่อลูกค้าจากตาราง customers (paginate เผื่อเกิน 1000 แถว)
+  const loadCustomers = async () => {
+    try {
+      const out: CustomerOpt[] = [];
+      const PAGE = 1000;
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await (supabase as any)
+          .from("customers")
+          .select("customer_code, name")
+          .order("name", { ascending: true })
+          .range(from, from + PAGE - 1);
+        if (error) break;
+        for (const c of (data || []) as any[]) if (c.name) out.push({ code: c.customer_code || "", name: c.name });
+        if (!data || data.length < PAGE) break;
+      }
+      setCustomerOpts(out);
+    } catch { /* โหลดไม่ได้ก็ปล่อยว่าง */ }
+  };
+
+  // เปลี่ยนลูกค้าของ SO doc → บันทึกลง DB + อัปเดต state
+  const updateSoCustomer = async (doc: SODoc, name: string) => {
+    setSoDocs((prev) => prev.map((x) => x.id === doc.id ? { ...x, customer: name } : x));
+    try {
+      const { error } = await (supabase as any).from("so_doc").update({ customer: name }).eq("id", doc.id);
+      if (error) throw error;
+    } catch (e: any) {
+      toast({ title: "บันทึกลูกค้าไม่สำเร็จ", description: e.message, variant: "destructive" });
+      loadSoDocs();
+    }
+  };
+
   const loadSoDocs = async () => {
     setSoDocsLoading(true);
     try {
@@ -2324,6 +2399,10 @@ export default function SRROrderB2BInternalPage() {
       "Company": idx === 0 ? SO_COMPANY : "",
     }));
 
+  // เติมคอลัมน์ แบรน / สาขา (ไทย) ทุกแถว — ใส่หลัง remap เพื่อให้ออกแน่นอนแม้มี export template
+  const addBrandBranch = (rows: Record<string, any>[], brand: string, branch: string): Record<string, any>[] =>
+    rows.map((r) => ({ ...r, "แบรน": brand || "", "สาขา": branch || "" }));
+
   const fetchSoItems = async (docId: string): Promise<SOItem[]> => {
     const { data, error } = await (supabase as any)
       .from("so_item")
@@ -2354,7 +2433,7 @@ export default function SRROrderB2BInternalPage() {
         if (items.length === 0) continue;
         const rows = buildSoExportRows(items, d.customer || SO_DEFAULT_CUSTOMER);
         const mapped = await remapRowsByTemplate("srr_special_so", rows);
-        all.push(...mapped);
+        all.push(...addBrandBranch(mapped, d.brand_name, d.branch));
       }
       if (all.length === 0) { toast({ title: "ไม่มีรายการให้ export", variant: "destructive" }); return; }
       const ws = XLSX.utils.json_to_sheet(all);
@@ -2376,7 +2455,8 @@ export default function SRROrderB2BInternalPage() {
     try {
       const items = await fetchSoItems(doc.id);
       if (items.length === 0) { toast({ title: "เอกสารว่าง ไม่มีรายการให้ export", variant: "destructive" }); return; }
-      const rows = await remapRowsByTemplate("srr_special_so", buildSoExportRows(items, doc.customer || SO_DEFAULT_CUSTOMER));
+      const mapped = await remapRowsByTemplate("srr_special_so", buildSoExportRows(items, doc.customer || SO_DEFAULT_CUSTOMER));
+      const rows = addBrandBranch(mapped, doc.brand_name, doc.branch);
       const ws = XLSX.utils.json_to_sheet(rows);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "SO");
@@ -3538,7 +3618,9 @@ export default function SRROrderB2BInternalPage() {
                           <td className="px-3 py-1.5 font-medium">{d.doc_label}</td>
                           <td className="px-3 py-1.5">{d.brand_name}</td>
                           <td className="px-3 py-1.5">{d.order_group?.trim() || <span className="text-muted-foreground">ไม่ระบุกลุ่ม</span>}</td>
-                          <td className="px-3 py-1.5 text-muted-foreground">{d.customer || SO_DEFAULT_CUSTOMER}</td>
+                          <td className="px-3 py-1.5">
+                            <CustomerCombo value={d.customer || ""} options={customerOpts} onChange={(name) => updateSoCustomer(d, name)} />
+                          </td>
                           <td className="px-3 py-1.5 text-right tabular-nums">{d.item_count}</td>
                           <td className="px-3 py-1.5 text-muted-foreground">{new Date(d.updated_at || d.created_at).toLocaleString("th-TH")}</td>
                           <td className="px-3 py-1.5">
