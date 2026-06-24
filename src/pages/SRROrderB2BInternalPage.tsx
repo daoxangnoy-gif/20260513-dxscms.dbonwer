@@ -1661,11 +1661,18 @@ export default function SRROrderB2BInternalPage() {
             };
           }),
         );
-        // dedup ภายในแบรนด์: SKU ซ้ำเอาแถวหลังสุด (ถ้าไม่มี SKU ใช้ barcode)
-        const keyOf = (x: any) => (x.sku_code?.trim() ? `sku:${x.sku_code.trim()}` : `bc:${x.barcode.trim()}`);
+        // dedup เฉพาะรายการที่ resolve เป็น SKU เดียวกันจริงๆ (สินค้าตัวเดียวกันคีย์ซ้ำ → เอาแถวหลังสุด)
+        // ส่วนรายการที่หา SKU ไม่เจอ (เช่น "No Barcode" หลายตัว) เก็บแยกทุกแถว ไม่ยุบรวม
         const map = new Map<string, any>();
-        for (const x of resolved) map.set(keyOf(x), x);
-        const items = [...map.values()];
+        const items: any[] = [];
+        for (const x of resolved) {
+          const sku = x.sku_code?.trim();
+          if (sku) {
+            if (map.has(sku)) { items[map.get(sku)] = x; continue; } // อัปเดตแถวเดิม
+            map.set(sku, items.length);
+          }
+          items.push(x);
+        }
         if (items.length === 0) { skips.push({ brand, reason: "ไม่มีรายการ", count: 0 }); continue; }
 
         const label = `${stamp} - ${master.brand_name}`.trim();
