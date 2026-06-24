@@ -111,6 +111,7 @@ async function extractImagesFromXlsx(ab: ArrayBuffer): Promise<Map<number, { dat
           rIdToMedia.set(id, resolved);
         }
       }
+      console.log("[IMG2] rIdToMedia size:", rIdToMedia.size, "| first entry:", [...rIdToMedia.entries()][0]);
       // 2. richValueRel.xml: rich value index → rId
       const rvIdxToRId = new Map<number, string>();
       for (const m of rvRelXml.matchAll(/<rel\b([^/>]*)\/?>/g)) {
@@ -119,6 +120,8 @@ async function extractImagesFromXlsx(ab: ArrayBuffer): Promise<Map<number, { dat
         const rIdM = attrs.match(/(?:r:|:)id="([^"]+)"/i);
         if (iM && rIdM) rvIdxToRId.set(parseInt(iM[1]), rIdM[1]);
       }
+      console.log("[IMG2] rvIdxToRId size:", rvIdxToRId.size, "| first entry:", [...rvIdxToRId.entries()][0]);
+      console.log("[IMG2] rvRelXml snippet:", rvRelXml.slice(0, 400));
       // 3. metadata.xml futureMetadata XLRICHVALUE: fmIdx → rv index (rvb/@i)
       const fmIdxToRvIdx = new Map<number, number>();
       const fmSection = metaXml.match(/<futureMetadata\b[^>]*name="XLRICHVALUE"[^>]*>([\s\S]*?)<\/futureMetadata>/)?.[1] ?? "";
@@ -128,6 +131,7 @@ async function extractImagesFromXlsx(ab: ArrayBuffer): Promise<Map<number, { dat
         if (rvbM) fmIdxToRvIdx.set(fmIdx, parseInt(rvbM[1]));
         fmIdx++;
       }
+      console.log("[IMG2] fmIdxToRvIdx size:", fmIdxToRvIdx.size, "| fmSection length:", fmSection.length, "| snippet:", fmSection.slice(0, 300));
       // 4. metadata.xml cellMetadata: cmIdx → fmIdx (rc t="1" v=fmIdx)
       const cmIdxToFmIdx = new Map<number, number>();
       const cmSection = metaXml.match(/<cellMetadata\b[^>]*>([\s\S]*?)<\/cellMetadata>/)?.[1] ?? "";
@@ -137,14 +141,17 @@ async function extractImagesFromXlsx(ab: ArrayBuffer): Promise<Map<number, { dat
         if (rcM) cmIdxToFmIdx.set(cmIdx, parseInt(rcM[1]));
         cmIdx++;
       }
-      // 5. sheet XML: <c r="COLROW" vm="N"> → xdrRow → chain → image
+      console.log("[IMG2] cmIdxToFmIdx size:", cmIdxToFmIdx.size, "| cmSection snippet:", cmSection.slice(0, 300));
+      // 5. sheet XML: cells with vm → check how many match
+      const vmCells = [...sheetXml.matchAll(/<c\b([^>]*)>/g)].filter(m => m[1].includes("vm="));
+      console.log("[IMG2] cells with vm attr:", vmCells.length, "| first:", vmCells[0]?.[0]);
       const result = new Map<number, { data: Uint8Array; ext: string }>();
       for (const m of sheetXml.matchAll(/<c\b([^>]*)>/g)) {
         const attrs = m[1];
         const rM = attrs.match(/\br="([A-Z]+)(\d+)"/);
         const vmM = attrs.match(/\bvm="(\d+)"/);
         if (!rM || !vmM) continue;
-        const xdrRow = parseInt(rM[2]) - 1; // Excel row 2 (first data) → xdrRow=1
+        const xdrRow = parseInt(rM[2]) - 1;
         if (result.has(xdrRow)) continue;
         const fmIdx2 = cmIdxToFmIdx.get(parseInt(vmM[1]));
         if (fmIdx2 === undefined) continue;
@@ -160,6 +167,7 @@ async function extractImagesFromXlsx(ab: ArrayBuffer): Promise<Map<number, { dat
         const ext = mediaPath.split(".").pop()?.toLowerCase() || "png";
         result.set(xdrRow, { data, ext });
       }
+      console.log("[IMG2] result size:", result.size);
       if (result.size > 0) return result;
     }
 
@@ -1577,12 +1585,15 @@ export default function SRROrderB2BInternalPage() {
       if (brIdx < 0) { toast({ title: "ไม่พบคอลัมน์ Brand", variant: "destructive" }); return; }
       if (bIdx < 0) { toast({ title: "ไม่พบคอลัมน์ Barcode", variant: "destructive" }); return; }
 
-      // จัดกลุ่มแถวตาม Brand
-      const groups = new Map<string, { brand: string; rows: { code: string; qty: string; remark: string; name: string; orderGroup: string }[] }>();
-      for (const r of raw.slice(1)) {
+      // ดึงรูปที่ฝังใน Excel (ถ้ามี) — key = xdrRow(0-based) = index ใน raw.slice(1) + 1
+      const imagesByRow = await extractImagesFromXlsx(ab);
+
+      // จัดกลุ่มแถวตาม Brand (เก็บ rawIdx ไว้ map หารูป)
+      const groups = new Map<string, { brand: string; rows: { code: string; qty: string; remark: string; name: string; orderGroup: string; rawIdx: number }[] }>();
+      raw.slice(1).forEach((r, i) => {
         const brand = String(r[brIdx] ?? "").trim();
         const code = String(r[bIdx] ?? "").trim();
-        if (!brand || !code) continue;
+        if (!brand || !code) return;
         const key = brand.toLowerCase();
         if (!groups.has(key)) groups.set(key, { brand, rows: [] });
         groups.get(key)!.rows.push({
@@ -1591,8 +1602,9 @@ export default function SRROrderB2BInternalPage() {
           remark: rIdx >= 0 ? String(r[rIdx] ?? "").trim() : "",
           name: nIdx2 >= 0 ? String(r[nIdx2] ?? "").trim() : "",
           orderGroup: gIdx2 >= 0 ? String(r[gIdx2] ?? "").trim() : "",
+          rawIdx: i + 1,
         });
-      }
+      });
       if (groups.size === 0) { toast({ title: "ไม่พบข้อมูล", variant: "destructive" }); return; }
 
       // master Brand (List Brand) + เอกสารที่มีอยู่แล้ว
@@ -1635,10 +1647,13 @@ export default function SRROrderB2BInternalPage() {
         }
         if (existSet.has(lc)) { skips.push({ brand, reason: "มี Doc อยู่แล้ว — ไปแก้ใน Doc เดิม", count: rows.length }); continue; }
 
-        // resolve barcode → data_master
+        // resolve barcode → data_master (+ อัปโหลดรูปที่ฝังใน Excel ถ้ามี)
         const resolved = await Promise.all(
           rows.map(async (rr) => {
             const res = await resolveBarcode(rr.code);
+            let picture = "";
+            const imgData = imagesByRow.get(rr.rawIdx);
+            if (imgData) { try { picture = await uploadImageBytes(imgData.data, imgData.ext); } catch { } }
             return {
               barcode: rr.code,
               sku_code: res.found ? res.sku_code : "",
@@ -1649,6 +1664,7 @@ export default function SRROrderB2BInternalPage() {
               monthly_qty: rr.qty,
               order_group: rr.orderGroup,
               remark: rr.remark,
+              picture,
             };
           }),
         );
@@ -1690,7 +1706,7 @@ export default function SRROrderB2BInternalPage() {
           monthly_qty: x.monthly_qty.trim() ? Number(x.monthly_qty) : null,
           daily_qty: x.monthly_qty.trim() ? Number(x.monthly_qty) / 30 : null,
           order_group: (x as any).order_group?.trim() || null,
-          picture: null,
+          picture: (x as any).picture || null,
           remark: x.remark.trim() || null,
         }));
         const { error: itErr } = await (supabase as any).from("monthly_usage_item").insert(itemsPayload);
