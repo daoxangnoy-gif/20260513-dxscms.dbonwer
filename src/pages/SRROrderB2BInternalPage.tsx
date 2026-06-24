@@ -9,7 +9,7 @@ import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, Command
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download, Pencil, ChevronsUpDown, Check, FileSpreadsheet, Columns3, Image as ImageIcon, Printer, FileSignature, ShoppingCart, Boxes, Route, Save } from "lucide-react";
+import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download, Pencil, ChevronsUpDown, Check, FileSpreadsheet, Columns3, Image as ImageIcon, Printer, FileSignature, ShoppingCart, Boxes, Route, Save, Filter } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { remapRowsByTemplate } from "@/lib/exportTemplate";
 import * as XLSX from "xlsx";
@@ -4118,6 +4118,67 @@ function getPoAction2(r: PORow): string {
 }
 const poDefaultVis = () => new Set(PO_FIXED_COLS.filter((c) => c.def).map((c) => c.key));
 
+// คอลัมน์ที่มี dropdown filter + วิธีดึงค่าของแต่ละแถว
+const PO_FILTER_KEYS = ["remark", "action", "action2", "vendor_name"] as const;
+type PoFilterKey = typeof PO_FILTER_KEYS[number];
+const poFilterVal: Record<PoFilterKey, (r: PORow) => string> = {
+  remark: (r) => getPoRemarkAction(r).remark,
+  action: (r) => getPoRemarkAction(r).action,
+  action2: (r) => getPoAction2(r),
+  vendor_name: (r) => r.vendor_name || "",
+};
+
+// Dropdown filter หลายค่า (multi-select) + ค้นหา + เลือกทั้งหมด/ล้าง
+// selected === null = ไม่กรอง (ทุกค่าผ่าน), Set ว่าง = ไม่เลือกอะไรเลย (ไม่มีแถวผ่าน)
+function ColFilterPopover({ options, selected, onChange }: { options: string[]; selected: Set<string> | null; onChange: (s: Set<string> | null) => void }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const active = selected !== null;
+  const shown = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    return s ? options.filter((o) => o.toLowerCase().includes(s)) : options;
+  }, [q, options]);
+  const isChecked = (o: string) => selected === null || selected.has(o);
+  const toggle = (o: string) => {
+    const base = selected === null ? new Set(options) : new Set(selected);
+    if (base.has(o)) base.delete(o); else base.add(o);
+    onChange(base.size === options.length ? null : base); // ครบทุกค่า → null (ไม่กรอง)
+  };
+  return (
+    <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setQ(""); }}>
+      <PopoverTrigger asChild>
+        <button
+          onClick={(e) => e.stopPropagation()}
+          className={cn("ml-1 inline-flex items-center justify-center h-5 w-5 rounded hover:bg-muted shrink-0", active && "text-primary bg-primary/10")}
+          title="กรอง"
+        >
+          <Filter className="w-3 h-3" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64 p-0">
+        <div className="flex items-center gap-1 px-2 py-1.5 border-b">
+          <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => onChange(null)}>เลือกทั้งหมด</Button>
+          <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => onChange(new Set())}>ล้าง</Button>
+        </div>
+        <Command shouldFilter={false}>
+          <CommandInput placeholder="ค้นหา..." value={q} onValueChange={setQ} />
+          <CommandList>
+            <CommandEmpty>ไม่พบ</CommandEmpty>
+            <CommandGroup>
+              {shown.map((o) => (
+                <CommandItem key={o} value={o} onSelect={() => toggle(o)}>
+                  <input type="checkbox" readOnly checked={isChecked(o)} className="mr-2 h-3.5 w-3.5 pointer-events-none" />
+                  <span className="truncate">{o || "(ว่าง)"}</span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 // ค่าที่จะแสดงในแต่ละ cell ตาม key
 const poCellValue = (key: string, r: PORow): React.ReactNode => {
   switch (key) {
@@ -4175,6 +4236,8 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   const [poRows, setPoRows] = useState<PORow[]>([]);
   const [poBrands, setPoBrands] = useState<string[]>([]);
   const [poSelBrands, setPoSelBrands] = useState<Set<string>>(new Set()); // แบรนด์ที่ติ๊กรวมใน Total qty (ว่าง = ยังไม่ init)
+  // dropdown filter 4 คอลัมน์ (null = ไม่กรอง) ทำงานร่วมกันแบบ AND + cascading
+  const [colFilters, setColFilters] = useState<Record<PoFilterKey, Set<string> | null>>({ remark: null, action: null, action2: null, vendor_name: null });
   const [poLoading, setPoLoading] = useState(false);
   const [poLoaded, setPoLoaded] = useState(false);
   const [poSearch, setPoSearch] = useState("");
@@ -4580,9 +4643,9 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   };
 
   const allBrandsSelected = poBrands.length > 0 && poBrands.every((b) => poSelBrands.has(b));
-  const filteredPoRows = (() => {
+  // 1) กรองแบรนด์ (คำนวณ Total ใหม่ ตัดแถว 0) → 2) กรองข้อความค้นหา
+  const searchedPoRows = (() => {
     let rows = poRows;
-    // กรองตามแบรนด์ที่ติ๊ก — คำนวณ Total qty ใหม่จากเฉพาะแบรนด์ที่เลือก แล้วตัดแถวที่เหลือ 0
     if (!allBrandsSelected) {
       rows = rows
         .map((r) => {
@@ -4603,6 +4666,23 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         r.vendor_name.toLowerCase().includes(q),
     );
   })();
+  // ผ่าน dropdown filter ทั้ง 4 (ยกเว้นคอลัมน์ที่ระบุใน except — ใช้คำนวณ option แบบ cascading)
+  const poPassesCols = (r: PORow, except?: PoFilterKey) => {
+    for (const key of PO_FILTER_KEYS) {
+      if (key === except) continue;
+      const sel = colFilters[key];
+      if (sel === null) continue;
+      if (!sel.has(poFilterVal[key](r))) return false;
+    }
+    return true;
+  };
+  // ตัวเลือกของแต่ละ dropdown = ค่าที่มีอยู่ในแถวที่ผ่านฟิลเตอร์อื่น (cascading)
+  const poColOptions = (key: PoFilterKey): string[] => {
+    const s = new Set<string>();
+    for (const r of searchedPoRows) if (poPassesCols(r, key)) { const v = poFilterVal[key](r); if (v) s.add(v); }
+    return [...s].sort((a, b) => a.localeCompare(b));
+  };
+  const filteredPoRows = searchedPoRows.filter((r) => poPassesCols(r));
 
   // export ตาราง PO เป็น Excel (รวมคอลัมน์ pivot + tracking ว่าง)
   const exportPO = () => {
@@ -4821,7 +4901,16 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                 <th>#</th>
                 {visibleCols.map((c) => (
                   <th key={c.key} className={cn("relative overflow-hidden", c.thCls)}>
-                    <span className="block truncate pr-1.5">{c.label}</span>
+                    <div className="flex items-center pr-1.5">
+                      <span className="block truncate">{c.label}</span>
+                      {(PO_FILTER_KEYS as readonly string[]).includes(c.key) && (
+                        <ColFilterPopover
+                          options={poColOptions(c.key as PoFilterKey)}
+                          selected={colFilters[c.key as PoFilterKey]}
+                          onChange={(s) => setColFilters((p) => ({ ...p, [c.key]: s }))}
+                        />
+                      )}
+                    </div>
                     <span
                       onMouseDown={(e) => startResize(e, c.key)}
                       title="ลากเพื่อปรับความกว้าง"
