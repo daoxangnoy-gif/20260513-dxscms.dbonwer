@@ -563,15 +563,23 @@ export default function SRROrderB2BInternalPage() {
       if (error) throw error;
       setDocs(data || []);
       // นับ SKU No Odoo (sku_code ว่าง) ต่อ doc
+      // ต้อง paginate — ถ้า item รวมทุก doc เกิน 1000 จะติด limit ของ Supabase → doc ใหม่สุด (insert ทีหลัง) ถูกตัด → นับเป็น 0
       const ids = (data || []).map((d: any) => d.id);
       if (ids.length) {
-        const { data: items } = await (supabase as any)
-          .from("monthly_usage_item")
-          .select("doc_id, sku_code")
-          .in("doc_id", ids);
         const m: Record<string, number> = {};
-        for (const it of (items || []) as any[]) {
-          if (!String(it.sku_code ?? "").trim()) m[it.doc_id] = (m[it.doc_id] || 0) + 1;
+        const PAGE = 1000;
+        for (let from = 0; ; from += PAGE) {
+          const { data: items, error: itErr } = await (supabase as any)
+            .from("monthly_usage_item")
+            .select("id, doc_id, sku_code")
+            .in("doc_id", ids)
+            .order("id", { ascending: true })
+            .range(from, from + PAGE - 1);
+          if (itErr) break;
+          for (const it of (items || []) as any[]) {
+            if (!String(it.sku_code ?? "").trim()) m[it.doc_id] = (m[it.doc_id] || 0) + 1;
+          }
+          if (!items || items.length < PAGE) break;
         }
         setNoOdooMap(m);
       } else {
