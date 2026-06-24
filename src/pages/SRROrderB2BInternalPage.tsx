@@ -1385,7 +1385,7 @@ export default function SRROrderB2BInternalPage() {
         <tr>
           <td class="c">${i + 1}</td>
           <td>${esc(r.barcode || r.barcode_unit)}</td>
-          <td>${esc(r.product_name)}</td>
+          <td>${esc(r.product_name_en || r.product_name)}</td>
           <td class="pic">${r.picture ? `<img src="${esc(r.picture)}" />` : ""}</td>
           <td class="c">${esc(r.uom)}</td>
           <td class="c">${esc(r.monthly_qty)}</td>
@@ -1539,12 +1539,22 @@ export default function SRROrderB2BInternalPage() {
         toast({ title: "เอกสารว่าง ไม่มีรายการให้พิมพ์", variant: "destructive" });
         return;
       }
+      // ดึงชื่อ EN จาก data_master ตาม sku_code (item เก็บแค่ product_name = ชื่อ LA)
+      const skus = [...new Set(items.map((it: any) => it.sku_code).filter(Boolean))] as string[];
+      const enMap: Record<string, string> = {};
+      if (skus.length) {
+        const { data: dm } = await (supabase as any)
+          .from("data_master").select("sku_code, product_name_en").in("sku_code", skus);
+        for (const d of (dm || []) as any[]) if (d.sku_code && !enMap[d.sku_code]) enMap[d.sku_code] = d.product_name_en || "";
+      }
       const formRows: MonthlyUsageForm[] = items.map((it: any) => ({
         ...EMPTY_MU,
         barcode: it.barcode ?? "",
         sku_code: it.sku_code ?? "",
         barcode_unit: it.barcode_unit ?? "",
         product_name: it.product_name ?? "",
+        // ชื่อ EN จาก master ก่อน, ถ้าไม่พบ fallback เป็นชื่อที่เก็บใน item (ชื่อ import)
+        product_name_en: (it.sku_code && enMap[it.sku_code]) || it.product_name || "",
         uom: it.uom ?? "",
         monthly_qty: it.monthly_qty != null ? String(it.monthly_qty) : "",
         picture: it.picture ?? "",
