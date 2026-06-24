@@ -1109,10 +1109,10 @@ export default function SRROrderB2BInternalPage() {
   // template สำหรับ Import หลายแบรนด์ (ชีตเดียว มีคอลัมน์ Brand)
   const downloadMultiTemplate = () => {
     const ws = XLSX.utils.json_to_sheet([
-      { Brand: "Bonchon", Barcode: "8851123212021", "จำนวน/เดือน": 1000, หมายเหตุ: "" },
-      { Brand: "Khiang", Barcode: "8059495230180", "จำนวน/เดือน": 2, หมายเหตุ: "" },
+      { Brand: "Bonchon", Barcode: "8851123212021", "จำนวน/เดือน": 1000, หมายเหตุ: "", "Picture (ฝังรูปใน cell นี้)": "" },
+      { Brand: "Khiang", Barcode: "8059495230180", "จำนวน/เดือน": 2, หมายเหตุ: "", "Picture (ฝังรูปใน cell นี้)": "" },
     ]);
-    ws["!cols"] = [{ wch: 18 }, { wch: 18 }, { wch: 12 }, { wch: 20 }];
+    ws["!cols"] = [{ wch: 18 }, { wch: 18 }, { wch: 12 }, { wch: 20 }, { wch: 30 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Template");
     XLSX.writeFile(wb, "MonthlyUsage_MultiBrand_Template.xlsx");
