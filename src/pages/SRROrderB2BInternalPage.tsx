@@ -2233,10 +2233,10 @@ export default function SRROrderB2BInternalPage() {
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
         <div className="border-b px-4 pt-3 flex items-end justify-between">
           <TabsList className="h-8">
-            <TabsTrigger value="brand" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+            <TabsTrigger value="brand" className="text-xs gap-1.5 data-[state=active]:bg-amber-500 data-[state=active]:text-white data-[state=active]:shadow-sm">
               <Tag className="w-3.5 h-3.5" /> Brand control
             </TabsTrigger>
-            <TabsTrigger value="scm_control" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+            <TabsTrigger value="scm_control" className="text-xs gap-1.5 data-[state=active]:bg-amber-500 data-[state=active]:text-white data-[state=active]:shadow-sm">
               <Boxes className="w-3.5 h-3.5" /> SCM Control
             </TabsTrigger>
           </TabsList>
@@ -2272,19 +2272,19 @@ export default function SRROrderB2BInternalPage() {
           <Tabs value={brandSubTab} onValueChange={setBrandSubTab} className="flex-1 flex flex-col overflow-hidden min-h-0 gap-4">
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <TabsList className="h-8">
-                <TabsTrigger value="monthly" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+                <TabsTrigger value="monthly" className="text-xs gap-1.5 data-[state=active]:bg-amber-500 data-[state=active]:text-white data-[state=active]:shadow-sm">
                   <BarChart3 className="w-3.5 h-3.5" /> Monthly usage
                 </TabsTrigger>
-                <TabsTrigger value="order" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+                <TabsTrigger value="order" className="text-xs gap-1.5 data-[state=active]:bg-amber-500 data-[state=active]:text-white data-[state=active]:shadow-sm">
                   <ShoppingCart className="w-3.5 h-3.5" /> Order
                 </TabsTrigger>
                 {orderOpen && (
-                  <TabsTrigger value="order_edit" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+                  <TabsTrigger value="order_edit" className="text-xs gap-1.5 data-[state=active]:bg-amber-500 data-[state=active]:text-white data-[state=active]:shadow-sm">
                     <ShoppingCart className="w-3.5 h-3.5" /> Order (แก้ไข)
                   </TabsTrigger>
                 )}
                 {muOpen && (
-                  <TabsTrigger value="view" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+                  <TabsTrigger value="view" className="text-xs gap-1.5 data-[state=active]:bg-amber-500 data-[state=active]:text-white data-[state=active]:shadow-sm">
                     <Eye className="w-3.5 h-3.5" /> แสดงข้อมูล
                   </TabsTrigger>
                 )}
@@ -3234,10 +3234,10 @@ export default function SRROrderB2BInternalPage() {
           <Tabs value={scmSubTab} onValueChange={setScmSubTab} className="flex-1 flex flex-col overflow-hidden min-h-0 gap-4">
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <TabsList className="h-8">
-                <TabsTrigger value="so" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+                <TabsTrigger value="so" className="text-xs gap-1.5 data-[state=active]:bg-amber-500 data-[state=active]:text-white data-[state=active]:shadow-sm">
                   <FileSpreadsheet className="w-3.5 h-3.5" /> SO
                 </TabsTrigger>
-                <TabsTrigger value="po" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+                <TabsTrigger value="po" className="text-xs gap-1.5 data-[state=active]:bg-amber-500 data-[state=active]:text-white data-[state=active]:shadow-sm">
                   <FileSignature className="w-3.5 h-3.5" /> PO
                 </TabsTrigger>
               </TabsList>
@@ -3246,13 +3246,13 @@ export default function SRROrderB2BInternalPage() {
               {scmSubTab === "po" && (
                 <Tabs value={poSubTab} onValueChange={setPoSubTab}>
                   <TabsList className="h-8 w-fit">
-                    <TabsTrigger value="list" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+                    <TabsTrigger value="list" className="text-xs gap-1.5 data-[state=active]:bg-amber-500 data-[state=active]:text-white data-[state=active]:shadow-sm">
                       <FileSignature className="w-3.5 h-3.5" /> PO
                     </TabsTrigger>
-                    <TabsTrigger value="stock_kr" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+                    <TabsTrigger value="stock_kr" className="text-xs gap-1.5 data-[state=active]:bg-amber-500 data-[state=active]:text-white data-[state=active]:shadow-sm">
                       <Boxes className="w-3.5 h-3.5" /> Stock Kr
                     </TabsTrigger>
-                    <TabsTrigger value="po_receive" className="text-xs gap-1.5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">
+                    <TabsTrigger value="po_receive" className="text-xs gap-1.5 data-[state=active]:bg-amber-500 data-[state=active]:text-white data-[state=active]:shadow-sm">
                       <Download className="w-3.5 h-3.5" /> PO Receive
                     </TabsTrigger>
                   </TabsList>
