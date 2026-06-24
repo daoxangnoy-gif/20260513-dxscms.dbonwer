@@ -3940,6 +3940,25 @@ function getPoRemarkAction(r: PORow): { remark: string; action: string } {
     action: "Spc สั่งสินค้า และ ติดตาม",
   };
 }
+
+// คำนวณ Action2 (ลำดับเงื่อนไขตามสูตร IF ซ้อน — บนสุดชนะ)
+function getPoAction2(r: PORow): string {
+  // 1. ไม่พบใน data_master
+  if (!r.inDM) return "รหัสสินค้าไม่มีข้อมูลในระบบ จัดชื้อประสารแบรนใส่บารที่มีในระบบ";
+  // 2. Diff (Total - Stock KR) <= 0 → เบิกไป KR ครบแล้ว (คิดเฉพาะเมื่อมีค่า Stock KR)
+  if (r.stock_dc_kr != null && (r.total - r.stock_dc_kr) <= 0) return "เบิกไปสาง KR แล้ว";
+  // 3-4. มีเลข PO
+  const hasPo = r.po_number.trim() !== "" && r.po_number.trim() !== "-";
+  const recQty = parseFloat(r.rec_po) || 0;
+  if (hasPo && recQty === 0) return "เปิด Po แล้ว เร่งติดตามของเข้า";
+  if (hasPo && recQty > 0) return "ของเข้าแล้ว เปิด SO ให้ DC Pick";
+  // 5. สินค้าอิมพอด (อิงจาก Remark ที่คำนวณได้)
+  if (getPoRemarkAction(r).remark === "สินค้าอิมพอด") return "สินค้าอิมพอด-เบิกจากดีชี หากไม่มี ขอชื้อในลาวก่อน";
+  // 6. ยังไม่มี Po Cost (0 หรือไม่มีข้อมูล)
+  if (r.pocost == null || r.pocost === 0) return "รอทำ Po Cost";
+  // 7. ที่เหลือ
+  return "เร่งเปิด PO และ ตามของ";
+}
 const poDefaultVis = () => new Set(PO_FIXED_COLS.filter((c) => c.def).map((c) => c.key));
 
 // ค่าที่จะแสดงในแต่ละ cell ตาม key
@@ -3949,7 +3968,7 @@ const poCellValue = (key: string, r: PORow): React.ReactNode => {
     case "department": return r.department || "-";
     case "remark": return <span className="block truncate" title={getPoRemarkAction(r).remark}>{getPoRemarkAction(r).remark}</span>;
     case "action": return <span className="block truncate" title={getPoRemarkAction(r).action}>{getPoRemarkAction(r).action}</span>;
-    case "action2": return "";
+    case "action2": return <span className="block truncate" title={getPoAction2(r)}>{getPoAction2(r)}</span>;
     case "sku": return r.sku || "-";
     case "vendor_code": return r.vendor_code || "-";
     case "vendor_name": return r.vendor_name || "-";
@@ -4348,6 +4367,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         Department: r.department,
         Remark: remark,
         Action: action,
+        Action2: getPoAction2(r),
         SKU: r.sku, // ซ่อนคอลัมน์ไว้ก่อน (ตั้ง hidden ด้านล่าง)
         "Vendor code": r.vendor_code,
         "Vendor name": r.vendor_name,
