@@ -4186,15 +4186,25 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     }
   };
 
-  const fetchInChunks = async (table: string, select: string, col: string, ids: string[]): Promise<any[]> => {
+  const fetchInChunks = async (table: string, select: string, col: string, ids: string[], orderCol?: string): Promise<any[]> => {
     const out: any[] = [];
     const CH = 200;
+    const PAGE = 1000;
+    const ord = orderCol || col;
     for (let i = 0; i < ids.length; i += CH) {
       const part = ids.slice(i, i + CH);
       if (part.length === 0) continue;
-      const { data, error } = await (supabase as any).from(table).select(select).in(col, part);
-      if (error) throw error;
-      out.push(...(data || []));
+      // paginate ภายในแต่ละ chunk — บางตารางมีหลายแถวต่อ 1 id (เช่น stock มี ~50 แถว/SKU)
+      // ถ้าไม่ paginate จะติด limit 1000 แถวของ Supabase → ข้อมูล stock โดนตัด → Stock DC ออกไม่ครบ
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await (supabase as any)
+          .from(table).select(select).in(col, part)
+          .order(ord, { ascending: true })
+          .range(from, from + PAGE - 1);
+        if (error) throw error;
+        out.push(...(data || []));
+        if (!data || data.length < PAGE) break;
+      }
     }
     return out;
   };
@@ -4259,7 +4269,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         : [];
       const vmMap = new Map<string, any>();
       for (const v of vm) if (v.vendor_code && !vmMap.has(v.vendor_code)) vmMap.set(v.vendor_code, v);
-      const stock = skus.length ? await fetchInChunks("stock", "item_id, type_store, quantity", "item_id", skus) : [];
+      const stock = skus.length ? await fetchInChunks("stock", "id, item_id, type_store, quantity", "item_id", skus, "id") : [];
       const stockDcMap = new Map<string, number>();
       for (const s of stock) {
         if (String(s.type_store) === "DC") stockDcMap.set(s.item_id, (stockDcMap.get(s.item_id) || 0) + (Number(s.quantity) || 0));
