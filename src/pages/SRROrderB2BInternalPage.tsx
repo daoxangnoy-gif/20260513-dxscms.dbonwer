@@ -1096,9 +1096,11 @@ export default function SRROrderB2BInternalPage() {
   // ดาวน์โหลด template สำหรับนำเข้า Monthly usage
   const downloadMuTemplate = () => {
     const ws = XLSX.utils.json_to_sheet([
-      { Barcode: "8857000000001", "จำนวน/เดือน": 10, "Order group": "A", หมายเหตุ: "", "Barcode ทดแทน": "" },
-      { Barcode: "8857000000002", "จำนวน/เดือน": 5, "Order group": "B", หมายเหตุ: "", "Barcode ทดแทน": "8857000000099" },
+      { Barcode: "8857000000001", "จำนวน/เดือน": 10, "Order group": "A", หมายเหตุ: "", "Barcode ทดแทน": "", "Picture (ฝังรูปใน cell นี้)": "" },
+      { Barcode: "8857000000002", "จำนวน/เดือน": 5, "Order group": "B", หมายเหตุ: "", "Barcode ทดแทน": "8857000000099", "Picture (ฝังรูปใน cell นี้)": "" },
     ]);
+    // ปรับความกว้างคอลัมน์ Picture ให้กว้างพอสำหรับรูป
+    ws["!cols"] = [{ wch: 18 }, { wch: 14 }, { wch: 12 }, { wch: 20 }, { wch: 18 }, { wch: 30 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Template");
     XLSX.writeFile(wb, "MonthlyUsage_Template.xlsx");
