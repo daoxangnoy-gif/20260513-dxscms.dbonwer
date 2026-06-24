@@ -16,6 +16,14 @@ import * as XLSX from "xlsx";
 
 const MU_BUCKET = "monthly-usage-pictures";
 
+// วันที่ Need ขั้นต่ำ = วันนี้ + 7 วัน (yyyy-mm-dd, อิงเวลาท้องถิ่น)
+function minNeedDateISO(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + 7);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 // ===== SO export (SCM Control → tab SO) — คอนเซ็ปต์/คอลัมน์ยืดจาก Order B2B (SO) =====
 const SO_COMPANY = "Lanexang Green Property Sole Co.,Ltd";
 const SO_WAREHOUSE = "DC Thongpong";
@@ -1513,15 +1521,11 @@ export default function SRROrderB2BInternalPage() {
     }
   };
 
-  // กด Print → ถ้า doc ยังไม่มี need_date (เช่นมาจาก Import) ให้ป๊อปอัปถามวันที่ก่อนทุกครั้ง
+  // กด Print → ป๊อปอัปถามวันที่ Need ทุกครั้ง (prefill วันที่เดิมถ้าเคยใส่ไว้)
   const printDoc = (doc: MUDoc) => {
-    if (!doc.need_date) {
-      setPendingPrintDoc(doc);
-      setPrintNeedDate("");
-      setPrintNeedOpen(true);
-      return;
-    }
-    doPrintDoc(doc, doc.need_date);
+    setPendingPrintDoc(doc);
+    setPrintNeedDate(doc.need_date || ""); // เคยใส่แล้ว → default เป็นค่าเดิม, แก้ได้
+    setPrintNeedOpen(true);
   };
 
   // พิมพ์ฟอร์มเอกสารเดิมซ้ำ (ดึงรายการ + logo จาก DB โดยไม่ต้องเข้าไปแก้ไข) — ใช้ needDateISO ที่ส่งเข้ามา
@@ -3638,22 +3642,32 @@ export default function SRROrderB2BInternalPage() {
             <DialogTitle>วันที่คาดว่าจะเบิก (DATE Need)</DialogTitle>
           </DialogHeader>
           <div className="space-y-1.5">
-            <Label className="text-xs">เอกสารนี้ยังไม่มีวันที่ Need — เลือกวันที่ก่อนพิมพ์</Label>
+            <Label className="text-xs">เลือกวันที่ก่อนพิมพ์ (ต้องไม่น้อยกว่า 7 วันจากวันนี้)</Label>
             <Input
               type="date"
               value={printNeedDate}
+              min={minNeedDateISO()}
               onChange={(e) => setPrintNeedDate(e.target.value)}
               className="h-9"
             />
+            <p className="text-[11px] text-muted-foreground">เลือกได้ตั้งแต่ {fmtDMY(minNeedDateISO())} เป็นต้นไป</p>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPrintNeedOpen(false)}>ยกเลิก</Button>
             <Button
-              onClick={() => {
+              onClick={async () => {
+                const min = minNeedDateISO();
                 if (!printNeedDate) { toast({ title: "กรุณาเลือกวันที่คาดว่าจะเบิก", variant: "destructive" }); return; }
+                if (printNeedDate < min) { toast({ title: "วันที่ Need ต้องไม่น้อยกว่า 7 วันจากวันนี้", description: `เลือกตั้งแต่ ${fmtDMY(min)} เป็นต้นไป`, variant: "destructive" }); return; }
                 const doc = pendingPrintDoc;
                 setPrintNeedOpen(false);
-                if (doc) doPrintDoc(doc, printNeedDate);
+                if (!doc) return;
+                // บันทึกลง doc เพื่อครั้งถัดไป default เป็นค่านี้
+                try {
+                  await (supabase as any).from("monthly_usage_doc").update({ need_date: printNeedDate }).eq("id", doc.id);
+                  setDocs((prev) => prev.map((x) => x.id === doc.id ? { ...x, need_date: printNeedDate } : x));
+                } catch { /* บันทึกไม่ได้ก็ยังพิมพ์ต่อ */ }
+                doPrintDoc({ ...doc, need_date: printNeedDate }, printNeedDate);
               }}
             >
               ออกฟอร์ม
