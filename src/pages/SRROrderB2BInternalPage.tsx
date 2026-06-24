@@ -54,37 +54,118 @@ async function extractImagesFromXlsx(ab: ArrayBuffer): Promise<Map<number, { dat
   try {
     const JSZip = (await import("jszip")).default;
     const zip = await JSZip.loadAsync(ab);
+
+    // --- Method 1: Traditional drawing XML (standard xlsx / old WPS) ---
     const drawingFile = zip.file(/^xl\/drawings\/drawing\d+\.xml$/)?.[0];
     const drawingRelsFile = zip.file(/^xl\/drawings\/_rels\/drawing\d+\.xml\.rels$/)?.[0];
-    if (!drawingFile || !drawingRelsFile) return new Map();
-    const [drawingXml, drawingRelsXml] = await Promise.all([
-      drawingFile.async("string"),
-      drawingRelsFile.async("string"),
-    ]);
-    // parse rels: Id → media filename
-    const rIdToPath = new Map<string, string>();
-    for (const [, id, target] of drawingRelsXml.matchAll(/Id="([^"]+)"[^>]*Target="([^"]+)"/g)) {
-      if (/\.(png|jpe?g|gif|webp|bmp)/i.test(target))
-        rIdToPath.set(id, "xl/media/" + target.replace(/^.*\//, ""));
+    if (drawingFile && drawingRelsFile) {
+      const [drawingXml, drawingRelsXml] = await Promise.all([
+        drawingFile.async("string"),
+        drawingRelsFile.async("string"),
+      ]);
+      const rIdToPath = new Map<string, string>();
+      for (const [, id, target] of drawingRelsXml.matchAll(/Id="([^"]+)"[^>]*Target="([^"]+)"/g)) {
+        if (/\.(png|jpe?g|gif|webp|bmp)/i.test(target))
+          rIdToPath.set(id, "xl/media/" + target.replace(/^.*\//, ""));
+      }
+      const result = new Map<number, { data: Uint8Array; ext: string }>();
+      const anchorRe = /<xdr:(?:two|one)CellAnchor[\s\S]*?<\/xdr:(?:two|one)CellAnchor>/g;
+      for (const [anchor] of drawingXml.matchAll(anchorRe)) {
+        const rowM = anchor.match(/<xdr:from>[\s\S]*?<xdr:row>(\d+)<\/xdr:row>/);
+        const rIdM = anchor.match(/r:embed="([^"]+)"/);
+        if (!rowM || !rIdM) continue;
+        const row0 = parseInt(rowM[1], 10);
+        const imgPath = rIdToPath.get(rIdM[1]);
+        if (!imgPath || result.has(row0)) continue;
+        const imgFile = zip.file(imgPath);
+        if (!imgFile) continue;
+        const data = await imgFile.async("uint8array");
+        const ext = imgPath.split(".").pop()?.toLowerCase() || "png";
+        result.set(row0, { data, ext });
+      }
+      if (result.size > 0) return result;
     }
-    // parse drawing anchors: row(0-based) + rId
-    const result = new Map<number, { data: Uint8Array; ext: string }>();
-    const anchorRe = /<xdr:(?:two|one)CellAnchor[\s\S]*?<\/xdr:(?:two|one)CellAnchor>/g;
-    for (const [anchor] of drawingXml.matchAll(anchorRe)) {
-      const rowM = anchor.match(/<xdr:from>[\s\S]*?<xdr:row>(\d+)<\/xdr:row>/);
-      const rIdM = anchor.match(/r:embed="([^"]+)"/);
-      if (!rowM || !rIdM) continue;
-      const row0 = parseInt(rowM[1], 10);
-      const imgPath = rIdToPath.get(rIdM[1]);
-      if (!imgPath || result.has(row0)) continue;
-      const imgFile = zip.file(imgPath);
-      if (!imgFile) continue;
-      const data = await imgFile.async("uint8array");
-      const ext = imgPath.split(".").pop()?.toLowerCase() || "png";
-      result.set(row0, { data, ext });
+
+    // --- Method 2: Excel 365 Rich Value / Cell Images (WPS xlsx) ---
+    // Chain: sheet <c vm=N> → cellMetadata[N] → futureMetadata[M] → rvb i=P
+    //        → richValueRel rel[P] r:id → _rels Target → xl/media/imageX.png
+    const rvRelXmlFile = zip.file("xl/richData/richValueRel.xml");
+    const rvRelsXmlFile = zip.file("xl/richData/_rels/richValueRel.xml.rels");
+    const metadataXmlFile = zip.file("xl/metadata.xml");
+    const sheetXmlFile = zip.file(/^xl\/worksheets\/sheet\d+\.xml$/)?.[0];
+    if (rvRelXmlFile && rvRelsXmlFile && metadataXmlFile && sheetXmlFile) {
+      const [rvRelXml, rvRelsXml, metaXml, sheetXml] = await Promise.all([
+        rvRelXmlFile.async("string"),
+        rvRelsXmlFile.async("string"),
+        metadataXmlFile.async("string"),
+        sheetXmlFile.async("string"),
+      ]);
+      // 1. _rels: rId → absolute media path in zip
+      const rIdToMedia = new Map<string, string>();
+      for (const m of rvRelsXml.matchAll(/Id="([^"]+)"[^>]*Target="([^"]+)"/g)) {
+        const [, id, target] = m;
+        if (/\.(png|jpe?g|gif|webp|bmp)/i.test(target)) {
+          const resolved = target.startsWith("../") ? "xl/" + target.slice(3)
+            : target.startsWith("/") ? target.slice(1)
+            : "xl/richData/" + target;
+          rIdToMedia.set(id, resolved);
+        }
+      }
+      // 2. richValueRel.xml: rich value index → rId
+      const rvIdxToRId = new Map<number, string>();
+      for (const m of rvRelXml.matchAll(/<rel\b([^/>]*)\/?>/g)) {
+        const attrs = m[1];
+        const iM = attrs.match(/\bi="(\d+)"/);
+        const rIdM = attrs.match(/(?:r:|:)id="([^"]+)"/i);
+        if (iM && rIdM) rvIdxToRId.set(parseInt(iM[1]), rIdM[1]);
+      }
+      // 3. metadata.xml futureMetadata XLRICHVALUE: fmIdx → rv index (rvb/@i)
+      const fmIdxToRvIdx = new Map<number, number>();
+      const fmSection = metaXml.match(/<futureMetadata\b[^>]*name="XLRICHVALUE"[^>]*>([\s\S]*?)<\/futureMetadata>/)?.[1] ?? "";
+      let fmIdx = 0;
+      for (const bkM of fmSection.matchAll(/<bk>([\s\S]*?)<\/bk>/g)) {
+        const rvbM = bkM[1].match(/rvb[^>]*\bi="(\d+)"/);
+        if (rvbM) fmIdxToRvIdx.set(fmIdx, parseInt(rvbM[1]));
+        fmIdx++;
+      }
+      // 4. metadata.xml cellMetadata: cmIdx → fmIdx (rc t="1" v=fmIdx)
+      const cmIdxToFmIdx = new Map<number, number>();
+      const cmSection = metaXml.match(/<cellMetadata\b[^>]*>([\s\S]*?)<\/cellMetadata>/)?.[1] ?? "";
+      let cmIdx = 0;
+      for (const bkM of cmSection.matchAll(/<bk>([\s\S]*?)<\/bk>/g)) {
+        const rcM = bkM[1].match(/<rc\b[^>]*\bt="1"[^>]*\bv="(\d+)"/) ?? bkM[1].match(/<rc\b[^>]*\bv="(\d+)"[^>]*\bt="1"/);
+        if (rcM) cmIdxToFmIdx.set(cmIdx, parseInt(rcM[1]));
+        cmIdx++;
+      }
+      // 5. sheet XML: <c r="COLROW" vm="N"> → xdrRow → chain → image
+      const result = new Map<number, { data: Uint8Array; ext: string }>();
+      for (const m of sheetXml.matchAll(/<c\b([^>]*)>/g)) {
+        const attrs = m[1];
+        const rM = attrs.match(/\br="([A-Z]+)(\d+)"/);
+        const vmM = attrs.match(/\bvm="(\d+)"/);
+        if (!rM || !vmM) continue;
+        const xdrRow = parseInt(rM[2]) - 1; // Excel row 2 (first data) → xdrRow=1
+        if (result.has(xdrRow)) continue;
+        const fmIdx2 = cmIdxToFmIdx.get(parseInt(vmM[1]));
+        if (fmIdx2 === undefined) continue;
+        const rvIdx = fmIdxToRvIdx.get(fmIdx2);
+        if (rvIdx === undefined) continue;
+        const rId = rvIdxToRId.get(rvIdx);
+        if (!rId) continue;
+        const mediaPath = rIdToMedia.get(rId);
+        if (!mediaPath) continue;
+        const imgFile = zip.file(mediaPath);
+        if (!imgFile) continue;
+        const data = await imgFile.async("uint8array");
+        const ext = mediaPath.split(".").pop()?.toLowerCase() || "png";
+        result.set(xdrRow, { data, ext });
+      }
+      if (result.size > 0) return result;
     }
-    return result;
-  } catch {
+
+    return new Map();
+  } catch (e) {
+    console.error("[IMG] extract error:", e);
     return new Map();
   }
 }
