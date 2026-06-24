@@ -3733,7 +3733,7 @@ const PO_FIXED_COLS: POColMeta[] = [
   { key: "stock_dc", label: "Stock DC", def: true, w: 90, thCls: "text-right", tdCls: "text-right tabular-nums" },
   { key: "stock_dc_kr", label: "Stock DC (KR)", def: true, w: 110, thCls: "text-right", tdCls: "text-right tabular-nums" },
   { key: "total", label: "Total qty", def: true, w: 90, thCls: "text-right bg-emerald-50", tdCls: "text-right tabular-nums font-semibold bg-emerald-50/40" },
-  { key: "diff", label: "DIFF", def: false, w: 80, thCls: "text-right text-muted-foreground/70", tdCls: "text-right tabular-nums text-muted-foreground/40" },
+  { key: "diff", label: "DIFF", def: true, w: 80, thCls: "text-right", tdCls: "text-right tabular-nums" },
 ];
 const PO_BRAND_W = 90; // ความกว้างเริ่มต้นของคอลัมน์แบรนด์
 const PO_VIS_LS = "po_vis_cols_v4"; // bump version → ล้างค่าเก่าใน localStorage ให้ default ใหม่ทำงาน
@@ -3809,7 +3809,11 @@ const poCellValue = (key: string, r: PORow): React.ReactNode => {
     case "stock_dc": return r.stock_dc ?? "-";
     case "stock_dc_kr": return r.stock_dc_kr ?? "-";
     case "total": return r.total;
-    case "diff": return "-";
+    case "diff": {
+      if (r.stock_dc_kr == null) return "-";
+      const diff = r.total - r.stock_dc_kr;
+      return <span className={diff > 0 ? "text-red-500 font-semibold" : "text-emerald-600"}>{diff}</span>;
+    }
     default: return "";
   }
 };
@@ -4194,7 +4198,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       };
       for (const b of poBrands) base[b] = r.byBrand.get(b) ?? "";
       base["Total qty"] = r.total;
-      base["DIFF"] = ""; // ว่างไว้ก่อน
+      base["DIFF"] = r.stock_dc_kr != null ? r.total - r.stock_dc_kr : "";
       return base;
     });
     const ws = XLSX.utils.json_to_sheet(out);
