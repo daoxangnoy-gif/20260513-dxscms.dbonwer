@@ -38,6 +38,57 @@ async function uploadPicture(dataUrl: string): Promise<string> {
   return supabase.storage.from(MU_BUCKET).getPublicUrl(path).data.publicUrl;
 }
 
+// อัปรูป (raw bytes) ขึ้น Storage → คืน public URL (ใช้ตอน Import Excel ที่ฝังรูปไว้)
+async function uploadImageBytes(data: Uint8Array, ext: string): Promise<string> {
+  const mime = /^jpe?g$/.test(ext) ? "image/jpeg" : `image/${ext}`;
+  const blob = new Blob([data], { type: mime });
+  const path = `${crypto.randomUUID()}.${ext}`;
+  const { error } = await supabase.storage.from(MU_BUCKET).upload(path, blob, { contentType: mime, upsert: false });
+  if (error) throw error;
+  return supabase.storage.from(MU_BUCKET).getPublicUrl(path).data.publicUrl;
+}
+
+// อ่านรูปที่ฝังใน Excel (xlsx) → Map<xdrRow(0-based), {data, ext}>
+// xdrRow 0 = header, 1 = data row 1, ... ตรงกับ raw.slice(1)[i] → xdrRow = i+1
+async function extractImagesFromXlsx(ab: ArrayBuffer): Promise<Map<number, { data: Uint8Array; ext: string }>> {
+  try {
+    const JSZip = (await import("jszip")).default;
+    const zip = await JSZip.loadAsync(ab);
+    const drawingFile = zip.file(/^xl\/drawings\/drawing\d+\.xml$/)?.[0];
+    const drawingRelsFile = zip.file(/^xl\/drawings\/_rels\/drawing\d+\.xml\.rels$/)?.[0];
+    if (!drawingFile || !drawingRelsFile) return new Map();
+    const [drawingXml, drawingRelsXml] = await Promise.all([
+      drawingFile.async("string"),
+      drawingRelsFile.async("string"),
+    ]);
+    // parse rels: Id → media filename
+    const rIdToPath = new Map<string, string>();
+    for (const [, id, target] of drawingRelsXml.matchAll(/Id="([^"]+)"[^>]*Target="([^"]+)"/g)) {
+      if (/\.(png|jpe?g|gif|webp|bmp)/i.test(target))
+        rIdToPath.set(id, "xl/media/" + target.replace(/^.*\//, ""));
+    }
+    // parse drawing anchors: row(0-based) + rId
+    const result = new Map<number, { data: Uint8Array; ext: string }>();
+    const anchorRe = /<xdr:(?:two|one)CellAnchor[\s\S]*?<\/xdr:(?:two|one)CellAnchor>/g;
+    for (const [anchor] of drawingXml.matchAll(anchorRe)) {
+      const rowM = anchor.match(/<xdr:from>[\s\S]*?<xdr:row>(\d+)<\/xdr:row>/);
+      const rIdM = anchor.match(/r:embed="([^"]+)"/);
+      if (!rowM || !rIdM) continue;
+      const row0 = parseInt(rowM[1], 10);
+      const imgPath = rIdToPath.get(rIdM[1]);
+      if (!imgPath || result.has(row0)) continue;
+      const imgFile = zip.file(imgPath);
+      if (!imgFile) continue;
+      const data = await imgFile.async("uint8array");
+      const ext = imgPath.split(".").pop()?.toLowerCase() || "png";
+      result.set(row0, { data, ext });
+    }
+    return result;
+  } catch {
+    return new Map();
+  }
+}
+
 type BrandRow = { id?: string; code: number; brand_name: string; branch: string; brand_group: string };
 
 type MonthlyUsageForm = {
@@ -1081,10 +1132,15 @@ export default function SRROrderB2BInternalPage() {
       const rIdx = headers.findIndex((h) => h.includes("remark") || h.includes("หมายเหตุ") || h.includes("note"));
       const gIdx = headers.findIndex((h) => h.includes("order group") || h.includes("order_group") || h.includes("group") || h.includes("กลุ่ม"));
       if (bIdx < 0) { toast({ title: "ไม่พบคอลัมน์ Barcode", variant: "destructive" }); return; }
-      const dataRows = raw.slice(1).filter((r) => String(r[bIdx] ?? "").trim());
+      // ดึงรูปที่ฝังใน Excel (ถ้ามี) — key = xdrRow(0-based), ค่า xdrRow 1 = data row แรก
+      const imagesByRow = await extractImagesFromXlsx(ab);
+      // เก็บ original index ไว้ด้วย (สำหรับ map หา xdrRow = origIdx + 1)
+      const dataRows = raw.slice(1)
+        .map((r, i) => ({ r, xdrRow: i + 1 }))
+        .filter(({ r }) => String(r[bIdx] ?? "").trim());
       if (!dataRows.length) { toast({ title: "ไม่พบข้อมูล", variant: "destructive" }); return; }
       const resolved: MonthlyUsageForm[] = await Promise.all(
-        dataRows.map(async (r) => {
+        dataRows.map(async ({ r, xdrRow }) => {
           const code = String(r[bIdx] ?? "").trim();
           const qty = qIdx >= 0 ? String(r[qIdx] ?? "").trim() : "";
           const remark = rIdx >= 0 ? String(r[rIdx] ?? "").trim() : "";
@@ -1093,6 +1149,12 @@ export default function SRROrderB2BInternalPage() {
           // รายการทดแทน (ถ้ามีคอลัมน์)
           const replCode = replIdx >= 0 ? String(r[replIdx] ?? "").trim() : "";
           const replRes = replCode ? await resolveBarcode(replCode) : ({ found: false } as any);
+          // อัปโหลดรูปที่ฝังใน Excel (ถ้ามีรูปที่ row นี้)
+          let picture = "";
+          const imgData = imagesByRow.get(xdrRow);
+          if (imgData) {
+            try { picture = await uploadImageBytes(imgData.data, imgData.ext); } catch { /* อัปรูปไม่สำเร็จ — ข้าม */ }
+          }
           return {
             barcode: code,
             sku_code: res.found ? res.sku_code : "",
@@ -1102,7 +1164,7 @@ export default function SRROrderB2BInternalPage() {
             product_name_en: res.found ? res.product_name_en : "",
             monthly_qty: qty,
             order_group: orderGroup,
-            picture: "",
+            picture,
             remark,
             division_group: res.found ? res.division_group : "",
             division: res.found ? res.division : "",
