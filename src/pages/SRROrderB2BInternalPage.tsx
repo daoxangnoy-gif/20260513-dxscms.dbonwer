@@ -5058,23 +5058,23 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                     {poExportVendors
                       .filter((v) => { const q = poExportSearch.trim().toLowerCase(); return !q || v.code.toLowerCase().includes(q) || v.name.toLowerCase().includes(q); })
                       .map((v) => (
-                        <div key={v.code} className="flex items-center gap-2 px-3 py-1 text-xs hover:bg-muted/40 min-w-0">
+                        <div key={v.code} className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-3 py-1 text-xs hover:bg-muted/40">
                           <input
                             type="checkbox"
-                            className="h-3.5 w-3.5 shrink-0"
+                            className="h-3.5 w-3.5"
                             checked={poExportSel.has(v.code)}
                             onChange={() => setPoExportSel((prev) => { const n = new Set(prev); if (n.has(v.code)) n.delete(v.code); else n.add(v.code); return n; })}
                           />
-                          <span className="truncate flex-1 min-w-0" title={v.name}>{v.name}</span>
-                          {poExportSel.has(v.code) && (
+                          <span className="truncate" title={v.name}>{v.name}</span>
+                          {poExportSel.has(v.code) ? (
                             <select
-                              className="h-6 text-[11px] border rounded px-1 bg-background shrink-0 w-44"
+                              className="h-6 text-[11px] border rounded px-1 bg-background w-40"
                               value={poExportPick[v.code] || PO_PICKING_DC}
                               onChange={(e) => setPoExportPick((prev) => ({ ...prev, [v.code]: e.target.value }))}
                             >
                               {PO_PICKING_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
                             </select>
-                          )}
+                          ) : <span />}
                         </div>
                       ))}
                     {poExportVendors.length === 0 && <div className="px-3 py-2 text-xs text-muted-foreground">ไม่มี Vendor ที่เข้าเงื่อนไข</div>}
