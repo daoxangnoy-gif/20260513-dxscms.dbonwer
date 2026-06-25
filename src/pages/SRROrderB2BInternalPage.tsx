@@ -4095,6 +4095,13 @@ const PO_WRONG_VENDOR_CODES = new Set(["DC0288", "DC0504", "DC0426", "DC0287", "
 // vendor code ที่ถือว่า "ไม่ได้ผูกผู้สนอง"
 const PO_EMPTY_VENDOR_VALUES = new Set(["", "0", "0-0", "-"]);
 
+// Picking Type / Database ID สำหรับ Export PO (เลือกได้ 2 ค่า) — 2540 = DC (default)
+const PO_PICKING_DC = "2540";
+const PO_PICKING_STORE = "131010001-Phonsinuan: Received PO";
+const PO_PICKING_OPTIONS = [PO_PICKING_DC, PO_PICKING_STORE];
+// Action2 ที่อนุญาตให้ Export
+const PO_EXPORT_ACTION2 = new Set(["เร่งเปิด PO และ ตามของ", "รอทำ Po Cost"]);
+
 // คำนวณ Remark + Action ตามเงื่อนไข (priority: ไม่พบ DM > ผู้สนองผิด > ไม่ผูก > อิมพอด > ครบถ้วน)
 function getPoRemarkAction(r: PORow): { remark: string; action: string } {
   if (!r.inDM) return {
@@ -4261,6 +4268,12 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   const [poSelBrands, setPoSelBrands] = useState<Set<string>>(new Set()); // แบรนด์ที่ติ๊กรวมใน Total qty (ว่าง = ยังไม่ init)
   // dropdown filter 4 คอลัมน์ (null = ไม่กรอง) ทำงานร่วมกันแบบ AND + cascading
   const [colFilters, setColFilters] = useState<Record<PoFilterKey, Set<string> | null>>({ remark: null, action: null, action2: null, vendor_name: null });
+  // Export PO dialog
+  const [poExportOpen, setPoExportOpen] = useState(false);
+  const [poExportAll, setPoExportAll] = useState(true);          // true = ทุก vendor
+  const [poExportSel, setPoExportSel] = useState<Set<string>>(new Set());     // vendor ที่ติ๊ก
+  const [poExportPick, setPoExportPick] = useState<Record<string, string>>({}); // vendor_code → picking type
+  const [poExportSearch, setPoExportSearch] = useState("");
   const [poLoading, setPoLoading] = useState(false);
   const [poLoaded, setPoLoaded] = useState(false);
   const [poSearch, setPoSearch] = useState("");
@@ -4739,6 +4752,62 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   };
   const filteredPoRows = searchedPoRows.filter((r) => poPassesCols(r));
 
+  // ===== Export PO (รูปแบบ import เข้า Odoo แบบ SRR DC) =====
+  // แถวที่ export ได้: Action2 ∈ {เร่งเปิด PO และ ตามของ, รอทำ Po Cost} และ DIFF > 0 (คิด Stock KR ว่าง = 0)
+  const poExportEligible = (() => {
+    let rows = poRows;
+    if (!allBrandsSelected) {
+      rows = rows.map((r) => { let t = 0; for (const b of poSelBrands) t += r.byBrand.get(b) ?? 0; return { ...r, total: t }; });
+    }
+    return rows.filter((r) => PO_EXPORT_ACTION2.has(getPoAction2(r)) && (r.total - (r.stock_dc_kr ?? 0)) > 0);
+  })();
+  const poExportVendors = (() => {
+    const m = new Map<string, string>();
+    for (const r of poExportEligible) if (r.vendor_code && !m.has(r.vendor_code)) m.set(r.vendor_code, r.vendor_name || r.vendor_code);
+    return [...m.entries()].map(([code, name]) => ({ code, name })).sort((a, b) => a.code.localeCompare(b.code));
+  })();
+
+  const doExportPO = () => {
+    let rows = poExportEligible;
+    if (!poExportAll) rows = rows.filter((r) => poExportSel.has(r.vendor_code));
+    if (rows.length === 0) { toast({ title: "ไม่มีรายการให้ export", description: "ตรวจเงื่อนไข Action2 / DIFF / Vendor ที่เลือก", variant: "destructive" }); return; }
+    // group ตาม vendor
+    const byVendor = new Map<string, PORow[]>();
+    for (const r of rows) { const vc = r.vendor_code || ""; if (!byVendor.has(vc)) byVendor.set(vc, []); byVendor.get(vc)!.push(r); }
+    const out: Record<string, any>[] = [];
+    for (const [vc, vRows] of byVendor) {
+      const pick = poExportAll ? PO_PICKING_DC : (poExportPick[vc] || PO_PICKING_DC);
+      const interTransfer = pick === PO_PICKING_DC ? "" : "true";
+      vRows.forEach((r, idx) => {
+        const diff = r.total - (r.stock_dc_kr ?? 0);
+        out.push({
+          "partner_id": idx === 0 ? vc : "",
+          "Picking Type / Database ID": idx === 0 ? pick : "",
+          "Inter Transfer": idx === 0 ? interTransfer : "",
+          "PO Group": idx === 0 ? vc : "",
+          "Products to Purchase/barcode": r.barcode,
+          "Products to Purchase/Product": r.barcode,
+          "Product name": r.product_name_en,
+          "Products to Purchase/UoM": "Unit",
+          "Products to Purchase/Exclude In Package": "True",
+          "Products to Purchase/Quantity": diff,
+          "Products to Purchase/Unit Price": r.pocost ?? "",
+          "assigned_to": idx === 0 ? "SPC manager01" : "",
+          "description": "",
+        });
+      });
+    }
+    const ws = XLSX.utils.json_to_sheet(out);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "PO");
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const now = new Date();
+    const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`;
+    XLSX.writeFile(wb, `${stamp}-PO-Import.xlsx`);
+    setPoExportOpen(false);
+    toast({ title: "Export PO สำเร็จ", description: `${out.length} แถว · ${byVendor.size} vendor` });
+  };
+
   // export ตาราง PO เป็น Excel (รวมคอลัมน์ pivot + tracking ว่าง)
   const exportPO = () => {
     if (filteredPoRows.length === 0) { toast({ title: "ไม่มีข้อมูลให้ export", variant: "destructive" }); return; }
@@ -4945,7 +5014,82 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={exportPO} disabled={filteredPoRows.length === 0}>
             <Download className="w-3.5 h-3.5" /> Export
           </Button>
+          <Button
+            size="sm"
+            className="h-8 gap-1.5 text-xs"
+            onClick={() => { setPoExportPick({}); setPoExportSel(new Set()); setPoExportAll(true); setPoExportSearch(""); setPoExportOpen(true); }}
+            disabled={poExportEligible.length === 0}
+            title="Export PO (Excel) สำหรับ import เข้า Odoo"
+          >
+            <ShoppingCart className="w-3.5 h-3.5" /> Export PO
+          </Button>
         </div>
+
+        {/* ===== Export PO Dialog ===== */}
+        <Dialog open={poExportOpen} onOpenChange={setPoExportOpen}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Export PO (เข้า Odoo)</DialogTitle>
+            </DialogHeader>
+            <p className="text-[11px] text-muted-foreground -mt-1">
+              ส่งออกเฉพาะแถวที่ Action2 = "เร่งเปิด PO และ ตามของ" หรือ "รอทำ Po Cost" และ DIFF &gt; 0 · Quantity = DIFF · {poExportEligible.length} รายการที่เข้าเงื่อนไข
+            </p>
+            <div className="space-y-3">
+              <div className="flex items-center gap-4 text-sm">
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" checked={poExportAll} onChange={() => setPoExportAll(true)} /> ทุก Vendor
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" checked={!poExportAll} onChange={() => setPoExportAll(false)} /> เลือกบาง Vendor
+                </label>
+                {poExportAll && <span className="text-[11px] text-muted-foreground ml-auto">Picking Type = {PO_PICKING_DC} ทุกตัว</span>}
+              </div>
+              {!poExportAll && (
+                <div className="border rounded-lg">
+                  <div className="flex items-center gap-1 px-2 py-1.5 border-b">
+                    <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => setPoExportSel(new Set(poExportVendors.map((v) => v.code)))}>เลือกทั้งหมด</Button>
+                    <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => setPoExportSel(new Set())}>ล้าง</Button>
+                    <span className="text-[11px] text-muted-foreground ml-auto">เลือก {poExportSel.size}/{poExportVendors.length}</span>
+                  </div>
+                  <div className="px-2 py-1.5 border-b">
+                    <Input value={poExportSearch} onChange={(e) => setPoExportSearch(e.target.value)} className="h-7 text-xs" placeholder="ค้นหา Vendor..." />
+                  </div>
+                  <div className="max-h-64 overflow-auto py-1">
+                    {poExportVendors
+                      .filter((v) => { const q = poExportSearch.trim().toLowerCase(); return !q || v.code.toLowerCase().includes(q) || v.name.toLowerCase().includes(q); })
+                      .map((v) => (
+                        <div key={v.code} className="flex items-center gap-2 px-3 py-1 text-xs hover:bg-muted/40">
+                          <input
+                            type="checkbox"
+                            className="h-3.5 w-3.5"
+                            checked={poExportSel.has(v.code)}
+                            onChange={() => setPoExportSel((prev) => { const n = new Set(prev); if (n.has(v.code)) n.delete(v.code); else n.add(v.code); return n; })}
+                          />
+                          <span className="truncate flex-1" title={v.name}>{v.name}</span>
+                          {poExportSel.has(v.code) && (
+                            <select
+                              className="h-6 text-[11px] border rounded px-1 bg-background"
+                              value={poExportPick[v.code] || PO_PICKING_DC}
+                              onChange={(e) => setPoExportPick((prev) => ({ ...prev, [v.code]: e.target.value }))}
+                            >
+                              {PO_PICKING_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
+                            </select>
+                          )}
+                        </div>
+                      ))}
+                    {poExportVendors.length === 0 && <div className="px-3 py-2 text-xs text-muted-foreground">ไม่มี Vendor ที่เข้าเงื่อนไข</div>}
+                  </div>
+                </div>
+              )}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setPoExportOpen(false)}>ยกเลิก</Button>
+              <Button onClick={doExportPO} disabled={!poExportAll && poExportSel.size === 0}>
+                <Download className="w-4 h-4 mr-1.5" /> Export Excel
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         <div className="border rounded-lg flex-1 overflow-auto min-h-0">
           <table className="text-sm border-collapse whitespace-nowrap table-fixed" style={{ width: 48 + visibleCols.reduce((s, c) => s + widthOf(c.key), 0) }}>
