@@ -5027,7 +5027,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
 
         {/* ===== Export PO Dialog ===== */}
         <Dialog open={poExportOpen} onOpenChange={setPoExportOpen}>
-          <DialogContent className="max-w-2xl bg-background">
+          <DialogContent className="w-[640px] max-w-[92vw] bg-background overflow-hidden">
             <DialogHeader>
               <DialogTitle>Export PO (เข้า Odoo)</DialogTitle>
             </DialogHeader>
