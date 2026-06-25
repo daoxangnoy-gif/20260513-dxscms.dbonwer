@@ -5027,7 +5027,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
 
         {/* ===== Export PO Dialog ===== */}
         <Dialog open={poExportOpen} onOpenChange={setPoExportOpen}>
-          <DialogContent className="max-w-lg">
+          <DialogContent className="max-w-2xl bg-background">
             <DialogHeader>
               <DialogTitle>Export PO (เข้า Odoo)</DialogTitle>
             </DialogHeader>
@@ -5058,17 +5058,17 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                     {poExportVendors
                       .filter((v) => { const q = poExportSearch.trim().toLowerCase(); return !q || v.code.toLowerCase().includes(q) || v.name.toLowerCase().includes(q); })
                       .map((v) => (
-                        <div key={v.code} className="flex items-center gap-2 px-3 py-1 text-xs hover:bg-muted/40">
+                        <div key={v.code} className="flex items-center gap-2 px-3 py-1 text-xs hover:bg-muted/40 min-w-0">
                           <input
                             type="checkbox"
-                            className="h-3.5 w-3.5"
+                            className="h-3.5 w-3.5 shrink-0"
                             checked={poExportSel.has(v.code)}
                             onChange={() => setPoExportSel((prev) => { const n = new Set(prev); if (n.has(v.code)) n.delete(v.code); else n.add(v.code); return n; })}
                           />
-                          <span className="truncate flex-1" title={v.name}>{v.name}</span>
+                          <span className="truncate flex-1 min-w-0" title={v.name}>{v.name}</span>
                           {poExportSel.has(v.code) && (
                             <select
-                              className="h-6 text-[11px] border rounded px-1 bg-background"
+                              className="h-6 text-[11px] border rounded px-1 bg-background shrink-0 w-44"
                               value={poExportPick[v.code] || PO_PICKING_DC}
                               onChange={(e) => setPoExportPick((prev) => ({ ...prev, [v.code]: e.target.value }))}
                             >
