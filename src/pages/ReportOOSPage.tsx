@@ -172,6 +172,7 @@ export default function ReportOOSPage() {
   const [compareCoreTotals, setCompareCoreTotals] = useState<OOSCoreTypeRow[]>([]);
   const [comparing, setComparing] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [showCore, setShowCore] = useState(true); // toggle: แสดงคอลัมน์ Core OOS / Core %OOS ต่อ week
 
   // trend
   const [trend, setTrend] = useState<OOSTrendRow[]>([]);
@@ -954,9 +955,15 @@ export default function ReportOOSPage() {
             <>
               <div className="flex items-center justify-between mb-2 gap-2">
                 <span className="text-sm font-medium">Summary OOS By Weekly <span className="text-muted-foreground font-normal">({compareWeeks.join(" · ")})</span></span>
-                <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={clearCompare}>
-                  <X className="w-3.5 h-3.5 mr-1" /> ปิดการเทียบ
-                </Button>
+                <div className="flex items-center gap-2">
+                  <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none">
+                    <Checkbox checked={showCore} onCheckedChange={(v) => setShowCore(!!v)} className="h-4 w-4" />
+                    <span className="text-blue-600">แสดง Core OOS / Core %OOS</span>
+                  </label>
+                  <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={clearCompare}>
+                    <X className="w-3.5 h-3.5 mr-1" /> ปิดการเทียบ
+                  </Button>
+                </div>
               </div>
               <div className="overflow-auto border rounded">
                 <table className="text-[10px] border-collapse whitespace-nowrap">
@@ -965,7 +972,7 @@ export default function ReportOOSPage() {
                       <th rowSpan={2} className="sticky left-0 z-10 bg-muted px-2 py-1 text-left border-r border-b">Type store</th>
                       <th rowSpan={2} className="px-2 py-1 text-left border-r border-b">Store Name</th>
                       {compareWeeks.map((w) => (
-                        <th key={w} colSpan={5} className="px-2 py-1 text-center border-l border-r border-b font-semibold">{w}</th>
+                        <th key={w} colSpan={showCore ? 5 : 3} className="px-2 py-1 text-center border-l border-r border-b font-semibold">{w}</th>
                       ))}
                     </tr>
                     <tr>
@@ -973,9 +980,13 @@ export default function ReportOOSPage() {
                         <Fragment key={w}>
                           <th className="px-1.5 py-1 text-right border-l border-b font-medium">OOS</th>
                           <th className="px-1.5 py-1 text-right border-b font-medium">Range</th>
-                          <th className="px-1.5 py-1 text-right border-b font-medium">%OOS</th>
-                          <th className="px-1.5 py-1 text-right border-l border-b font-medium text-blue-600">Core OOS</th>
-                          <th className="px-1.5 py-1 text-right border-r border-b font-medium text-blue-600">Core %OOS</th>
+                          <th className={`px-1.5 py-1 text-right border-b font-medium ${showCore ? "" : "border-r"}`}>%OOS</th>
+                          {showCore && (
+                            <>
+                              <th className="px-1.5 py-1 text-right border-l border-b font-medium text-blue-600">Core OOS</th>
+                              <th className="px-1.5 py-1 text-right border-r border-b font-medium text-blue-600">Core %OOS</th>
+                            </>
+                          )}
                         </Fragment>
                       ))}
                     </tr>
@@ -997,9 +1008,13 @@ export default function ReportOOSPage() {
                           <>
                             <td className="px-1.5 py-0.5 text-right tabular-nums border-l">{oos == null ? "-" : oos.toLocaleString()}</td>
                             <td className="px-1.5 py-0.5 text-right tabular-nums">{rng == null ? "-" : rng.toLocaleString()}</td>
-                            <td className={`px-1.5 py-0.5 text-right tabular-nums ${cmpBg(p, prevPct)} ${p != null ? pctClass(p) : ""}`}>{p != null ? pct(p) : "-"}</td>
-                            <td className="px-1.5 py-0.5 text-right tabular-nums border-l text-blue-700">{coreOos == null ? "-" : coreOos.toLocaleString()}</td>
-                            <td className={`px-1.5 py-0.5 text-right tabular-nums border-r ${cmpBg(cp, prevCorePct)} ${cp != null ? pctClass(cp) : ""}`}>{cp != null ? pct(cp) : "-"}</td>
+                            <td className={`px-1.5 py-0.5 text-right tabular-nums ${showCore ? "" : "border-r"} ${cmpBg(p, prevPct)} ${p != null ? pctClass(p) : ""}`}>{p != null ? pct(p) : "-"}</td>
+                            {showCore && (
+                              <>
+                                <td className="px-1.5 py-0.5 text-right tabular-nums border-l text-blue-700">{coreOos == null ? "-" : coreOos.toLocaleString()}</td>
+                                <td className={`px-1.5 py-0.5 text-right tabular-nums border-r ${cmpBg(cp, prevCorePct)} ${cp != null ? pctClass(cp) : ""}`}>{cp != null ? pct(cp) : "-"}</td>
+                              </>
+                            )}
                           </>
                         );
                       };
