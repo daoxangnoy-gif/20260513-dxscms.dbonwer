@@ -4608,12 +4608,30 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         for (const k of kr) { const id = String(k.id ?? ""); if (id) krMap.set(id, (krMap.get(id) || 0) + (Number(k.qty) || 0)); }
       } catch { /* ตารางยังไม่ถูกสร้าง — ข้าม */ }
 
-      // PO Receive — เอา line ที่ created_date (วันที่ PO) ล่าสุดของแต่ละ id
-      const recMap = new Map<string, any>();
+      // PO Receive — บางไฟล์ไม่มีคอลัมน์ ID → match ด้วย barcode เป็นหลัก + sku จากคอลัมน์ Product "[sku]" เป็น fallback
+      // ดึงทั้งตาราง (ปกติไม่กี่พันแถว) แล้ว index ด้วย barcode/sku เลือก line วันที่ PO ล่าสุด
+      const recByBc = new Map<string, any>();
+      const recBySku = new Map<string, any>();
       try {
-        const rec = skus.length ? await fetchInChunks("scm_po_receive", "id, order_ref, created_date, status, quantity, received_qty", "id", skus) : [];
+        const rec: any[] = [];
+        for (let from = 0; ; from += 1000) {
+          const { data, error } = await (supabase as any)
+            .from("scm_po_receive")
+            .select("id, order_ref, created_date, status, quantity, received_qty, barcode, product")
+            .range(from, from + 999);
+          if (error) throw error;
+          rec.push(...(data || []));
+          if (!data || data.length < 1000) break;
+        }
         const ts = (v: any) => { const d = excelCellToDate(v); return d ? d.getTime() : -Infinity; };
-        for (const r of rec) { const id = String(r.id ?? ""); if (!id) continue; const cur = recMap.get(id); if (!cur || ts(r.created_date) >= ts(cur.created_date)) recMap.set(id, r); }
+        const pick = (m: Map<string, any>, key: string, r: any) => { if (!key) return; const cur = m.get(key); if (!cur || ts(r.created_date) >= ts(cur.created_date)) m.set(key, r); };
+        for (const r of rec) {
+          const bc = String(r.barcode ?? "").trim();
+          const id = String(r.id ?? "").trim();
+          const skuFromProduct = String(r.product ?? "").match(/\[([^\]]+)\]/)?.[1]?.trim() ?? "";
+          pick(recByBc, bc, r);
+          pick(recBySku, id || skuFromProduct, r);
+        }
       } catch { /* ตารางยังไม่ถูกสร้าง — ข้าม */ }
 
       const brands = [...brandSet].sort((a, b) => a.localeCompare(b));
@@ -4623,7 +4641,13 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         // ใช้ vendor_origin จาก vendor_master (fresh) ก่อน แล้ว fallback ไป parent ref
         const origin = v.vendor_origin || (d.vendor_code && vendorOriginMap.current[d.vendor_code]) || "";
         const pc = pcMap.get(a.sku) || {};
-        const rec = recMap.get(a.sku) || {};
+        const rowBarcode = barcodeMap.get(a.sku) || d.main_barcode || a.barcode || "";
+        // match PO receive: sku ก่อน แล้วลอง barcode หลายแบบ (main / unit / ของ item)
+        const rec = recBySku.get(a.sku)
+          || recByBc.get(rowBarcode)
+          || recByBc.get(d.main_barcode || "")
+          || recByBc.get(a.barcode || "")
+          || {};
         const str = (x: any) => (x == null || x === "" ? "" : String(x));
         const inDM = a.sku !== "" && dmMap.has(a.sku);
         return {
@@ -4636,7 +4660,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           vendor_currency: v.supplier_currency || "",
           vendor_origin: origin,
           id: a.sku,
-          barcode: barcodeMap.get(a.sku) || d.main_barcode || a.barcode || "",
+          barcode: rowBarcode,
           product_name_en: d.product_name_en || a.product_name || "",
           stock_dc: stockDcMap.has(a.sku) ? (stockDcMap.get(a.sku) as number) : null,
           stock_dc_kr: krMap.has(a.sku) ? (krMap.get(a.sku) as number) : null,
