@@ -4612,7 +4612,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       const recMap = new Map<string, any>();
       try {
         const rec = skus.length ? await fetchInChunks("scm_po_receive", "id, order_ref, created_date, status, quantity, received_qty", "id", skus) : [];
-        const ts = (v: any) => { const t = Date.parse(String(v)); return isNaN(t) ? -Infinity : t; };
+        const ts = (v: any) => { const d = excelCellToDate(v); return d ? d.getTime() : -Infinity; };
         for (const r of rec) { const id = String(r.id ?? ""); if (!id) continue; const cur = recMap.get(id); if (!cur || ts(r.created_date) >= ts(cur.created_date)) recMap.set(id, r); }
       } catch { /* ตารางยังไม่ถูกสร้าง — ข้าม */ }
 
@@ -4641,7 +4641,8 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           stock_dc: stockDcMap.has(a.sku) ? (stockDcMap.get(a.sku) as number) : null,
           stock_dc_kr: krMap.has(a.sku) ? (krMap.get(a.sku) as number) : null,
           po_number: str(rec.order_ref),
-          po_date: str(rec.created_date),
+          po_date: excelToDDMMMYY(rec.created_date), // ค่าเก็บเป็น serial → แปลงเป็น dd-Mmm-yy ตอนแสดง
+
           po_status: str(rec.status),
           po_qty: str(rec.quantity),
           rec_po: str(rec.received_qty),
@@ -4780,12 +4781,8 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       .filter((r) => r.some((v) => String(v ?? "").trim()))
       .map((r) => {
         const o: Record<string, string> = {};
-        for (const c of cols) {
-          if (idxOf[c.key] < 0) { o[c.key] = ""; continue; }
-          const cell = r[idxOf[c.key]];
-          // คอลัมน์วันที่ (เช่น Purchase Created Date) → แปลง Excel serial เป็น dd-Mmm-yy
-          o[c.key] = (c as any).date ? excelToDDMMMYY(cell) : String(cell ?? "").trim();
-        }
+        // เก็บค่าดิบ (เช่น Excel serial ของวันที่) เพื่อให้ save ได้ทุกชนิดคอลัมน์ — แปลงเป็น dd-Mmm-yy ตอนแสดงผลแทน
+        for (const c of cols) o[c.key] = idxOf[c.key] >= 0 ? String(r[idxOf[c.key]] ?? "").trim() : "";
         return o;
       });
   };
@@ -5122,7 +5119,7 @@ function POImportPanel({
                 </td>
                 <td className="text-muted-foreground tabular-nums">{i + 1}</td>
                 {cols.map((c) => (
-                  <td key={c.key}>{r[c.key] || "-"}</td>
+                  <td key={c.key}>{(c as any).date ? (excelToDDMMMYY(r[c.key]) || "-") : (r[c.key] || "-")}</td>
                 ))}
               </tr>
             ))}
