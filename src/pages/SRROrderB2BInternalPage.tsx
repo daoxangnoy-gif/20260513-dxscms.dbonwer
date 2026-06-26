@@ -4297,6 +4297,8 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   const [poExportSearch, setPoExportSearch] = useState("");
   const [poLoading, setPoLoading] = useState(false);
   const [poLoaded, setPoLoaded] = useState(false);
+  const [poProgress, setPoProgress] = useState(0);   // 0-100
+  const [poStatus, setPoStatus] = useState("");       // ข้อความสถานะการโหลด
   const [poSearch, setPoSearch] = useState("");
 
   // เมื่อรายชื่อแบรนด์เปลี่ยน (โหลด/โหลดใหม่) → ติ๊กครบทุกแบรนด์เป็นค่าเริ่มต้น
@@ -4567,31 +4569,33 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   };
 
   const fetchInChunks = async (table: string, select: string, col: string, ids: string[], orderCol?: string): Promise<any[]> => {
-    const out: any[] = [];
     const CH = 200;
     const PAGE = 1000;
     const ord = orderCol || col;
-    for (let i = 0; i < ids.length; i += CH) {
-      const part = ids.slice(i, i + CH);
-      if (part.length === 0) continue;
-      // paginate ภายในแต่ละ chunk — บางตารางมีหลายแถวต่อ 1 id (เช่น stock มี ~50 แถว/SKU)
-      // ถ้าไม่ paginate จะติด limit 1000 แถวของ Supabase → ข้อมูล stock โดนตัด → Stock DC ออกไม่ครบ
+    // แบ่ง chunk แล้วยิงขนานกัน (browser จำกัด ~6 connection เองอยู่แล้ว) — เร็วกว่ายิงทีละ chunk
+    const chunks: string[][] = [];
+    for (let i = 0; i < ids.length; i += CH) { const p = ids.slice(i, i + CH); if (p.length) chunks.push(p); }
+    const results = await Promise.all(chunks.map(async (part) => {
+      const acc: any[] = [];
       for (let from = 0; ; from += PAGE) {
         const { data, error } = await (supabase as any)
           .from(table).select(select).in(col, part)
           .order(ord, { ascending: true })
           .range(from, from + PAGE - 1);
         if (error) throw error;
-        out.push(...(data || []));
+        acc.push(...(data || []));
         if (!data || data.length < PAGE) break;
       }
-    }
-    return out;
+      return acc;
+    }));
+    return results.flat();
   };
 
   // โหลด + คำนวณตาราง PO จาก Monthly usage ทุกแบรนด์
   const buildPO = async () => {
     setPoLoading(true);
+    setPoProgress(5);
+    setPoStatus("ดึง Monthly usage...");
     try {
       // 1) ดึง item ทั้งหมด (paginate) + map doc → brand
       const items: any[] = [];
@@ -4604,6 +4608,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         if (error) throw error;
         if (!data || data.length === 0) break;
         items.push(...data);
+        setPoProgress((p) => Math.min(p + 5, 25));
         if (data.length < PAGE) break;
       }
       const { data: docs } = await (supabase as any).from("monthly_usage_doc").select("id, brand_name");
@@ -4629,51 +4634,11 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         if (!a.product_name && it.product_name) a.product_name = it.product_name;
       }
 
-      // 3) enrich จาก data_master / vendor_master / stock (เฉพาะที่มี SKU)
+      // 3) enrich — ยิงขนานกัน (data_master / stock / po_cost / scm_stock_kr / scm_po_receive)
       const skus = [...map.keys()].filter((k) => !k.startsWith("bc:"));
-      const dm = skus.length
-        ? await fetchInChunks("data_master", "sku_code, division, department, product_name_en, vendor_code, vendor_display_name, main_barcode, packing_size_qty", "sku_code", skus)
-        : [];
-      const dmMap = new Map<string, any>();
-      for (const d of dm) if (d.sku_code && !dmMap.has(d.sku_code)) dmMap.set(d.sku_code, d);
-      // Barcode = main_barcode จากแถวที่ packing_size_qty = 1 (หน่วยฐาน) เท่านั้น
-      const barcodeMap = new Map<string, string>();
-      for (const d of dm) {
-        if (d.sku_code && Number(d.packing_size_qty) === 1 && d.main_barcode && !barcodeMap.has(d.sku_code)) {
-          barcodeMap.set(d.sku_code, String(d.main_barcode));
-        }
-      }
-      const vendorCodes = [...new Set(dm.map((d: any) => d.vendor_code).filter(Boolean))] as string[];
-      const vm = vendorCodes.length
-        ? await fetchInChunks("vendor_master", "vendor_code, supplier_currency, vendor_origin", "vendor_code", vendorCodes)
-        : [];
-      const vmMap = new Map<string, any>();
-      for (const v of vm) if (v.vendor_code && !vmMap.has(v.vendor_code)) vmMap.set(v.vendor_code, v);
-      const stock = skus.length ? await fetchInChunks("stock", "id, item_id, type_store, quantity", "item_id", skus, "id") : [];
-      const stockDcMap = new Map<string, number>();
-      for (const s of stock) {
-        if (String(s.type_store) === "DC") stockDcMap.set(s.item_id, (stockDcMap.get(s.item_id) || 0) + (Number(s.quantity) || 0));
-      }
-
-      // PO Cost — 1x = moq, Pocost = po_cost (match ด้วย item_id อย่างเดียว, ไม่ match vendor)
-      const pcMap = new Map<string, { moq: number | null; po_cost: number | null }>();
-      try {
-        const pc = skus.length ? await fetchInChunks("po_cost", "item_id, moq, po_cost", "item_id", skus) : [];
-        for (const p of pc) { const id = String(p.item_id ?? ""); if (id && !pcMap.has(id)) pcMap.set(id, { moq: p.moq == null ? null : Number(p.moq), po_cost: p.po_cost == null ? null : Number(p.po_cost) }); }
-      } catch { /* ตาราง/สิทธิ์ไม่พร้อม — ข้าม */ }
-
-      // Stock DC (KR) — SUMIF qty จาก scm_stock_kr where id = id
-      const krMap = new Map<string, number>();
-      try {
-        const kr = skus.length ? await fetchInChunks("scm_stock_kr", "id, qty", "id", skus) : [];
-        for (const k of kr) { const id = String(k.id ?? ""); if (id) krMap.set(id, (krMap.get(id) || 0) + (Number(k.qty) || 0)); }
-      } catch { /* ตารางยังไม่ถูกสร้าง — ข้าม */ }
-
-      // PO Receive — บางไฟล์ไม่มีคอลัมน์ ID → match ด้วย barcode เป็นหลัก + sku จากคอลัมน์ Product "[sku]" เป็น fallback
-      // ดึงทั้งตาราง (ปกติไม่กี่พันแถว) แล้ว index ด้วย barcode/sku เลือก line วันที่ PO ล่าสุด
-      const recByBc = new Map<string, any>();
-      const recBySku = new Map<string, any>();
-      try {
+      setPoStatus("ดึงข้อมูลสินค้า / สต็อก / PO...");
+      setPoProgress(35);
+      const fetchPoReceiveAll = async () => {
         const rec: any[] = [];
         for (let from = 0; ; from += 1000) {
           const { data, error } = await (supabase as any)
@@ -4684,16 +4649,62 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           rec.push(...(data || []));
           if (!data || data.length < 1000) break;
         }
+        return rec;
+      };
+      const [dm, stock, pc, krRows, recRows] = await Promise.all([
+        skus.length ? fetchInChunks("data_master", "sku_code, division, department, product_name_en, vendor_code, vendor_display_name, main_barcode, packing_size_qty", "sku_code", skus) : Promise.resolve([] as any[]),
+        skus.length ? fetchInChunks("stock", "id, item_id, type_store, quantity", "item_id", skus, "id") : Promise.resolve([] as any[]),
+        (skus.length ? fetchInChunks("po_cost", "item_id, moq, po_cost", "item_id", skus) : Promise.resolve([] as any[])).catch(() => [] as any[]),
+        (skus.length ? fetchInChunks("scm_stock_kr", "id, qty", "id", skus) : Promise.resolve([] as any[])).catch(() => [] as any[]),
+        fetchPoReceiveAll().catch(() => [] as any[]),
+      ]);
+      setPoProgress(78);
+
+      // data_master maps
+      const dmMap = new Map<string, any>();
+      for (const d of dm) if (d.sku_code && !dmMap.has(d.sku_code)) dmMap.set(d.sku_code, d);
+      // Barcode = main_barcode จากแถวที่ packing_size_qty = 1 (หน่วยฐาน) เท่านั้น
+      const barcodeMap = new Map<string, string>();
+      for (const d of dm) {
+        if (d.sku_code && Number(d.packing_size_qty) === 1 && d.main_barcode && !barcodeMap.has(d.sku_code)) {
+          barcodeMap.set(d.sku_code, String(d.main_barcode));
+        }
+      }
+      // vendor_master (ต้องใช้ vendor_code จาก data_master ก่อน)
+      setPoStatus("ดึงข้อมูลผู้สนอง...");
+      const vendorCodes = [...new Set(dm.map((d: any) => d.vendor_code).filter(Boolean))] as string[];
+      const vm = vendorCodes.length
+        ? await fetchInChunks("vendor_master", "vendor_code, supplier_currency, vendor_origin", "vendor_code", vendorCodes)
+        : [];
+      const vmMap = new Map<string, any>();
+      for (const v of vm) if (v.vendor_code && !vmMap.has(v.vendor_code)) vmMap.set(v.vendor_code, v);
+      setPoProgress(88);
+      setPoStatus("คำนวณ...");
+      // stock DC
+      const stockDcMap = new Map<string, number>();
+      for (const s of stock) {
+        if (String(s.type_store) === "DC") stockDcMap.set(s.item_id, (stockDcMap.get(s.item_id) || 0) + (Number(s.quantity) || 0));
+      }
+      // PO Cost — 1x = moq, Pocost = po_cost (match ด้วย item_id)
+      const pcMap = new Map<string, { moq: number | null; po_cost: number | null }>();
+      for (const p of pc) { const id = String(p.item_id ?? ""); if (id && !pcMap.has(id)) pcMap.set(id, { moq: p.moq == null ? null : Number(p.moq), po_cost: p.po_cost == null ? null : Number(p.po_cost) }); }
+      // Stock DC (KR) — SUMIF qty
+      const krMap = new Map<string, number>();
+      for (const k of krRows) { const id = String(k.id ?? ""); if (id) krMap.set(id, (krMap.get(id) || 0) + (Number(k.qty) || 0)); }
+      // PO Receive — index ด้วย barcode/sku เลือก line วันที่ PO ล่าสุด
+      const recByBc = new Map<string, any>();
+      const recBySku = new Map<string, any>();
+      {
         const ts = (v: any) => { const d = excelCellToDate(v); return d ? d.getTime() : -Infinity; };
         const pick = (m: Map<string, any>, key: string, r: any) => { if (!key) return; const cur = m.get(key); if (!cur || ts(r.created_date) >= ts(cur.created_date)) m.set(key, r); };
-        for (const r of rec) {
+        for (const r of recRows) {
           const bc = String(r.barcode ?? "").trim();
           const id = String(r.id ?? "").trim();
           const skuFromProduct = String(r.product ?? "").match(/\[([^\]]+)\]/)?.[1]?.trim() ?? "";
           pick(recByBc, bc, r);
           pick(recBySku, id || skuFromProduct, r);
         }
-      } catch { /* ตารางยังไม่ถูกสร้าง — ข้าม */ }
+      }
 
       const brands = [...brandSet].sort((a, b) => a.localeCompare(b));
       const rows: PORow[] = [...map.values()].map((a) => {
@@ -4746,6 +4757,8 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         if (ov) { r.vendor_code = ov.code; r.vendor_name = ov.name; r.vendor_currency = ov.currency; if (ov.origin !== undefined) r.vendor_origin = ov.origin; }
       }
 
+      setPoProgress(100);
+      setPoStatus("เสร็จสิ้น");
       setPoBrands(brands);
       setPoRows(rows);
       setPoLoaded(true);
@@ -5072,6 +5085,16 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
             <ShoppingCart className="w-3.5 h-3.5" /> Export PO
           </Button>
         </div>
+
+        {/* แถบสถานะ + % progress ตอนโหลด */}
+        {poLoading && (
+          <div className="flex items-center gap-2">
+            <div className="flex-1 h-2 rounded-full bg-muted overflow-hidden">
+              <div className="h-full bg-primary transition-all duration-300" style={{ width: `${poProgress}%` }} />
+            </div>
+            <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">{poStatus} {poProgress}%</span>
+          </div>
+        )}
 
         {/* ===== Export PO Dialog ===== */}
         <Dialog open={poExportOpen} onOpenChange={setPoExportOpen}>
