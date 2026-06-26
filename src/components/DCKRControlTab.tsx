@@ -10,9 +10,24 @@ import { cn } from "@/lib/utils";
 import { Plus, Trash2, Loader2, Download, Search } from "lucide-react";
 import * as XLSX from "xlsx";
 
+const MU_BUCKET = "monthly-usage-pictures"; // ใช้ bucket เดียวกับ Monthly usage
+
+// อัปรูป (data URL) → Storage → คืน public URL
+async function uploadPicture(dataUrl: string): Promise<string> {
+  const res = await fetch(dataUrl);
+  const blob = await res.blob();
+  const ext = (blob.type.split("/")[1] || "png").split("+")[0];
+  const path = `dckr/${crypto.randomUUID()}.${ext}`;
+  const { error } = await supabase.storage.from(MU_BUCKET).upload(path, blob, { contentType: blob.type, upsert: false });
+  if (error) throw error;
+  return supabase.storage.from(MU_BUCKET).getPublicUrl(path).data.publicUrl;
+}
+
 // แถวข้อมูลสินค้าใน DC(KR) Control → Data
 type DcKrItem = {
   id: string;              // DB uuid
+  picture: string;         // URL รูปสินค้า
+  picture_brand: string;   // แบรนด์ที่มาของรูป (แสดงใต้รูป)
   barcode_key: string;     // บาร์โค้ดที่คีย์
   sku_code: string;        // ID
   barcode_unit: string;    // main_barcode where packing_size_qty = 1
@@ -27,14 +42,14 @@ type DcKrItem = {
 };
 
 const newItem = (): DcKrItem => ({
-  id: "",
+  id: "", picture: "", picture_brand: "",
   barcode_key: "", sku_code: "", barcode_unit: "", barcode_pack: "", barcode_box: "",
   product_name_la: "", product_name_en: "", pack_qty: "", box_qty: "", cost: "", found: false,
 });
 
 const DCKR_SUB_LS = "dckr_sub_tab";
 // คอลัมน์ใน DB (ไม่รวม id/created_at) — ใช้ map ตอน insert
-const DCKR_DB_COLS = ["barcode_key", "sku_code", "barcode_unit", "barcode_pack", "barcode_box", "product_name_la", "product_name_en", "pack_qty", "box_qty", "cost", "found"] as const;
+const DCKR_DB_COLS = ["picture", "picture_brand", "barcode_key", "sku_code", "barcode_unit", "barcode_pack", "barcode_box", "product_name_la", "product_name_en", "pack_qty", "box_qty", "cost", "found"] as const;
 const remarkSku = (found: boolean) => (found ? "Data odoo" : "Data คีเอง");
 
 // resolve บาร์โค้ด → ดึงข้อมูลสินค้าจาก data_master (ทุก UoM variant ของ SKU เดียวกัน)
@@ -70,6 +85,17 @@ async function resolveDcKrItem(code: string): Promise<Partial<DcKrItem> & { foun
   };
   const nameSrc = unitRow || all[0] || {};
   const pq = minQty(packRows), bq = minQty(boxRows);
+  // ดึงรูป 1 รูปจาก Monthly usage (monthly_usage_item) ของ sku นี้ + แบรนด์ที่มา
+  let picture = "", picture_brand = "";
+  try {
+    const { data: mi } = await (supabase as any)
+      .from("monthly_usage_item").select("picture, doc_id").eq("sku_code", sku).not("picture", "is", null).limit(1);
+    if (mi?.[0]?.picture) {
+      picture = mi[0].picture;
+      const { data: doc } = await (supabase as any).from("monthly_usage_doc").select("brand_name").eq("id", mi[0].doc_id).limit(1);
+      picture_brand = doc?.[0]?.brand_name || "";
+    }
+  } catch { /* ไม่มีรูปก็ข้าม */ }
   return {
     found: true,
     sku_code: sku,
@@ -80,6 +106,7 @@ async function resolveDcKrItem(code: string): Promise<Partial<DcKrItem> & { foun
     product_name_en: nameSrc.product_name_en || "",
     pack_qty: pq == null ? "" : String(pq),
     box_qty: bq == null ? "" : String(bq),
+    picture, picture_brand,
   };
 }
 
@@ -98,7 +125,8 @@ export default function DCKRControlTab() {
       const { data, error } = await (supabase as any).from("dckr_item").select("*").order("created_at", { ascending: true });
       if (error) throw error;
       setRows((data || []).map((d: any) => ({
-        id: d.id, barcode_key: d.barcode_key ?? "", sku_code: d.sku_code ?? "",
+        id: d.id, picture: d.picture ?? "", picture_brand: d.picture_brand ?? "",
+        barcode_key: d.barcode_key ?? "", sku_code: d.sku_code ?? "",
         barcode_unit: d.barcode_unit ?? "", barcode_pack: d.barcode_pack ?? "", barcode_box: d.barcode_box ?? "",
         product_name_la: d.product_name_la ?? "", product_name_en: d.product_name_en ?? "",
         pack_qty: d.pack_qty ?? "", box_qty: d.box_qty ?? "", cost: d.cost ?? "", found: !!d.found,
@@ -136,6 +164,27 @@ export default function DCKRControlTab() {
     } finally {
       setResolving(false);
     }
+  };
+
+  // ----- รูปภาพ: อัปไฟล์ / วางคลิปบอร์ด -----
+  const [uploadingPic, setUploadingPic] = useState(false);
+  const uploadAndSet = async (file: File) => {
+    setUploadingPic(true);
+    try {
+      const dataUrl = await new Promise<string>((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result as string); r.onerror = rej; r.readAsDataURL(file); });
+      const url = await uploadPicture(dataUrl);
+      setForm((p) => ({ ...p, picture: url, picture_brand: "" })); // อัปเอง = ไม่มีแบรนด์ที่มา
+    } catch (e: any) {
+      toast({ title: "อัปรูปไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setUploadingPic(false);
+    }
+  };
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const item = [...e.clipboardData.items].find((i) => i.type.startsWith("image/"));
+    if (!item) return;
+    const file = item.getAsFile();
+    if (file) { e.preventDefault(); uploadAndSet(file); }
   };
 
   const [saving, setSaving] = useState(false);
@@ -182,6 +231,8 @@ export default function DCKRControlTab() {
     const list = rows.filter((r) => selected.has(r.id));
     if (list.length === 0) { toast({ title: "เลือกรายการก่อน", variant: "destructive" }); return; }
     const out = list.map((r) => ({
+      "Picture": r.picture,
+      "Picture Brand": r.picture_brand,
       "Barcode Key": r.barcode_key,
       "ID": r.sku_code,
       "Barcode Unit": r.barcode_unit,
@@ -254,10 +305,11 @@ export default function DCKRControlTab() {
         </div>
 
         <div className="border rounded-lg flex-1 overflow-auto min-h-0">
-          <table className="text-sm border-collapse whitespace-nowrap table-fixed" style={{ width: 40 + 48 + TABLE_COLS.reduce((s, c) => s + c.w, 0) + 130 }}>
+          <table className="text-sm border-collapse whitespace-nowrap table-fixed" style={{ width: 40 + 48 + 90 + TABLE_COLS.reduce((s, c) => s + c.w, 0) + 130 }}>
             <colgroup>
               <col style={{ width: 40 }} />
               <col style={{ width: 48 }} />
+              <col style={{ width: 90 }} />
               {TABLE_COLS.map((c) => <col key={c.key} style={{ width: c.w }} />)}
               <col style={{ width: 130 }} />
             </colgroup>
@@ -265,6 +317,7 @@ export default function DCKRControlTab() {
               <tr className="text-left text-muted-foreground [&_th]:bg-background [&_th]:shadow-[0_1px_0_0_hsl(var(--border))] [&_th]:px-3 [&_th]:py-1.5 [&_th]:font-medium">
                 <th><input type="checkbox" className="h-4 w-4 align-middle" checked={allChecked} onChange={(e) => toggleAll(e.target.checked)} /></th>
                 <th>#</th>
+                <th>Picture</th>
                 {TABLE_COLS.map((c) => <th key={c.key} className={c.right ? "text-right" : ""}>{c.label}</th>)}
                 <th>Remark SKU</th>
               </tr>
@@ -274,6 +327,14 @@ export default function DCKRControlTab() {
                 <tr key={r.id} className={cn("border-b last:border-0 hover:bg-muted/40 [&_td]:px-3 [&_td]:py-1.5 [&_td]:overflow-hidden [&_td]:text-ellipsis", selected.has(r.id) && "bg-primary/5")}>
                   <td><input type="checkbox" className="h-4 w-4 align-middle" checked={selected.has(r.id)} onChange={() => toggle(r.id)} /></td>
                   <td className="text-muted-foreground tabular-nums">{i + 1}</td>
+                  <td>
+                    {r.picture ? (
+                      <a href={r.picture} target="_blank" rel="noopener noreferrer" className="flex flex-col items-center gap-0.5 w-fit">
+                        <img src={r.picture} alt="" className="w-12 h-12 object-contain rounded border border-border" />
+                        {r.picture_brand && <span className="text-[10px] text-muted-foreground leading-tight text-center max-w-[72px] truncate">{r.picture_brand}</span>}
+                      </a>
+                    ) : <span className="text-muted-foreground">-</span>}
+                  </td>
                   {TABLE_COLS.map((c) => (
                     <td key={c.key} className={c.right ? "text-right tabular-nums" : "truncate"} title={String(r[c.key] ?? "")}>
                       {r[c.key] === "" || r[c.key] == null ? "-" : String(r[c.key])}
@@ -286,7 +347,7 @@ export default function DCKRControlTab() {
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={TABLE_COLS.length + 3} className="px-3 py-8 text-center text-muted-foreground">
+                  <td colSpan={TABLE_COLS.length + 4} className="px-3 py-8 text-center text-muted-foreground">
                     กด "Add new item" เพื่อเพิ่มสินค้า
                   </td>
                 </tr>
@@ -338,6 +399,37 @@ export default function DCKRControlTab() {
                 />
               </div>
             ))}
+            {/* Picture — ดึงจาก Monthly / อัปเอง / วางคลิปบอร์ด */}
+            <div className="space-y-1">
+              <Label className="text-xs">Picture</Label>
+              {form.picture ? (
+                <div className="flex items-end gap-3">
+                  <div className="flex flex-col items-center">
+                    <img src={form.picture} alt="" className="w-24 h-24 object-contain border rounded" />
+                    {form.picture_brand && <span className="text-[10px] text-muted-foreground mt-0.5 max-w-[96px] truncate" title={form.picture_brand}>{form.picture_brand}</span>}
+                  </div>
+                  <Button size="sm" variant="ghost" className="h-7 px-2 text-[11px] text-destructive" onClick={() => setForm((p) => ({ ...p, picture: "", picture_brand: "" }))}>ลบรูป</Button>
+                </div>
+              ) : (
+                <div
+                  onPaste={handlePaste}
+                  tabIndex={0}
+                  className="border border-dashed rounded-md p-3 text-xs text-muted-foreground text-center focus:outline-none focus:ring-1 focus:ring-primary"
+                >
+                  {uploadingPic ? (
+                    <span className="inline-flex items-center gap-1"><Loader2 className="w-3.5 h-3.5 animate-spin" /> กำลังอัป...</span>
+                  ) : (
+                    <>
+                      คลิกที่นี่แล้ววางรูป (Ctrl+V) หรือ{" "}
+                      <label className="text-primary underline cursor-pointer">
+                        เลือกไฟล์
+                        <input type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadAndSet(f); e.target.value = ""; }} />
+                      </label>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
             <div className="space-y-1">
               <Label className="text-xs">Remark SKU</Label>
               <div className={cn("h-9 flex items-center px-3 rounded-md border text-sm font-medium", form.found ? "text-emerald-600" : "text-amber-600")}>
