@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,7 +12,7 @@ import * as XLSX from "xlsx";
 
 // แถวข้อมูลสินค้าใน DC(KR) Control → Data
 type DcKrItem = {
-  _id: string;
+  id: string;              // DB uuid
   barcode_key: string;     // บาร์โค้ดที่คีย์
   sku_code: string;        // ID
   barcode_unit: string;    // main_barcode where packing_size_qty = 1
@@ -27,13 +27,14 @@ type DcKrItem = {
 };
 
 const newItem = (): DcKrItem => ({
-  _id: crypto.randomUUID(),
+  id: "",
   barcode_key: "", sku_code: "", barcode_unit: "", barcode_pack: "", barcode_box: "",
   product_name_la: "", product_name_en: "", pack_qty: "", box_qty: "", cost: "", found: false,
 });
 
-const DCKR_DATA_LS = "dckr_data_rows";
 const DCKR_SUB_LS = "dckr_sub_tab";
+// คอลัมน์ใน DB (ไม่รวม id/created_at) — ใช้ map ตอน insert
+const DCKR_DB_COLS = ["barcode_key", "sku_code", "barcode_unit", "barcode_pack", "barcode_box", "product_name_la", "product_name_en", "pack_qty", "box_qty", "cost", "found"] as const;
 const remarkSku = (found: boolean) => (found ? "Data odoo" : "Data คีเอง");
 
 // resolve บาร์โค้ด → ดึงข้อมูลสินค้าจาก data_master (ทุก UoM variant ของ SKU เดียวกัน)
@@ -87,12 +88,28 @@ export default function DCKRControlTab() {
   const [subTab, setSubTab] = useState(() => localStorage.getItem(DCKR_SUB_LS) || "data");
   const setSub = (v: string) => { setSubTab(v); localStorage.setItem(DCKR_SUB_LS, v); };
 
-  const [rows, setRows] = useState<DcKrItem[]>(() => {
-    try { const raw = localStorage.getItem(DCKR_DATA_LS); if (raw) return JSON.parse(raw); } catch { /* ignore */ }
-    return [];
-  });
-  const save = (next: DcKrItem[]) => { setRows(next); try { localStorage.setItem(DCKR_DATA_LS, JSON.stringify(next)); } catch { /* ignore */ } };
+  const [rows, setRows] = useState<DcKrItem[]>([]);
+  const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  const loadItems = async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await (supabase as any).from("dckr_item").select("*").order("created_at", { ascending: true });
+      if (error) throw error;
+      setRows((data || []).map((d: any) => ({
+        id: d.id, barcode_key: d.barcode_key ?? "", sku_code: d.sku_code ?? "",
+        barcode_unit: d.barcode_unit ?? "", barcode_pack: d.barcode_pack ?? "", barcode_box: d.barcode_box ?? "",
+        product_name_la: d.product_name_la ?? "", product_name_en: d.product_name_en ?? "",
+        pack_qty: d.pack_qty ?? "", box_qty: d.box_qty ?? "", cost: d.cost ?? "", found: !!d.found,
+      })));
+    } catch (e: any) {
+      toast({ title: "โหลดข้อมูลไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => { loadItems(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
   // ----- Add dialog -----
   const [addOpen, setAddOpen] = useState(false);
@@ -121,29 +138,48 @@ export default function DCKRControlTab() {
     }
   };
 
-  const saveForm = () => {
+  const [saving, setSaving] = useState(false);
+  const saveForm = async () => {
     if (!form.barcode_key.trim() && !form.sku_code.trim()) {
       toast({ title: "กรุณาคีย์ Barcode หรือ ID อย่างน้อย 1 ช่อง", variant: "destructive" });
       return;
     }
-    save([...rows, { ...form, _id: crypto.randomUUID() }]);
-    setAddOpen(false);
-    toast({ title: "เพิ่มรายการแล้ว" });
+    setSaving(true);
+    try {
+      const payload: Record<string, any> = {};
+      for (const c of DCKR_DB_COLS) payload[c] = (form as any)[c];
+      const { data, error } = await (supabase as any).from("dckr_item").insert(payload).select("id").limit(1);
+      if (error) throw error;
+      setRows((prev) => [...prev, { ...form, id: data?.[0]?.id || crypto.randomUUID() }]);
+      setAddOpen(false);
+      toast({ title: "เพิ่มรายการแล้ว" });
+    } catch (e: any) {
+      toast({ title: "บันทึกไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
   };
 
   // ----- selection -----
   const toggle = (id: string) => setSelected((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const allChecked = rows.length > 0 && rows.every((r) => selected.has(r._id));
-  const toggleAll = (c: boolean) => setSelected(c ? new Set(rows.map((r) => r._id)) : new Set());
+  const allChecked = rows.length > 0 && rows.every((r) => selected.has(r.id));
+  const toggleAll = (c: boolean) => setSelected(c ? new Set(rows.map((r) => r.id)) : new Set());
 
-  const deleteSelected = () => {
+  const deleteSelected = async () => {
     if (selected.size === 0) return;
-    save(rows.filter((r) => !selected.has(r._id)));
-    setSelected(new Set());
+    const ids = [...selected];
+    try {
+      const { error } = await (supabase as any).from("dckr_item").delete().in("id", ids);
+      if (error) throw error;
+      setRows((prev) => prev.filter((r) => !selected.has(r.id)));
+      setSelected(new Set());
+    } catch (e: any) {
+      toast({ title: "ลบไม่สำเร็จ", description: e.message, variant: "destructive" });
+    }
   };
 
   const exportSelected = () => {
-    const list = rows.filter((r) => selected.has(r._id));
+    const list = rows.filter((r) => selected.has(r.id));
     if (list.length === 0) { toast({ title: "เลือกรายการก่อน", variant: "destructive" }); return; }
     const out = list.map((r) => ({
       "Barcode Key": r.barcode_key,
@@ -235,8 +271,8 @@ export default function DCKRControlTab() {
             </thead>
             <tbody>
               {rows.map((r, i) => (
-                <tr key={r._id} className={cn("border-b last:border-0 hover:bg-muted/40 [&_td]:px-3 [&_td]:py-1.5 [&_td]:overflow-hidden [&_td]:text-ellipsis", selected.has(r._id) && "bg-primary/5")}>
-                  <td><input type="checkbox" className="h-4 w-4 align-middle" checked={selected.has(r._id)} onChange={() => toggle(r._id)} /></td>
+                <tr key={r.id} className={cn("border-b last:border-0 hover:bg-muted/40 [&_td]:px-3 [&_td]:py-1.5 [&_td]:overflow-hidden [&_td]:text-ellipsis", selected.has(r.id) && "bg-primary/5")}>
+                  <td><input type="checkbox" className="h-4 w-4 align-middle" checked={selected.has(r.id)} onChange={() => toggle(r.id)} /></td>
                   <td className="text-muted-foreground tabular-nums">{i + 1}</td>
                   {TABLE_COLS.map((c) => (
                     <td key={c.key} className={c.right ? "text-right tabular-nums" : "truncate"} title={String(r[c.key] ?? "")}>
@@ -310,8 +346,8 @@ export default function DCKRControlTab() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setAddOpen(false)}>ยกเลิก</Button>
-            <Button onClick={saveForm}>Save</Button>
+            <Button variant="outline" onClick={() => setAddOpen(false)} disabled={saving}>ยกเลิก</Button>
+            <Button onClick={saveForm} disabled={saving}>{saving && <Loader2 className="w-4 h-4 animate-spin mr-1.5" />}Save</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
