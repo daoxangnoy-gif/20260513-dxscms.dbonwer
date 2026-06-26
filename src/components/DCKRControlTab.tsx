@@ -2,12 +2,17 @@ import { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Trash2, Loader2 } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Plus, Trash2, Loader2, Download, Search } from "lucide-react";
+import * as XLSX from "xlsx";
 
 // แถวข้อมูลสินค้าใน DC(KR) Control → Data
 type DcKrItem = {
+  _id: string;
   barcode_key: string;     // บาร์โค้ดที่คีย์
   sku_code: string;        // ID
   barcode_unit: string;    // main_barcode where packing_size_qty = 1
@@ -15,18 +20,21 @@ type DcKrItem = {
   barcode_box: string;     // main_barcode where UoM = Box
   product_name_la: string;
   product_name_en: string;
-  pack_qty: number | null; // packing_size_qty where UoM = Pack (min)
-  box_qty: number | null;  // packing_size_qty where UoM = Box (min)
-  cost: number | null;     // disable ไว้ก่อน
+  pack_qty: string;        // packing_size_qty where UoM = Pack (min)
+  box_qty: string;         // packing_size_qty where UoM = Box (min)
+  cost: string;            // disable ไว้ก่อน
+  found: boolean;          // พบใน data_master หรือไม่ → ใช้คำนวณ Remark SKU
 };
 
-const EMPTY_ITEM: DcKrItem = {
+const newItem = (): DcKrItem => ({
+  _id: crypto.randomUUID(),
   barcode_key: "", sku_code: "", barcode_unit: "", barcode_pack: "", barcode_box: "",
-  product_name_la: "", product_name_en: "", pack_qty: null, box_qty: null, cost: null,
-};
+  product_name_la: "", product_name_en: "", pack_qty: "", box_qty: "", cost: "", found: false,
+});
 
 const DCKR_DATA_LS = "dckr_data_rows";
 const DCKR_SUB_LS = "dckr_sub_tab";
+const remarkSku = (found: boolean) => (found ? "Data odoo" : "Data คีเอง");
 
 // resolve บาร์โค้ด → ดึงข้อมูลสินค้าจาก data_master (ทุก UoM variant ของ SKU เดียวกัน)
 async function resolveDcKrItem(code: string): Promise<Partial<DcKrItem> & { found: boolean }> {
@@ -54,13 +62,13 @@ async function resolveDcKrItem(code: string): Promise<Partial<DcKrItem> & { foun
     const qs = arr.map((r) => num(r.packing_size_qty)).filter((n): n is number => n != null && !isNaN(n));
     return qs.length ? Math.min(...qs) : null;
   };
-  // เลือก barcode ของ pack/box จากแถวที่ qty น้อยสุด
   const pickBarcode = (arr: any[]) => {
     if (!arr.length) return "";
     const sorted = [...arr].sort((a, b) => (num(a.packing_size_qty) ?? Infinity) - (num(b.packing_size_qty) ?? Infinity));
     return sorted[0].main_barcode || "";
   };
   const nameSrc = unitRow || all[0] || {};
+  const pq = minQty(packRows), bq = minQty(boxRows);
   return {
     found: true,
     sku_code: sku,
@@ -69,8 +77,8 @@ async function resolveDcKrItem(code: string): Promise<Partial<DcKrItem> & { foun
     barcode_box: pickBarcode(boxRows),
     product_name_la: nameSrc.product_name_la || "",
     product_name_en: nameSrc.product_name_en || "",
-    pack_qty: minQty(packRows),
-    box_qty: minQty(boxRows),
+    pack_qty: pq == null ? "" : String(pq),
+    box_qty: bq == null ? "" : String(bq),
   };
 }
 
@@ -84,32 +92,95 @@ export default function DCKRControlTab() {
     return [];
   });
   const save = (next: DcKrItem[]) => { setRows(next); try { localStorage.setItem(DCKR_DATA_LS, JSON.stringify(next)); } catch { /* ignore */ } };
-  const [looking, setLooking] = useState<Record<number, boolean>>({});
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
-  const addItem = () => save([...rows, { ...EMPTY_ITEM }]);
-  const delItem = (i: number) => save(rows.filter((_, idx) => idx !== i));
-  const setKey = (i: number, v: string) => save(rows.map((r, idx) => (idx === i ? { ...r, barcode_key: v } : r)));
+  // ----- Add dialog -----
+  const [addOpen, setAddOpen] = useState(false);
+  const [form, setForm] = useState<DcKrItem>(newItem());
+  const [resolving, setResolving] = useState(false);
+  const setF = (k: keyof DcKrItem, v: string) => setForm((p) => ({ ...p, [k]: v }));
 
-  const lookup = async (i: number) => {
-    const code = rows[i]?.barcode_key?.trim();
+  const openAdd = () => { setForm(newItem()); setAddOpen(true); };
+
+  const resolveForm = async () => {
+    const code = form.barcode_key.trim();
     if (!code) return;
-    setLooking((p) => ({ ...p, [i]: true }));
+    setResolving(true);
     try {
       const res = await resolveDcKrItem(code);
       if (!res.found) {
-        toast({ title: "ไม่พบสินค้าในระบบ", description: code, variant: "destructive" });
-        save(rows.map((r, idx) => (idx === i ? { ...EMPTY_ITEM, barcode_key: code } : r)));
+        toast({ title: "ไม่พบใน Data Master", description: "คีย์ข้อมูลคอลัมน์อื่นเองได้", variant: "destructive" });
+        setForm((p) => ({ ...p, found: false }));
         return;
       }
-      save(rows.map((r, idx) => (idx === i ? { ...r, ...res } as DcKrItem : r)));
+      setForm((p) => ({ ...p, ...res } as DcKrItem));
     } catch (e: any) {
       toast({ title: "ดึงข้อมูลไม่สำเร็จ", description: e.message, variant: "destructive" });
     } finally {
-      setLooking((p) => { const n = { ...p }; delete n[i]; return n; });
+      setResolving(false);
     }
   };
 
-  const COLS: { key: keyof DcKrItem; label: string; w: number; right?: boolean }[] = [
+  const saveForm = () => {
+    if (!form.barcode_key.trim() && !form.sku_code.trim()) {
+      toast({ title: "กรุณาคีย์ Barcode หรือ ID อย่างน้อย 1 ช่อง", variant: "destructive" });
+      return;
+    }
+    save([...rows, { ...form, _id: crypto.randomUUID() }]);
+    setAddOpen(false);
+    toast({ title: "เพิ่มรายการแล้ว" });
+  };
+
+  // ----- selection -----
+  const toggle = (id: string) => setSelected((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const allChecked = rows.length > 0 && rows.every((r) => selected.has(r._id));
+  const toggleAll = (c: boolean) => setSelected(c ? new Set(rows.map((r) => r._id)) : new Set());
+
+  const deleteSelected = () => {
+    if (selected.size === 0) return;
+    save(rows.filter((r) => !selected.has(r._id)));
+    setSelected(new Set());
+  };
+
+  const exportSelected = () => {
+    const list = rows.filter((r) => selected.has(r._id));
+    if (list.length === 0) { toast({ title: "เลือกรายการก่อน", variant: "destructive" }); return; }
+    const out = list.map((r) => ({
+      "Barcode Key": r.barcode_key,
+      "ID": r.sku_code,
+      "Barcode Unit": r.barcode_unit,
+      "Barcode Pack": r.barcode_pack,
+      "Barcode Box": r.barcode_box,
+      "Product name La": r.product_name_la,
+      "Product name En": r.product_name_en,
+      "Pack": r.pack_qty,
+      "Box": r.box_qty,
+      "Cost": r.cost,
+      "Remark SKU": remarkSku(r.found),
+    }));
+    const ws = XLSX.utils.json_to_sheet(out);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "DCKR Data");
+    const p = (n: number) => String(n).padStart(2, "0");
+    const d = new Date();
+    XLSX.writeFile(wb, `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}-DCKR-Data.xlsx`);
+  };
+
+  // ฟิลด์ในฟอร์ม Add (เรียงบน→ล่าง) — ช่อง barcode_key มีปุ่มดึงข้อมูล
+  const FORM_FIELDS: { key: keyof DcKrItem; label: string; type?: string; disabled?: boolean }[] = [
+    { key: "sku_code", label: "ID" },
+    { key: "barcode_unit", label: "Barcode Unit" },
+    { key: "barcode_pack", label: "Barcode Pack" },
+    { key: "barcode_box", label: "Barcode Box" },
+    { key: "product_name_la", label: "Product name La" },
+    { key: "product_name_en", label: "Product name En" },
+    { key: "pack_qty", label: "Pack", type: "number" },
+    { key: "box_qty", label: "Box", type: "number" },
+    { key: "cost", label: "Cost", disabled: true },
+  ];
+
+  const TABLE_COLS: { key: keyof DcKrItem; label: string; w: number; right?: boolean }[] = [
+    { key: "barcode_key", label: "Barcode Key", w: 150 },
     { key: "sku_code", label: "ID", w: 120 },
     { key: "barcode_unit", label: "Barcode Unit", w: 140 },
     { key: "barcode_pack", label: "Barcode Pack", w: 140 },
@@ -118,6 +189,7 @@ export default function DCKRControlTab() {
     { key: "product_name_en", label: "Product name En", w: 220 },
     { key: "pack_qty", label: "Pack", w: 70, right: true },
     { key: "box_qty", label: "Box", w: 70, right: true },
+    { key: "cost", label: "Cost", w: 90, right: true },
   ];
 
   return (
@@ -132,67 +204,54 @@ export default function DCKRControlTab() {
 
       {/* ===== Data ===== */}
       <TabsContent value="data" className="mt-0 flex-1 flex-col overflow-hidden min-h-0 data-[state=active]:flex gap-2">
-        <div className="flex items-center gap-2">
-          <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={addItem}>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={openAdd}>
             <Plus className="w-3.5 h-3.5" /> Add new item
           </Button>
-          <span className="text-xs text-muted-foreground">{rows.length} รายการ</span>
+          <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={exportSelected} disabled={selected.size === 0}>
+            <Download className="w-3.5 h-3.5" /> Export ({selected.size})
+          </Button>
+          <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs text-destructive border-destructive/40" onClick={deleteSelected} disabled={selected.size === 0}>
+            <Trash2 className="w-3.5 h-3.5" /> ลบที่เลือก ({selected.size})
+          </Button>
+          <span className="text-xs text-muted-foreground ml-auto">{rows.length} รายการ</span>
         </div>
 
         <div className="border rounded-lg flex-1 overflow-auto min-h-0">
-          <table className="text-sm border-collapse whitespace-nowrap table-fixed" style={{ width: 48 + 170 + COLS.reduce((s, c) => s + c.w, 0) + 110 + 48 }}>
+          <table className="text-sm border-collapse whitespace-nowrap table-fixed" style={{ width: 40 + 48 + TABLE_COLS.reduce((s, c) => s + c.w, 0) + 130 }}>
             <colgroup>
+              <col style={{ width: 40 }} />
               <col style={{ width: 48 }} />
-              <col style={{ width: 170 }} />
-              {COLS.map((c) => <col key={c.key} style={{ width: c.w }} />)}
-              <col style={{ width: 110 }} />
-              <col style={{ width: 48 }} />
+              {TABLE_COLS.map((c) => <col key={c.key} style={{ width: c.w }} />)}
+              <col style={{ width: 130 }} />
             </colgroup>
             <thead className="sticky top-0 z-20">
               <tr className="text-left text-muted-foreground [&_th]:bg-background [&_th]:shadow-[0_1px_0_0_hsl(var(--border))] [&_th]:px-3 [&_th]:py-1.5 [&_th]:font-medium">
+                <th><input type="checkbox" className="h-4 w-4 align-middle" checked={allChecked} onChange={(e) => toggleAll(e.target.checked)} /></th>
                 <th>#</th>
-                <th>Barcode Key</th>
-                {COLS.map((c) => <th key={c.key} className={c.right ? "text-right" : ""}>{c.label}</th>)}
-                <th className="text-right">Cost</th>
-                <th />
+                {TABLE_COLS.map((c) => <th key={c.key} className={c.right ? "text-right" : ""}>{c.label}</th>)}
+                <th>Remark SKU</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r, i) => (
-                <tr key={i} className="border-b last:border-0 hover:bg-muted/40 [&_td]:px-3 [&_td]:py-1 [&_td]:overflow-hidden [&_td]:text-ellipsis">
+                <tr key={r._id} className={cn("border-b last:border-0 hover:bg-muted/40 [&_td]:px-3 [&_td]:py-1.5 [&_td]:overflow-hidden [&_td]:text-ellipsis", selected.has(r._id) && "bg-primary/5")}>
+                  <td><input type="checkbox" className="h-4 w-4 align-middle" checked={selected.has(r._id)} onChange={() => toggle(r._id)} /></td>
                   <td className="text-muted-foreground tabular-nums">{i + 1}</td>
-                  <td>
-                    <div className="flex items-center gap-1">
-                      <Input
-                        value={r.barcode_key}
-                        onChange={(e) => setKey(i, e.target.value)}
-                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); lookup(i); } }}
-                        onBlur={() => { if (r.barcode_key.trim() && !r.sku_code) lookup(i); }}
-                        placeholder="คีย์ barcode"
-                        className="h-7 text-xs"
-                      />
-                      {looking[i] && <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 text-muted-foreground" />}
-                    </div>
-                  </td>
-                  {COLS.map((c) => (
+                  {TABLE_COLS.map((c) => (
                     <td key={c.key} className={c.right ? "text-right tabular-nums" : "truncate"} title={String(r[c.key] ?? "")}>
-                      {r[c.key] == null || r[c.key] === "" ? "-" : String(r[c.key])}
+                      {r[c.key] === "" || r[c.key] == null ? "-" : String(r[c.key])}
                     </td>
                   ))}
-                  <td className="text-right">
-                    <Input value="" disabled placeholder="-" className="h-7 text-xs text-right bg-muted/40" />
-                  </td>
                   <td>
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => delItem(i)} title="ลบแถว">
-                      <Trash2 className="w-3.5 h-3.5 text-destructive" />
-                    </Button>
+                    <span className={cn("text-xs font-medium", r.found ? "text-emerald-600" : "text-amber-600")}>{remarkSku(r.found)}</span>
                   </td>
                 </tr>
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={COLS.length + 4} className="px-3 py-8 text-center text-muted-foreground">
-                    กด "Add new item" แล้วคีย์ barcode เพื่อดึงข้อมูลสินค้า
+                  <td colSpan={TABLE_COLS.length + 3} className="px-3 py-8 text-center text-muted-foreground">
+                    กด "Add new item" เพื่อเพิ่มสินค้า
                   </td>
                 </tr>
               )}
@@ -207,6 +266,55 @@ export default function DCKRControlTab() {
           ส่วนนี้จะออกแบบภายหลัง
         </TabsContent>
       ))}
+
+      {/* ===== Add Dialog (ฟอร์มแนวตั้ง รองรับมือถือ) ===== */}
+      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+        <DialogContent className="w-[420px] max-w-[94vw] max-h-[88vh] overflow-auto">
+          <DialogHeader>
+            <DialogTitle>เพิ่มสินค้า (DC KR)</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2.5">
+            {/* Barcode Key + ปุ่มดึงข้อมูล */}
+            <div className="space-y-1">
+              <Label className="text-xs">Barcode Key</Label>
+              <div className="flex items-center gap-1.5">
+                <Input
+                  value={form.barcode_key}
+                  onChange={(e) => setF("barcode_key", e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); resolveForm(); } }}
+                  placeholder="คีย์ barcode แล้วกด Enter / ดึงข้อมูล"
+                  className="h-9"
+                />
+                <Button size="sm" variant="outline" className="h-9 gap-1 shrink-0" onClick={resolveForm} disabled={resolving}>
+                  {resolving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />} ดึง
+                </Button>
+              </div>
+            </div>
+            {FORM_FIELDS.map((f) => (
+              <div key={f.key} className="space-y-1">
+                <Label className="text-xs">{f.label}</Label>
+                <Input
+                  type={f.type || "text"}
+                  value={String(form[f.key] ?? "")}
+                  onChange={(e) => setF(f.key, e.target.value)}
+                  disabled={f.disabled}
+                  className={cn("h-9", f.disabled && "bg-muted/40")}
+                />
+              </div>
+            ))}
+            <div className="space-y-1">
+              <Label className="text-xs">Remark SKU</Label>
+              <div className={cn("h-9 flex items-center px-3 rounded-md border text-sm font-medium", form.found ? "text-emerald-600" : "text-amber-600")}>
+                {remarkSku(form.found)}
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAddOpen(false)}>ยกเลิก</Button>
+            <Button onClick={saveForm}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Tabs>
   );
 }
