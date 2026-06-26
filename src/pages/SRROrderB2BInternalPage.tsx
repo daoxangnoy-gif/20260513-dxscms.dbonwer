@@ -9,9 +9,10 @@ import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, Command
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download, Pencil, ChevronsUpDown, Check, FileSpreadsheet, Columns3, Image as ImageIcon, Printer, FileSignature, ShoppingCart, Boxes, Route, Save, Filter } from "lucide-react";
+import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X, Eye, Download, Pencil, ChevronsUpDown, Check, FileSpreadsheet, Columns3, Image as ImageIcon, Printer, FileSignature, ShoppingCart, Boxes, Route, Save, Filter, Warehouse } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { remapRowsByTemplate } from "@/lib/exportTemplate";
+import DCKRControlTab from "@/components/DCKRControlTab";
 import * as XLSX from "xlsx";
 
 const MU_BUCKET = "monthly-usage-pictures";
@@ -2544,6 +2545,9 @@ export default function SRROrderB2BInternalPage() {
             <TabsTrigger value="scm_control" className="text-xs gap-1.5 data-[state=active]:bg-amber-500 data-[state=active]:text-white data-[state=active]:shadow-sm">
               <Boxes className="w-3.5 h-3.5" /> SCM Control
             </TabsTrigger>
+            <TabsTrigger value="dckr" className="text-xs gap-1.5 data-[state=active]:bg-amber-500 data-[state=active]:text-white data-[state=active]:shadow-sm">
+              <Warehouse className="w-3.5 h-3.5" /> DC(KR) Control
+            </TabsTrigger>
           </TabsList>
 
           {/* Routeplan — แนบ PDF + เวลาอัปล่าสุด */}
@@ -3681,6 +3685,11 @@ export default function SRROrderB2BInternalPage() {
               <SCMPOTab vendorOriginMap={vendorOriginMapRef} poSubTab={poSubTab} setPoSubTab={setPoSubTab} />
             </TabsContent>
           </Tabs>
+        </TabsContent>
+
+        {/* ============ DC(KR) Control ============ */}
+        <TabsContent value="dckr" className="flex-1 overflow-hidden mt-0 bg-background flex-col min-h-0 data-[state=active]:flex">
+          <DCKRControlTab />
         </TabsContent>
 
       </Tabs>
