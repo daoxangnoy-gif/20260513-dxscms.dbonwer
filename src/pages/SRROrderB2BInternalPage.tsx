@@ -4299,6 +4299,23 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   );
   const [vendorLookupSkus, setVendorLookupSkus] = useState<Set<string>>(new Set());
 
+  // โหลด vendor override จาก DB (source of truth) → ถ้าตารางยังไม่ถูกสร้างใช้ค่าจาก localStorage เดิม
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data, error } = await (supabase as any).from("po_vendor_override").select("*");
+        if (error) throw error;
+        const map: Record<string, { code: string; name: string; currency: string; origin: string }> = {};
+        for (const r of (data || []) as any[]) map[r.sku] = { code: r.vendor_code || "", name: r.vendor_name || "", currency: r.vendor_currency || "", origin: r.vendor_origin || "" };
+        vendorOvRef.current = map;
+        try { localStorage.setItem(PO_VENDOR_OV_LS, JSON.stringify(map)); } catch {}
+        // ถ้า PO โหลดอยู่แล้ว → apply override ใหม่ทับ
+        setPoRows((prev) => prev.length ? prev.map((r) => { const ov = map[r.sku]; return ov ? { ...r, vendor_code: ov.code, vendor_name: ov.name, vendor_currency: ov.currency, vendor_origin: ov.origin || r.vendor_origin } : r; }) : prev);
+      } catch { /* ตารางยังไม่ถูกสร้าง — ใช้ localStorage เดิม */ }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleVendorCodeChange = async (sku: string, newCode: string) => {
     const trimmed = newCode.trim();
     let vendorName = "";
@@ -4334,6 +4351,11 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     else delete ov[sku];
     vendorOvRef.current = ov;
     try { localStorage.setItem(PO_VENDOR_OV_LS, JSON.stringify(ov)); } catch {}
+    // DB (source of truth) — upsert ถ้ามี code, ลบถ้าว่าง
+    try {
+      if (trimmed) await (supabase as any).from("po_vendor_override").upsert({ sku, vendor_code: trimmed, vendor_name: vendorName, vendor_currency: vendorCurrency, vendor_origin: vendorOrigin, updated_at: new Date().toISOString() });
+      else await (supabase as any).from("po_vendor_override").delete().eq("sku", sku);
+    } catch { /* ตารางยังไม่ถูกสร้าง — มี localStorage สำรอง */ }
     // อัปแถวใน state + cache (vendor_origin ด้วย → Remark/Action อัปเดตทันที)
     setPoRows((prev) => {
       const updated = prev.map((r) =>
@@ -4380,17 +4402,22 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         for (const v of (vmRes.data || [])) if (v.vendor_code && !vmMap.has(v.vendor_code)) vmMap.set(v.vendor_code, { currency: v.supplier_currency || "", origin: v.vendor_origin || "" });
         for (const d of (dmRes.data || [])) if (d.vendor_code && !nameMap.has(d.vendor_code)) nameMap.set(d.vendor_code, d.vendor_display_name || "");
       } catch { /* lookup พลาด → ใช้ค่าว่าง */ }
-      // อัปเดต override (localStorage) เฉพาะ SKU ที่อยู่ในตาราง PO
+      // อัปเดต override เฉพาะ SKU ที่อยู่ในตาราง PO
       const skuSet = new Set(poRows.map((r) => r.sku));
       const ov = { ...vendorOvRef.current };
+      const dbPayload: any[] = [];
       let updated = 0, notFound = 0;
       for (const [sku, vc] of pairs) {
         if (!skuSet.has(sku)) { notFound++; continue; }
-        ov[sku] = { code: vc, name: nameMap.get(vc) || "", currency: vmMap.get(vc)?.currency || "", origin: vmMap.get(vc)?.origin || "" };
+        const entry = { code: vc, name: nameMap.get(vc) || "", currency: vmMap.get(vc)?.currency || "", origin: vmMap.get(vc)?.origin || "" };
+        ov[sku] = entry;
+        dbPayload.push({ sku, vendor_code: entry.code, vendor_name: entry.name, vendor_currency: entry.currency, vendor_origin: entry.origin, updated_at: new Date().toISOString() });
         updated++;
       }
       vendorOvRef.current = ov;
       try { localStorage.setItem(PO_VENDOR_OV_LS, JSON.stringify(ov)); } catch {}
+      // DB (source of truth) — upsert ทั้งชุด
+      try { if (dbPayload.length) await (supabase as any).from("po_vendor_override").upsert(dbPayload); } catch { /* ตารางยังไม่ถูกสร้าง — มี localStorage สำรอง */ }
       // อัปแถวใน state + cache ทีเดียว
       setPoRows((prev) => {
         const next = prev.map((r) => {
