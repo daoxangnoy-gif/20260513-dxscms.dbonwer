@@ -285,6 +285,7 @@ export default function DCKRControlTab() {
         <TabsTrigger value="data" className="text-xs">Data</TabsTrigger>
         <TabsTrigger value="take_in" className="text-xs">Take in</TabsTrigger>
         <TabsTrigger value="take_out" className="text-xs">Take out</TabsTrigger>
+        <TabsTrigger value="count_stock" className="text-xs">Count Stock</TabsTrigger>
         <TabsTrigger value="stock_movement" className="text-xs">Stock Movement</TabsTrigger>
         <TabsTrigger value="location" className="text-xs">Location</TabsTrigger>
       </TabsList>
@@ -358,7 +359,7 @@ export default function DCKRControlTab() {
       </TabsContent>
 
       {/* ===== Sub-tab อื่น — ออกแบบภายหลัง ===== */}
-      {["take_in", "take_out", "stock_movement", "location"].map((t) => (
+      {["take_in", "take_out", "count_stock", "stock_movement", "location"].map((t) => (
         <TabsContent key={t} value={t} className="mt-0 flex-1 data-[state=active]:flex items-center justify-center text-sm text-muted-foreground">
           ส่วนนี้จะออกแบบภายหลัง
         </TabsContent>
