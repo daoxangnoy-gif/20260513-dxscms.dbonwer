@@ -13,6 +13,7 @@ import { Tag, Plus, Trash2, Loader2, Search, Copy, BarChart3, Upload, Camera, X,
 import { cn } from "@/lib/utils";
 import { remapRowsByTemplate } from "@/lib/exportTemplate";
 import DCKRControlTab from "@/components/DCKRControlTab";
+import ProductSearchDialog from "@/components/ProductSearchDialog";
 import * as XLSX from "xlsx";
 
 const MU_BUCKET = "monthly-usage-pictures";
@@ -2602,6 +2603,17 @@ export default function SRROrderB2BInternalPage() {
               {/* Toolbar ของ Monthly usage (โผล่เฉพาะหน้า Monthly usage) */}
               {brandSubTab === "monthly" && (
                 <div className="flex items-center gap-2">
+                  <ProductSearchDialog
+                    trigger={
+                      <button
+                        title="ค้นหาสินค้า (Data Master)"
+                        className="flex flex-col items-center justify-center gap-0.5 w-16 py-1 rounded-lg border-2 border-slate-300 bg-slate-50 text-slate-700 hover:bg-slate-100 transition-colors"
+                      >
+                        <Search className="w-4 h-4" />
+                        <span className="text-[10px] leading-none font-medium">ค้นหาสินค้า</span>
+                      </button>
+                    }
+                  />
                   <button
                     onClick={openDialog}
                     title="List Brand"
