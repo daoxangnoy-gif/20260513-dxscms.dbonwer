@@ -8,6 +8,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { Plus, Trash2, Loader2, Download, Search } from "lucide-react";
+import BarcodeScanButton from "@/components/BarcodeScanButton";
 import * as XLSX from "xlsx";
 
 const MU_BUCKET = "monthly-usage-pictures";
@@ -150,25 +151,28 @@ export default function DCKRControlTab() {
 
   const openAdd = () => { setForm(newForm()); setAddOpen(true); };
 
-  const resolveForm = async () => {
-    const code = form.barcode_key.trim();
+  const resolveCode = async (raw: string) => {
+    const code = raw.trim();
     if (!code) return;
     setResolving(true);
     try {
       const res = await resolveItem(code);
       if (!res.found) {
         toast({ title: "ไม่พบใน Data Master", description: "ล้างข้อมูลเดิม — คีย์เองได้", variant: "destructive" });
-        // เคลียร์ข้อมูลที่ดึงมาก่อนหน้า (กันค่าค้างจาก barcode เดิมที่เคยเจอ) แต่คง Key Barcode ที่เพิ่งคีย์
+        // เคลียร์ข้อมูลที่ดึงมาก่อนหน้า (กันค่าค้างจาก barcode เดิมที่เคยเจอ) แต่คง Key Barcode
         setForm({ ...newForm(), barcode_key: code });
         return;
       }
-      setForm((p) => ({ ...p, ...res } as ItemForm));
+      setForm((p) => ({ ...p, ...res, barcode_key: code } as ItemForm));
     } catch (e: any) {
       toast({ title: "ดึงข้อมูลไม่สำเร็จ", description: e.message, variant: "destructive" });
     } finally {
       setResolving(false);
     }
   };
+  const resolveForm = () => resolveCode(form.barcode_key);
+  // สแกนจากกล้อง → ใส่ Key Barcode + ดึงข้อมูลทันที
+  const onScanned = (code: string) => { setForm((p) => ({ ...p, barcode_key: code })); resolveCode(code); };
 
   const uploadAndSet = async (file: File) => {
     setUploadingPic(true);
@@ -359,7 +363,8 @@ export default function DCKRControlTab() {
             <div className="space-y-1">
               <Label className="text-xs">Key Barcode</Label>
               <div className="flex items-center gap-1.5">
-                <Input value={form.barcode_key} onChange={(e) => setF("barcode_key", e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); resolveForm(); } }} placeholder="คีย์ barcode แล้วกด Enter / ดึงข้อมูล" className="h-9" />
+                <Input value={form.barcode_key} onChange={(e) => setF("barcode_key", e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); resolveForm(); } }} placeholder="คีย์ / สแกน barcode แล้วกด Enter" className="h-9" />
+                <BarcodeScanButton onScan={onScanned} className="h-9 w-9 p-0 shrink-0" />
                 <Button size="sm" variant="outline" className="h-9 gap-1 shrink-0" onClick={resolveForm} disabled={resolving}>{resolving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />} ดึง</Button>
               </div>
             </div>
