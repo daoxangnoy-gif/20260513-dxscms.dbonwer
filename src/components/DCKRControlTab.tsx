@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import { Plus, Trash2, Loader2, Download, Search } from "lucide-react";
+import { Plus, Trash2, Loader2, Download, Search, Pencil } from "lucide-react";
 import BarcodeScanButton from "@/components/BarcodeScanButton";
 import * as XLSX from "xlsx";
 
@@ -140,6 +140,7 @@ export default function DCKRControlTab() {
 
   // ----- Add dialog -----
   const [addOpen, setAddOpen] = useState(false);
+  const [editItemId, setEditItemId] = useState<string | null>(null); // null = เพิ่มใหม่, มีค่า = แก้ไข
   const [form, setForm] = useState<ItemForm>(newForm());
   const [resolving, setResolving] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -149,7 +150,21 @@ export default function DCKRControlTab() {
   const addUomRow = () => setForm((p) => ({ ...p, uoms: [...p.uoms, newUom()] }));
   const delUomRow = (i: number) => setForm((p) => ({ ...p, uoms: p.uoms.filter((_, idx) => idx !== i) }));
 
-  const openAdd = () => { setForm(newForm()); setAddOpen(true); };
+  const openAdd = () => { setEditItemId(null); setForm(newForm()); setAddOpen(true); };
+  // แก้ไข — ดึงข้อมูลทั้ง item (หัว + UOM ทุกบรรทัด) จาก flat rows มาใส่ฟอร์ม
+  const openEdit = (itemId: string) => {
+    const itemRows = rows.filter((r) => r.item_id === itemId);
+    if (!itemRows.length) return;
+    const h = itemRows[0];
+    const uoms = itemRows.filter((r) => r.uom_id).map((r) => ({ main_barcode: r.main_barcode, barcode: r.barcode, uom: r.uom, uom_qty: r.uom_qty }));
+    setForm({
+      barcode_key: h.barcode_key, sku_code: h.sku_code, product_name_la: h.product_name_la,
+      product_name_en: h.product_name_en, cost: h.cost, picture: h.picture, picture_brand: h.picture_brand,
+      found: h.found, uoms: uoms.length ? uoms : [newUom()],
+    });
+    setEditItemId(itemId);
+    setAddOpen(true);
+  };
 
   const resolveCode = async (raw: string) => {
     const code = raw.trim();
@@ -203,9 +218,19 @@ export default function DCKRControlTab() {
         product_name_la: form.product_name_la, product_name_en: form.product_name_en,
         cost: form.cost, picture: form.picture, picture_brand: form.picture_brand, found: form.found,
       };
-      const { data, error } = await (supabase as any).from("dckr_item").insert(header).select("id").limit(1);
-      if (error) throw error;
-      const itemId = data?.[0]?.id;
+      let itemId: string;
+      if (editItemId) {
+        // แก้ไข: อัปเดตหัว + แทนที่ UOM ทั้งหมด (ลบเก่า → ใส่ใหม่)
+        const { error } = await (supabase as any).from("dckr_item").update(header).eq("id", editItemId);
+        if (error) throw error;
+        const { error: de } = await (supabase as any).from("dckr_item_uom").delete().eq("item_id", editItemId);
+        if (de) throw de;
+        itemId = editItemId;
+      } else {
+        const { data, error } = await (supabase as any).from("dckr_item").insert(header).select("id").limit(1);
+        if (error) throw error;
+        itemId = data?.[0]?.id;
+      }
       const lines = form.uoms
         .filter((u) => u.main_barcode.trim() || u.barcode.trim() || u.uom.trim() || u.uom_qty.trim())
         .map((u, i) => ({ item_id: itemId, main_barcode: u.main_barcode || null, barcode: u.barcode || null, uom: u.uom || null, uom_qty: u.uom_qty.trim() ? Number(u.uom_qty) : null, sort_order: i }));
@@ -214,7 +239,7 @@ export default function DCKRControlTab() {
         if (ue) throw ue;
       }
       setAddOpen(false);
-      toast({ title: "เพิ่มสินค้าแล้ว" });
+      toast({ title: editItemId ? "แก้ไขสินค้าแล้ว" : "เพิ่มสินค้าแล้ว" });
       loadItems();
     } catch (e: any) {
       toast({ title: "บันทึกไม่สำเร็จ", description: e.message, variant: "destructive" });
@@ -283,6 +308,16 @@ export default function DCKRControlTab() {
     { key: "uom_qty", label: "UOM Qty", w: 80, right: true },
   ];
 
+  // ไฮไลต์ row ที่ UOM Qty = 1 — ถ้า item เดียวกันมีหลาย row qty=1 ไฮไลต์แค่ row แรก
+  const hlSet = (() => {
+    const s = new Set<string>();
+    const seen = new Set<string>();
+    for (const r of rows) {
+      if (r.uom_id && Number(r.uom_qty) === 1 && !seen.has(r.item_id)) { s.add(r.uom_id); seen.add(r.item_id); }
+    }
+    return s;
+  })();
+
   return (
     <Tabs value={subTab} onValueChange={setSub} className="flex-1 flex flex-col overflow-hidden min-h-0 gap-3 p-4">
       <TabsList className="h-8 self-start">
@@ -304,9 +339,9 @@ export default function DCKRControlTab() {
         </div>
 
         <div className="border rounded-lg flex-1 overflow-auto min-h-0">
-          <table className="text-sm border-collapse whitespace-nowrap table-fixed" style={{ width: 40 + 48 + 90 + COLS.reduce((s, c) => s + c.w, 0) + 130 }}>
+          <table className="text-sm border-collapse whitespace-nowrap table-fixed" style={{ width: 40 + 48 + 56 + 90 + COLS.reduce((s, c) => s + c.w, 0) + 130 }}>
             <colgroup>
-              <col style={{ width: 40 }} /><col style={{ width: 48 }} /><col style={{ width: 90 }} />
+              <col style={{ width: 40 }} /><col style={{ width: 48 }} /><col style={{ width: 56 }} /><col style={{ width: 90 }} />
               {COLS.map((c) => <col key={c.key} style={{ width: c.w }} />)}
               <col style={{ width: 130 }} />
             </colgroup>
@@ -314,6 +349,7 @@ export default function DCKRControlTab() {
               <tr className="text-left text-muted-foreground [&_th]:bg-background [&_th]:shadow-[0_1px_0_0_hsl(var(--border))] [&_th]:px-3 [&_th]:py-1.5 [&_th]:font-medium">
                 <th><input type="checkbox" className="h-4 w-4 align-middle" checked={allChecked} onChange={(e) => toggleAll(e.target.checked)} /></th>
                 <th>#</th>
+                <th>Edit</th>
                 <th>Picture</th>
                 {COLS.map((c) => <th key={c.key} className={c.right ? "text-right" : ""}>{c.label}</th>)}
                 <th>Remark SKU</th>
@@ -321,9 +357,12 @@ export default function DCKRControlTab() {
             </thead>
             <tbody>
               {rows.map((r, i) => (
-                <tr key={r.uom_id || `nouom-${r.item_id}`} className={cn("border-b last:border-0 hover:bg-muted/40 [&_td]:px-3 [&_td]:py-1.5 [&_td]:overflow-hidden [&_td]:text-ellipsis", r.uom_id && selected.has(r.uom_id) && "bg-primary/5")}>
+                <tr key={r.uom_id || `nouom-${r.item_id}`} className={cn("border-b last:border-0 hover:bg-muted/40 [&_td]:px-3 [&_td]:py-1.5 [&_td]:overflow-hidden [&_td]:text-ellipsis", r.uom_id && selected.has(r.uom_id) ? "bg-primary/5" : r.uom_id && hlSet.has(r.uom_id) && "bg-amber-100/70")}>
                   <td>{r.uom_id ? <input type="checkbox" className="h-4 w-4 align-middle" checked={selected.has(r.uom_id)} onChange={() => toggle(r.uom_id)} /> : null}</td>
                   <td className="text-muted-foreground tabular-nums">{i + 1}</td>
+                  <td>
+                    <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEdit(r.item_id)} title="แก้ไขสินค้า"><Pencil className="w-3.5 h-3.5" /></Button>
+                  </td>
                   <td>
                     {r.picture ? (
                       <a href={r.picture} target="_blank" rel="noopener noreferrer" className="flex flex-col items-center gap-0.5 w-fit">
@@ -341,7 +380,7 @@ export default function DCKRControlTab() {
                 </tr>
               ))}
               {rows.length === 0 && (
-                <tr><td colSpan={COLS.length + 4} className="px-3 py-8 text-center text-muted-foreground">กด "Add new item" เพื่อเพิ่มสินค้า</td></tr>
+                <tr><td colSpan={COLS.length + 5} className="px-3 py-8 text-center text-muted-foreground">กด "Add new item" เพื่อเพิ่มสินค้า</td></tr>
               )}
             </tbody>
           </table>
@@ -357,7 +396,7 @@ export default function DCKRControlTab() {
       {/* ===== Add Dialog (Raw data) ===== */}
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
         <DialogContent className="w-[760px] max-w-[95vw] max-h-[90vh] overflow-auto">
-          <DialogHeader><DialogTitle>เพิ่มสินค้า (DC KR)</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editItemId ? "แก้ไขสินค้า (DC KR)" : "เพิ่มสินค้า (DC KR)"}</DialogTitle></DialogHeader>
           <div className="space-y-3">
             {/* Key Barcode + ดึง */}
             <div className="space-y-1">
