@@ -157,8 +157,9 @@ export default function DCKRControlTab() {
     try {
       const res = await resolveItem(code);
       if (!res.found) {
-        toast({ title: "ไม่พบใน Data Master", description: "คีย์ข้อมูลเองได้", variant: "destructive" });
-        setForm((p) => ({ ...p, found: false }));
+        toast({ title: "ไม่พบใน Data Master", description: "ล้างข้อมูลเดิม — คีย์เองได้", variant: "destructive" });
+        // เคลียร์ข้อมูลที่ดึงมาก่อนหน้า (กันค่าค้างจาก barcode เดิมที่เคยเจอ) แต่คง Key Barcode ที่เพิ่งคีย์
+        setForm({ ...newForm(), barcode_key: code });
         return;
       }
       setForm((p) => ({ ...p, ...res } as ItemForm));
