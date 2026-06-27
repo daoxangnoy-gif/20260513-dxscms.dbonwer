@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { remapRowsByTemplate } from "@/lib/exportTemplate";
 import DCKRControlTab from "@/components/DCKRControlTab";
 import ProductSearchDialog from "@/components/ProductSearchDialog";
+import POReportDialog from "@/components/POReportDialog";
 import * as XLSX from "xlsx";
 
 const MU_BUCKET = "monthly-usage-pictures";
@@ -4295,6 +4296,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   const [poExportSel, setPoExportSel] = useState<Set<string>>(new Set());     // vendor ที่ติ๊ก
   const [poExportPick, setPoExportPick] = useState<Record<string, string>>({}); // vendor_code → picking type
   const [poExportSearch, setPoExportSearch] = useState("");
+  const [poReportOpen, setPoReportOpen] = useState(false);
   const [poLoading, setPoLoading] = useState(false);
   const [poLoaded, setPoLoaded] = useState(false);
   const [poProgress, setPoProgress] = useState(0);   // 0-100
@@ -4813,6 +4815,20 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   };
   const filteredPoRows = searchedPoRows.filter((r) => poPassesCols(r));
 
+  // Report — นับ distinct SKU group by Remark / Action2 (จากข้อมูลที่โหลดทั้งหมด, 1 แถว = 1 SKU)
+  const poReportCurrent = (() => {
+    const remark = new Map<string, number>();
+    const action2 = new Map<string, number>();
+    for (const r of poRows) {
+      const rm = getPoRemarkAction(r).remark;
+      const a2 = getPoAction2(r);
+      remark.set(rm, (remark.get(rm) || 0) + 1);
+      action2.set(a2, (action2.get(a2) || 0) + 1);
+    }
+    const toArr = (m: Map<string, number>) => [...m.entries()].map(([category, count]) => ({ category, count }));
+    return { remark: toArr(remark), action2: toArr(action2) };
+  })();
+
   // ===== Export PO (รูปแบบ import เข้า Odoo แบบ SRR DC) =====
   // แถวที่ export ได้: Action2 ∈ {เร่งเปิด PO และ ตามของ, รอทำ Po Cost} และ DIFF > 0 (คิด Stock KR ว่าง = 0)
   const poExportEligible = (() => {
@@ -5084,7 +5100,12 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           >
             <ShoppingCart className="w-3.5 h-3.5" /> Export PO
           </Button>
+          <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={() => setPoReportOpen(true)} disabled={poRows.length === 0} title="รายงานสรุปจำนวน SKU (Remark / Action2) + เก็บ snapshot">
+            <BarChart3 className="w-3.5 h-3.5" /> Report
+          </Button>
         </div>
+
+        <POReportDialog open={poReportOpen} onOpenChange={setPoReportOpen} current={poReportCurrent} />
 
         {/* แถบสถานะ + % progress ตอนโหลด */}
         {poLoading && (
