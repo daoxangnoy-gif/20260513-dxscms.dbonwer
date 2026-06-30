@@ -2684,7 +2684,7 @@ export default function SRROrderB2BInternalPage() {
               )}
 
               {/* ปุ่ม Order (โผล่เฉพาะหน้า Order) */}
-              {brandSubTab === "order" && (
+              {brandSubTab === "order" && can("b2b_brand", "create") && (
                 <button
                   onClick={openOrderBrandPicker}
                   title="สร้าง Order (เลือกแบรนด์ แล้วคีย์ Order Qty)"
@@ -2761,6 +2761,7 @@ export default function SRROrderB2BInternalPage() {
                     <td className="px-3 py-1.5 text-muted-foreground">{new Date(d.updated_at || d.created_at).toLocaleString("th-TH")}</td>
                     <td className="px-3 py-1.5">
                       <div className="flex items-center gap-2">
+                        {can("b2b_brand", "edit") && (
                         <label
                           className="inline-flex items-center justify-center h-7 w-7 border rounded cursor-pointer hover:bg-muted shrink-0"
                           title="แนบไฟล์ PDF ที่เซ็นแล้ว"
@@ -2778,6 +2779,7 @@ export default function SRROrderB2BInternalPage() {
                             onChange={(e) => { const f = e.target.files?.[0]; if (f) handleSignedUpload(d, f); e.target.value = ""; }}
                           />
                         </label>
+                        )}
                         {d.signed_uploaded_at ? (
                           <div className="text-[11px] leading-tight">
                             <a href={d.signed_pdf_url || "#"} target="_blank" rel="noreferrer" className="text-primary hover:underline">ดูไฟล์ล่าสุด</a>
@@ -2800,7 +2802,7 @@ export default function SRROrderB2BInternalPage() {
                           {printingId === d.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Printer className="w-3.5 h-3.5" />}
                         </Button>
                         )}
-                        <label
+                        {can("b2b_brand", "edit") && <label
                           className={cn(
                             "inline-flex items-center justify-center h-7 w-7 border rounded cursor-pointer hover:bg-muted relative overflow-hidden shrink-0",
                             d.logo_url && "border-primary",
@@ -2889,12 +2891,16 @@ export default function SRROrderB2BInternalPage() {
                         <Button variant="outline" size="sm" className="h-7 gap-1" onClick={() => openOrderView(d)}>
                           <Eye className="w-3.5 h-3.5" /> View
                         </Button>
+                        {can("b2b_brand", "export") && (
                         <Button variant="outline" size="icon" className="h-7 w-7" title="Export Excel" onClick={() => exportOrderDoc(d)}>
                           <Download className="w-3.5 h-3.5" />
                         </Button>
+                        )}
+                        {can("b2b_brand", "delete") && (
                         <Button variant="ghost" size="icon" className="h-7 w-7" title="ลบ Order" onClick={() => deleteOrderDoc(d)}>
                           <Trash2 className="w-3.5 h-3.5 text-destructive" />
                         </Button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -2926,9 +2932,11 @@ export default function SRROrderB2BInternalPage() {
             </div>
             <div className="ml-auto flex items-center gap-2">
               {orderReadOnly ? (
+                can("b2b_brand", "edit") && (
                 <Button size="sm" className="h-8 gap-1.5" onClick={() => setOrderReadOnly(false)}>
                   <Pencil className="w-4 h-4" /> แก้ไข
                 </Button>
+                )
               ) : can("b2b_brand", "create") ? (
                 <Button size="sm" className="h-8 gap-1.5" onClick={saveOrderDoc} disabled={orderSaving || orderLoading}>
                   {orderSaving && <Loader2 className="w-4 h-4 animate-spin" />}
@@ -3127,9 +3135,11 @@ export default function SRROrderB2BInternalPage() {
                   {rows.length === 0 && (
                     <tr>
                       <td colSpan={SHOW_BRAND_BRANCH ? 5 : 4} className="px-2 py-6 text-center text-muted-foreground">
+                        {can("b2b_brand", "create") && (
                         <Button variant="outline" size="sm" onClick={addRow} className="gap-1.5">
                           <Plus className="w-4 h-4" /> เพิ่มแถวแรก
                         </Button>
+                        )}
                       </td>
                     </tr>
                   )}
@@ -3197,9 +3207,11 @@ export default function SRROrderB2BInternalPage() {
                 </PopoverContent>
               </Popover>
               {muReadOnly ? (
+                (can("b2b_brand", "edit") || can("b2b_brand", "create")) && (
                 <Button size="sm" className="h-8 gap-1.5" onClick={() => setMuReadOnly(false)}>
                   <Pencil className="w-4 h-4" /> แก้ไข
                 </Button>
+                )
               ) : (
                 <>
                   {editingDocId && (
