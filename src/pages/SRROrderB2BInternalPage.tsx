@@ -2825,7 +2825,7 @@ export default function SRROrderB2BInternalPage() {
                             disabled={logoUploadingId === d.id}
                             onChange={(e) => { const f = e.target.files?.[0]; if (f) handleDocLogo(d, f); e.target.value = ""; }}
                           />
-                        </label>
+                        </label>}
                         {can("b2b_brand", "export") && (
                         <Button variant="outline" size="icon" className="h-7 w-7" title="Export Excel" onClick={() => exportDoc(d)}>
                           <Download className="w-3.5 h-3.5" />
