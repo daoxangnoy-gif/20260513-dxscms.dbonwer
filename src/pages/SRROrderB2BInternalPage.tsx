@@ -3041,10 +3041,12 @@ export default function SRROrderB2BInternalPage() {
                     placeholder="ค้นหา Code / Brand name / Branch / Group"
                   />
                 </div>
+                {can("b2b_brand", "import") && (
                 <label className="flex items-center gap-1.5 h-8 px-3 rounded-md border bg-background hover:bg-muted transition-colors cursor-pointer text-xs font-medium shrink-0">
                   <Upload className="w-3.5 h-3.5" /> Import
                   <input type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) importBrandFile(f); e.target.value = ""; }} />
                 </label>
+                )}
                 <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs shrink-0" onClick={downloadBrandTemplate}>
                   <FileSpreadsheet className="w-3.5 h-3.5" /> Template
                 </Button>
@@ -3074,7 +3076,8 @@ export default function SRROrderB2BInternalPage() {
                       <td className="px-2 py-1">
                         <Input
                           value={row.brand_name}
-                          onChange={(e) => updateRow(idx, "brand_name", e.target.value)}
+                          onChange={(e) => can("b2b_brand", "edit") && updateRow(idx, "brand_name", e.target.value)}
+                          readOnly={!can("b2b_brand", "edit")}
                           className="h-8"
                           placeholder="Brand name"
                         />
@@ -3083,7 +3086,8 @@ export default function SRROrderB2BInternalPage() {
                         <td className="px-2 py-1">
                           <Input
                             value={row.branch}
-                            onChange={(e) => updateRow(idx, "branch", e.target.value)}
+                            onChange={(e) => can("b2b_brand", "edit") && updateRow(idx, "branch", e.target.value)}
+                            readOnly={!can("b2b_brand", "edit")}
                             className="h-8"
                             placeholder="Branch"
                           />
@@ -3092,7 +3096,8 @@ export default function SRROrderB2BInternalPage() {
                       <td className="px-2 py-1">
                         <Input
                           value={row.brand_group}
-                          onChange={(e) => updateRow(idx, "brand_group", e.target.value)}
+                          onChange={(e) => can("b2b_brand", "edit") && updateRow(idx, "brand_group", e.target.value)}
+                          readOnly={!can("b2b_brand", "edit")}
                           className="h-8"
                           placeholder="Group"
                           list="brand-group-options"
@@ -3100,17 +3105,21 @@ export default function SRROrderB2BInternalPage() {
                       </td>
                       <td className="px-2 py-1">
                         <div className="flex items-center gap-0.5">
-                          {SHOW_BRAND_DUPLICATE && (
+                          {SHOW_BRAND_DUPLICATE && can("b2b_brand", "create") && (
                             <Button variant="ghost" size="icon" className="h-7 w-7" title="Duplicate" onClick={() => duplicateRow(idx)}>
                               <Copy className="w-4 h-4 text-muted-foreground" />
                             </Button>
                           )}
+                          {can("b2b_brand", "create") && (
                           <Button variant="ghost" size="icon" className="h-7 w-7" title="แทรกแถวใหม่ใต้แถวนี้" onClick={() => insertRowBelow(idx)}>
                             <Plus className="w-4 h-4 text-primary" />
                           </Button>
+                          )}
+                          {can("b2b_brand", "delete") && (
                           <Button variant="ghost" size="icon" className="h-7 w-7" title="ลบ" onClick={() => removeRow(idx)}>
                             <Trash2 className="w-4 h-4 text-destructive" />
                           </Button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -3140,10 +3149,12 @@ export default function SRROrderB2BInternalPage() {
             <Button variant="outline" onClick={() => setOpen(false)} disabled={saving}>
               Cancel
             </Button>
+            {(can("b2b_brand", "create") || can("b2b_brand", "edit")) && (
             <Button onClick={handleSave} disabled={saving || loading}>
               {saving && <Loader2 className="w-4 h-4 animate-spin mr-1.5" />}
               Save
             </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
