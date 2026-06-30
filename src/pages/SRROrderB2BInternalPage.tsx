@@ -2586,6 +2586,7 @@ export default function SRROrderB2BInternalPage() {
                 </div>
               </div>
             )}
+            {can("b2b_scm", "edit") && (
             <label
               title="แนบไฟล์ PDF Routeplan"
               className="flex items-center gap-1.5 h-9 px-3 rounded-lg border-2 border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors cursor-pointer text-xs font-medium"
@@ -2600,6 +2601,7 @@ export default function SRROrderB2BInternalPage() {
                 onChange={(e) => { const f = e.target.files?.[0]; if (f) handleRouteplanUpload(f); e.target.value = ""; }}
               />
             </label>
+            )}
           </div>
         </div>
 
@@ -5429,7 +5431,7 @@ function POImportPanel({
             <Trash2 className="w-3.5 h-3.5" /> ลบที่เลือก ({selected.size})
           </Button>
         )}
-        {rows.length > 0 && (
+        {rows.length > 0 && can("delete") && (
           <Button size="sm" variant="ghost" className="h-8 gap-1.5 text-xs text-destructive" onClick={() => { onClear(); setSelected(new Set()); }}>
             <Trash2 className="w-3.5 h-3.5" /> ล้างทั้งหมด
           </Button>
