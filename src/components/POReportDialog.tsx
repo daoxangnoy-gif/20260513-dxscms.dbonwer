@@ -46,7 +46,13 @@ export default function POReportDialog({
       ];
       const { error } = await (supabase as any).from("po_report_snapshot").insert(rows);
       if (error) throw error;
-      toast({ title: "บันทึก snapshot แล้ว", description: saved_label });
+      // เก็บได้สูงสุด 7 คอลัมน์ (batch) — เกินแล้วลบอันเก่าสุดทิ้ง (FIFO)
+      const { data: all } = await (supabase as any).from("po_report_snapshot").select("batch_id, saved_at").order("saved_at", { ascending: false });
+      const seen: string[] = [];
+      for (const s of (all || []) as any[]) if (!seen.includes(s.batch_id)) seen.push(s.batch_id);
+      const removeBatches = seen.slice(7); // เกิน 7 batch แรก = อันเก่า
+      if (removeBatches.length) await (supabase as any).from("po_report_snapshot").delete().in("batch_id", removeBatches);
+      toast({ title: "บันทึก snapshot แล้ว", description: `${saved_label}${removeBatches.length ? ` · ลบคอลัมน์เก่า ${removeBatches.length}` : ""}` });
       load();
     } catch (e: any) {
       toast({ title: "บันทึกไม่สำเร็จ", description: e.message, variant: "destructive" });
