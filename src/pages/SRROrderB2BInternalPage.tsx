@@ -15,6 +15,7 @@ import { remapRowsByTemplate } from "@/lib/exportTemplate";
 import DCKRControlTab from "@/components/DCKRControlTab";
 import ProductSearchDialog from "@/components/ProductSearchDialog";
 import POReportDialog from "@/components/POReportDialog";
+import { useAuth } from "@/hooks/useAuth";
 import * as XLSX from "xlsx";
 
 const MU_BUCKET = "monthly-usage-pictures";
@@ -443,6 +444,23 @@ export default function SRROrderB2BInternalPage() {
   // จำ tab ที่อยู่ไว้ใน localStorage (กันเด้งกลับ tab แรกตอนสลับเมนู)
   useEffect(() => { localStorage.setItem("b2b_active_tab", activeTab); }, [activeTab]);
   useEffect(() => { localStorage.setItem("b2b_brand_sub_tab", brandSubTab); }, [brandSubTab]);
+
+  // ===== สิทธิ์ (แยกต่อแท็บ: b2b_brand / b2b_scm / b2b_dckr) =====
+  const { isAdmin, canViewMenu, canDo } = useAuth();
+  const can = (menu: string, action: any) => isAdmin || canDo(menu, action);
+  const viewMenu = (menu: string) => isAdmin || canViewMenu(menu);
+  const pBrandView = viewMenu("b2b_brand");
+  const pScmView = viewMenu("b2b_scm");
+  const pDckrView = viewMenu("b2b_dckr");
+  // เด้งไปแท็บแรกที่มีสิทธิ์ ถ้าแท็บปัจจุบันดูไม่ได้
+  useEffect(() => {
+    const ok = (t: string) => (t === "brand" && pBrandView) || (t === "scm_control" && pScmView) || (t === "dckr" && pDckrView);
+    if (!ok(activeTab)) {
+      const first = pBrandView ? "brand" : pScmView ? "scm_control" : pDckrView ? "dckr" : "brand";
+      setActiveTab(first);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pBrandView, pScmView, pDckrView]);
 
 
   // ============================================================
@@ -2541,15 +2559,21 @@ export default function SRROrderB2BInternalPage() {
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
         <div className="border-b px-4 pt-3 flex items-end justify-between">
           <TabsList className="h-8">
+            {pBrandView && (
             <TabsTrigger value="brand" className="text-xs gap-1.5 data-[state=active]:bg-amber-500 data-[state=active]:text-white data-[state=active]:shadow-sm">
               <Tag className="w-3.5 h-3.5" /> Brand control
             </TabsTrigger>
+            )}
+            {pScmView && (
             <TabsTrigger value="scm_control" className="text-xs gap-1.5 data-[state=active]:bg-amber-500 data-[state=active]:text-white data-[state=active]:shadow-sm">
               <Boxes className="w-3.5 h-3.5" /> SCM Control
             </TabsTrigger>
+            )}
+            {pDckrView && (
             <TabsTrigger value="dckr" className="text-xs gap-1.5 data-[state=active]:bg-amber-500 data-[state=active]:text-white data-[state=active]:shadow-sm">
               <Warehouse className="w-3.5 h-3.5" /> DC(KR) Control
             </TabsTrigger>
+            )}
           </TabsList>
 
           {/* Routeplan — แนบ PDF + เวลาอัปล่าสุด */}
@@ -2623,6 +2647,7 @@ export default function SRROrderB2BInternalPage() {
                     <Tag className="w-4 h-4" />
                     <span className="text-[10px] leading-none font-medium">List Brand</span>
                   </button>
+                  {can("b2b_brand", "create") && (
                   <button
                     onClick={openMuNew}
                     title="Monthly usage (สร้างใหม่)"
@@ -2631,6 +2656,8 @@ export default function SRROrderB2BInternalPage() {
                     <BarChart3 className="w-4 h-4" />
                     <span className="text-[10px] leading-none font-medium">Monthly</span>
                   </button>
+                  )}
+                  {can("b2b_brand", "import") && (
                   <label
                     title="Import Monthly Excel (หลายแบรนด์ในไฟล์เดียว)"
                     className="flex flex-col items-center justify-center gap-0.5 w-16 py-1 rounded-lg border-2 border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors cursor-pointer"
@@ -2645,6 +2672,7 @@ export default function SRROrderB2BInternalPage() {
                       onChange={(e) => { const f = e.target.files?.[0]; if (f) handleMultiImport(f); e.target.value = ""; }}
                     />
                   </label>
+                  )}
                   <button
                     onClick={downloadMultiTemplate}
                     title="ดาวน์โหลด Template (Excel หลายแบรนด์)"
@@ -2767,9 +2795,11 @@ export default function SRROrderB2BInternalPage() {
                         <Button variant="outline" size="sm" className="h-7 gap-1" onClick={() => openMuView(d)}>
                           <Eye className="w-3.5 h-3.5" /> View
                         </Button>
+                        {can("b2b_brand", "export") && (
                         <Button variant="outline" size="icon" className="h-7 w-7" title="พิมพ์ฟอร์ม" onClick={() => printDoc(d)} disabled={printingId === d.id}>
                           {printingId === d.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Printer className="w-3.5 h-3.5" />}
                         </Button>
+                        )}
                         <label
                           className={cn(
                             "inline-flex items-center justify-center h-7 w-7 border rounded cursor-pointer hover:bg-muted relative overflow-hidden shrink-0",
@@ -2792,12 +2822,16 @@ export default function SRROrderB2BInternalPage() {
                             onChange={(e) => { const f = e.target.files?.[0]; if (f) handleDocLogo(d, f); e.target.value = ""; }}
                           />
                         </label>
+                        {can("b2b_brand", "export") && (
                         <Button variant="outline" size="icon" className="h-7 w-7" title="Export Excel" onClick={() => exportDoc(d)}>
                           <Download className="w-3.5 h-3.5" />
                         </Button>
+                        )}
+                        {can("b2b_brand", "delete") && (
                         <Button variant="ghost" size="icon" className="h-7 w-7" title="ลบเอกสาร" onClick={() => deleteDoc(d)}>
                           <Trash2 className="w-3.5 h-3.5 text-destructive" />
                         </Button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -2895,12 +2929,12 @@ export default function SRROrderB2BInternalPage() {
                 <Button size="sm" className="h-8 gap-1.5" onClick={() => setOrderReadOnly(false)}>
                   <Pencil className="w-4 h-4" /> แก้ไข
                 </Button>
-              ) : (
+              ) : can("b2b_brand", "create") ? (
                 <Button size="sm" className="h-8 gap-1.5" onClick={saveOrderDoc} disabled={orderSaving || orderLoading}>
                   {orderSaving && <Loader2 className="w-4 h-4 animate-spin" />}
                   Save Order
                 </Button>
-              )}
+              ) : null}
             </div>
           </div>
 
@@ -3162,10 +3196,12 @@ export default function SRROrderB2BInternalPage() {
                       ยกเลิก
                     </Button>
                   )}
+                  {(can("b2b_brand", editingDocId ? "edit" : "create")) && (
                   <Button size="sm" className="h-8 gap-1.5" onClick={openNeedDatePopup} disabled={muSaving || muLoading}>
                     {muSaving && <Loader2 className="w-4 h-4 animate-spin" />}
                     Save
                   </Button>
+                  )}
                 </>
               )}
             </div>
@@ -3230,9 +3266,11 @@ export default function SRROrderB2BInternalPage() {
                     className="hidden"
                     onChange={(e) => { const f = e.target.files?.[0]; if (f) handleMuImport(f); e.target.value = ""; }}
                   />
+                  {can("b2b_brand", "import") && (
                   <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => muImportRef.current?.click()} disabled={muImporting}>
                     {muImporting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />} นำเข้า Excel
                   </Button>
+                  )}
                   <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={downloadMuTemplate}>
                     <FileSpreadsheet className="w-4 h-4" /> Template
                   </Button>
@@ -3613,10 +3651,12 @@ export default function SRROrderB2BInternalPage() {
                       <X className="w-3.5 h-3.5" /> ล้าง
                     </Button>
                   )}
+                  {can("b2b_scm", "export") && (
                   <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={exportSoSelected} disabled={soSelected.size === 0 || soExporting}>
                     {soExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
                     Export SO ({soSelected.size})
                   </Button>
+                  )}
                 </div>
               </div>
 
@@ -3668,12 +3708,16 @@ export default function SRROrderB2BInternalPage() {
                               <Button variant="outline" size="sm" className="h-7 gap-1" onClick={() => openSoView(d)}>
                                 <Eye className="w-3.5 h-3.5" /> View
                               </Button>
+                              {can("b2b_scm", "export") && (
                               <Button variant="outline" size="icon" className="h-7 w-7" title="Export SO (Excel)" onClick={() => exportSoSingle(d)}>
                                 <Download className="w-3.5 h-3.5" />
                               </Button>
+                              )}
+                              {can("b2b_scm", "delete") && (
                               <Button variant="ghost" size="icon" className="h-7 w-7" title="ลบ SO" onClick={() => deleteSoDoc(d)}>
                                 <Trash2 className="w-3.5 h-3.5 text-destructive" />
                               </Button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -4283,6 +4327,8 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   setPoSubTab: (v: string) => void;
 }) {
   const { toast } = useToast();
+  const { isAdmin, canDo } = useAuth();
+  const can = (action: any) => isAdmin || canDo("b2b_scm", action);
 
   // ---- PO list (aggregation) ----
   const [poRows, setPoRows] = useState<PORow[]>([]);
@@ -5084,13 +5130,18 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           >
             <FileSpreadsheet className="w-3.5 h-3.5" /> Template
           </Button>
+          {can("import") && (
           <label className={cn("inline-flex items-center gap-1.5 h-8 px-3 rounded-md border text-xs cursor-pointer hover:bg-muted/50", vendorImporting && "opacity-60 pointer-events-none")} title="Import Excel 2 คอลัมน์ (ID + Vendor code) เพื่ออัปเดต Vendor">
             <input type="file" accept=".xlsx,.xls" className="hidden" disabled={vendorImporting} onChange={(e) => { const f = e.target.files?.[0]; if (f) handleVendorImport(f); e.target.value = ""; }} />
             {vendorImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />} Import Vendor
           </label>
+          )}
+          {can("export") && (
           <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={exportPO} disabled={filteredPoRows.length === 0}>
             <Download className="w-3.5 h-3.5" /> Export
           </Button>
+          )}
+          {can("export") && (
           <Button
             size="sm"
             className="h-8 gap-1.5 text-xs"
@@ -5100,6 +5151,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           >
             <ShoppingCart className="w-3.5 h-3.5" /> Export PO
           </Button>
+          )}
           <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={() => setPoReportOpen(true)} disabled={poRows.length === 0} title="รายงานสรุปจำนวน SKU (Remark / Action2) + เก็บ snapshot">
             <BarChart3 className="w-3.5 h-3.5" /> Report
           </Button>
@@ -5226,9 +5278,10 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                           <input
                             key={r.sku + "|" + r.vendor_code}
                             defaultValue={r.vendor_code}
-                            className="flex-1 min-w-0 bg-transparent text-sm border-b border-transparent focus:border-primary/60 focus:outline-none transition-colors"
+                            readOnly={!can("edit")}
+                            className="flex-1 min-w-0 bg-transparent text-sm border-b border-transparent focus:border-primary/60 focus:outline-none transition-colors read-only:cursor-default"
                             onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-                            onBlur={(e) => { const v = e.target.value.trim(); if (v !== r.vendor_code) handleVendorCodeChange(r.sku, v); }}
+                            onBlur={(e) => { if (!can("edit")) return; const v = e.target.value.trim(); if (v !== r.vendor_code) handleVendorCodeChange(r.sku, v); }}
                           />
                           {vendorLookupSkus.has(r.sku) && <Loader2 className="w-3 h-3 animate-spin shrink-0 text-muted-foreground" />}
                         </div>
@@ -5305,6 +5358,8 @@ function POImportPanel({
   onSave: () => void;
 }) {
   const { toast } = useToast();
+  const { isAdmin, canDo } = useAuth();
+  const can = (a: any) => isAdmin || canDo("b2b_scm", a);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<number>>(new Set());
 
@@ -5331,18 +5386,22 @@ function POImportPanel({
   return (
     <>
       <div className="flex items-center gap-2 flex-wrap">
+        {can("import") && (
         <label className="flex items-center gap-1.5 h-8 px-3 rounded-lg border-2 border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 transition-colors cursor-pointer text-xs font-medium">
           {importing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
           Import {title}
           <input type="file" accept=".xlsx,.xls,.csv" className="hidden" disabled={importing} onChange={(e) => { const f = e.target.files?.[0]; if (f) onImport(f); e.target.value = ""; }} />
         </label>
+        )}
         <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={onTemplate}>
           <FileSpreadsheet className="w-3.5 h-3.5" /> Template
         </Button>
+        {can("create") && (
         <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={onSave} disabled={saving}>
           {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />} Save
         </Button>
-        {selected.size > 0 && (
+        )}
+        {selected.size > 0 && can("delete") && (
           <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs text-destructive border-destructive/40" onClick={deleteSelected}>
             <Trash2 className="w-3.5 h-3.5" /> ลบที่เลือก ({selected.size})
           </Button>

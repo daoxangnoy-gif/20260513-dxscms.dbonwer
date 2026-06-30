@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 import { Plus, Trash2, Loader2, Download, Search, Pencil } from "lucide-react";
 import BarcodeScanButton from "@/components/BarcodeScanButton";
@@ -97,6 +98,8 @@ async function resolveItem(code: string): Promise<{ found: boolean } & Partial<I
 
 export default function DCKRControlTab() {
   const { toast } = useToast();
+  const { isAdmin, canDo } = useAuth();
+  const can = (a: any) => isAdmin || canDo("b2b_dckr", a);
   const [subTab, setSubTab] = useState(() => localStorage.getItem(DCKR_SUB_LS) || "data");
   const setSub = (v: string) => { setSubTab(v); localStorage.setItem(DCKR_SUB_LS, v); };
 
@@ -332,9 +335,9 @@ export default function DCKRControlTab() {
       {/* ===== Data ===== */}
       <TabsContent value="data" className="mt-0 flex-1 flex-col overflow-hidden min-h-0 data-[state=active]:flex gap-2">
         <div className="flex items-center gap-2 flex-wrap">
-          <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={openAdd}><Plus className="w-3.5 h-3.5" /> Add new item</Button>
-          <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={exportSelected} disabled={selected.size === 0}><Download className="w-3.5 h-3.5" /> Export ({selected.size})</Button>
-          <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs text-destructive border-destructive/40" onClick={deleteSelected} disabled={selected.size === 0}><Trash2 className="w-3.5 h-3.5" /> ลบที่เลือก ({selected.size})</Button>
+          {can("create") && <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={openAdd}><Plus className="w-3.5 h-3.5" /> Add new item</Button>}
+          {can("export") && <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={exportSelected} disabled={selected.size === 0}><Download className="w-3.5 h-3.5" /> Export ({selected.size})</Button>}
+          {can("delete") && <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs text-destructive border-destructive/40" onClick={deleteSelected} disabled={selected.size === 0}><Trash2 className="w-3.5 h-3.5" /> ลบที่เลือก ({selected.size})</Button>}
           <span className="text-xs text-muted-foreground ml-auto">{rows.length} แถว</span>
         </div>
 
@@ -361,7 +364,7 @@ export default function DCKRControlTab() {
                   <td>{r.uom_id ? <input type="checkbox" className="h-4 w-4 align-middle" checked={selected.has(r.uom_id)} onChange={() => toggle(r.uom_id)} /> : null}</td>
                   <td className="text-muted-foreground tabular-nums">{i + 1}</td>
                   <td>
-                    <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEdit(r.item_id)} title="แก้ไขสินค้า"><Pencil className="w-3.5 h-3.5" /></Button>
+                    {can("edit") && <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => openEdit(r.item_id)} title="แก้ไขสินค้า"><Pencil className="w-3.5 h-3.5" /></Button>}
                   </td>
                   <td>
                     {r.picture ? (
