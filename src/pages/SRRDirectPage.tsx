@@ -3045,6 +3045,20 @@ export default function SRRDirectPage() {
       return (a.store_name || "").localeCompare(b.store_name || "", undefined, { numeric: true });
     });
   }, [showData, tableSearchChips, TABLE_SEARCH_KEYS, showOnlyFinalGt0, showOnlyMinGt0, itemTypeFilter, tab2Mode]);
+  const vendorCurrencyMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const v of vendorMasterAll) if (v.vendor_code && !m.has(v.vendor_code)) m.set(v.vendor_code, v.supplier_currency || "");
+    return m;
+  }, [vendorMasterAll]);
+  const totalAmountByCurrency = useMemo(() => {
+    const byCurrency = new Map<string, number>();
+    for (const r of filteredShowData) {
+      const amt = (Number(r.po_cost_unit) || 0) * ((Number(r.final_order_uom_div) || 0) * (Number(r.moq) || 0));
+      const cur = vendorCurrencyMap.get(r.vendor_code) || "-";
+      byCurrency.set(cur, (byCurrency.get(cur) || 0) + amt);
+    }
+    return [...byCurrency.entries()].filter(([, amt]) => amt > 0);
+  }, [filteredShowData, vendorCurrencyMap]);
   const pagedData = filteredShowData.slice(page * pageSize, (page + 1) * pageSize);
   const totalPages = Math.ceil(filteredShowData.length / pageSize);
 
@@ -4646,6 +4660,15 @@ export default function SRRDirectPage() {
                 />
                 <span>Show Min &gt; 0</span>
               </label>
+              {totalAmountByCurrency.length > 0 && (
+                <div className="ml-auto flex items-center gap-3 text-xs font-semibold">
+                  {totalAmountByCurrency.map(([cur, amt]) => (
+                    <span key={cur}>
+                      Total: {amt.toLocaleString(undefined, { maximumFractionDigits: 0 })} {cur}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
