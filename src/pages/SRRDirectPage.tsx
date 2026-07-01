@@ -3736,6 +3736,7 @@ export default function SRRDirectPage() {
                           data-row-idx={idx}
                           data-col-key={col.key}
                           onKeyDown={(e) => {
+                            e.stopPropagation();
                             if (e.key === "Enter" || e.key === "ArrowDown") {
                               e.preventDefault();
                               const nextRow = Math.min(idx + 1, pagedData.length - 1);
@@ -3770,6 +3771,7 @@ export default function SRRDirectPage() {
                             data-row-idx={idx}
                             data-col-key={col.key}
                             onKeyDown={(e) => {
+                              e.stopPropagation();
                               if (e.key === "Enter" || e.key === "ArrowDown") {
                                 e.preventDefault();
                                 const nextRow = Math.min(idx + 1, pagedData.length - 1);
