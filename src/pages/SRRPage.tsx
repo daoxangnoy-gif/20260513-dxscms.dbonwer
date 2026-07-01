@@ -2284,6 +2284,15 @@ function SRRDCItemPage() {
       return String(a.sku_code || "").localeCompare(String(b.sku_code || ""));
     });
   }, [showData, tableSearchChips, TABLE_SEARCH_KEYS, showOnlyFinalGt0, showOnlyTTMinGt0, itemTypeFilter, safetyByRank]);
+  const totalAmountByCurrency = useMemo(() => {
+    const byCurrency = new Map<string, number>();
+    for (const r of filteredShowData) {
+      const amt = (Number(r.po_cost_unit) || 0) * (Number(r.final_suggest_qty) || 0);
+      const cur = r.supplier_currency || "-";
+      byCurrency.set(cur, (byCurrency.get(cur) || 0) + amt);
+    }
+    return [...byCurrency.entries()].filter(([, amt]) => amt > 0);
+  }, [filteredShowData]);
   const pagedData = filteredShowData.slice(page * pageSize, (page + 1) * pageSize);
   const totalPages = Math.ceil(filteredShowData.length / pageSize);
 
@@ -3769,6 +3778,15 @@ function SRRDCItemPage() {
                 />
                 <span>Show TT Min &gt; 0</span>
               </label>
+              {totalAmountByCurrency.length > 0 && (
+                <div className="ml-auto flex items-center gap-3 text-xs font-semibold">
+                  {totalAmountByCurrency.map(([cur, amt]) => (
+                    <span key={cur}>
+                      Total: {amt.toLocaleString(undefined, { maximumFractionDigits: 0 })} {cur}
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
