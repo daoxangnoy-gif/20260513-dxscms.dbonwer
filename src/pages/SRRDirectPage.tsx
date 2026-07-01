@@ -4663,7 +4663,7 @@ export default function SRRDirectPage() {
                 <span>Show Min &gt; 0</span>
               </label>
               {totalAmountByCurrency.length > 0 && (
-                <div className="ml-auto flex items-center gap-3 text-xs font-semibold">
+                <div className="ml-auto flex items-center gap-3 text-xs font-semibold text-red-600">
                   {totalAmountByCurrency.map(([cur, amt]) => (
                     <span key={cur}>
                       Total: {amt.toLocaleString(undefined, { maximumFractionDigits: 0 })} {cur}
