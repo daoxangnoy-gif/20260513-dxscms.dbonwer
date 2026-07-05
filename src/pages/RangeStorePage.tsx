@@ -1875,7 +1875,8 @@ export default function RangeStorePage() {
       if (allowedSkuSet && !allowedSkuSet.has(r.sku_code)) continue;
       const rd = r.range_data || {};
       const rk = (r.rank_sale || "").toUpperCase().trim();
-      const st = (r.item_status || "").toLowerCase();
+      // Active/Discontinue อยู่ใน buying_status (item_status = Existing/New/Delete ไม่ใช่)
+      const st = (r.buying_status || "").toLowerCase().trim();
       const it = (r.item_type || "").toLowerCase();
       for (const store of visibleStores) {
         const cell = rd[store];
@@ -1885,9 +1886,9 @@ export default function RangeStorePage() {
         b.total++;
         if (rk === "A" || rk === "B" || rk === "C" || rk === "D") b.rank[rk]++;
         else b.rank.Blank++;
-        if (st.includes("active")) b.status.Active++;
+        if (st === "active") b.status.Active++;               // เท่ากับ "active" เป๊ะ (กัน "inactive")
         else if (st.includes("discont")) b.status.Discontinue++;
-        else b.status.Other++;
+        else b.status.Other++;                                 // Inactive / ว่าง
         if (it.includes("basic") && !it.includes("non")) b.type.Basic++;
         else b.type.NonBasic++;
       }
