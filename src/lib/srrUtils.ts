@@ -219,6 +219,12 @@ export function getDefaultSafety(rank: string): number {
   return SAFETY_BY_RANK[rank?.toUpperCase()] ?? 7;
 }
 
+// Toggle (default = เปิด): เมื่อ Stock DC < 0 ให้บังคับ Gap DC = 0
+// ใช้ module-level flag เพื่อไม่ต้องแก้จุดเรียก recalcRow ทุกจุด
+let ZERO_GAP_DC_ON_NEG_STOCK = true;
+export function setZeroGapDcOnNegStock(v: boolean) { ZERO_GAP_DC_ON_NEG_STOCK = v; }
+export function getZeroGapDcOnNegStock(): boolean { return ZERO_GAP_DC_ON_NEG_STOCK; }
+
 export function recalcRow(row: SRRRow): SRRRow {
   const n = (v: any): number => { const x = Number(v); return Number.isFinite(x) ? x : 0; };
   const min_jmart = n(row.min_jmart), min_kokkok = n(row.min_kokkok), min_kokkok_fc = n(row.min_kokkok_fc), min_udee = n(row.min_udee);
@@ -237,7 +243,9 @@ export function recalcRow(row: SRRRow): SRRRow {
   const clampedStockStore = ttStockStore <= 0 ? 0 : ttStockStore;
   const gapStore = clampedStockStore <= ttMin ? ttMin - clampedStockStore : 0;
   const clampedStockDc = stock_dc <= 0 ? 0 : stock_dc;
-  const gapDc = clampedStockDc <= dcMin ? dcMin - clampedStockDc : 0;
+  let gapDc = clampedStockDc <= dcMin ? dcMin - clampedStockDc : 0;
+  // Toggle (default on): เมื่อ Stock DC < 0 ให้ Gap DC = 0
+  if (ZERO_GAP_DC_ON_NEG_STOCK && stock_dc < 0) gapDc = 0;
   const suggestQty = gapStore + gapDc;
   const rawFinal = Math.max(suggestQty - on_order, 0);
   const moq = moqRaw || 1;

@@ -51,7 +51,7 @@ import {
   fetchAllRows, fetchSRRDataRPC, SRR_RPC_CACHE,
   HIGHLIGHT_COLS, TRUNCATE_COLS, SRR_COLUMNS, ALL_COL_KEYS, DEFAULT_SRR_VISIBLE, EDITABLE_COLS,
   formatCellValue, getDefaultWidth, getBatchKey, fmtTreeStamp,
-  getDefaultSafety, recalcRow, buildSRRRows,
+  getDefaultSafety, recalcRow, buildSRRRows, setZeroGapDcOnNegStock,
   VIEWS_KEY, loadSavedViews, saveSavedViews, PO_KEY,
   applyHighPrecisionFormat, loadSavedPOs, saveSavedPOs,
   VENDOR_DOCS_KEY, loadVendorDocs, saveVendorDocs,
@@ -461,6 +461,8 @@ function SRRDCItemPage() {
   const [poGroupFilter, setPoGroupFilter] = useState<string[]>(srrStateRef.current?.poGroupFilter || []);
   const [showOnlyFinalGt0, setShowOnlyFinalGt0] = useState<boolean>(srrStateRef.current?.showOnlyFinalGt0 || false);
   const [showOnlyTTMinGt0, setShowOnlyTTMinGt0] = useState<boolean>(srrStateRef.current?.showOnlyTTMinGt0 ?? true);
+  // Toggle (default ติก): เมื่อ Stock DC < 0 ให้ Gap DC = 0
+  const [zeroGapDcNeg, setZeroGapDcNeg] = useState<boolean>(true);
   // Tab 2: Mode toggle (independent from Tab 1's importMode) — controls which doc set Tab 2 sees
   const [tab2Mode, setTab2Mode] = useState<"filter" | "vendor" | "import">(() => {
     const fromRef = srrStateRef.current?.tab2Mode as "filter" | "vendor" | "import" | undefined;
@@ -2263,6 +2265,14 @@ function SRRDCItemPage() {
     toast({ title: "Recalculate สำเร็จ", description: `${targetIds.size} รายการ` });
   };
 
+  // Toggle: Stock DC < 0 → Gap DC = 0 (default ติก) — set flag แล้ว recalc ทุกแถว
+  const toggleZeroGapDcNeg = (checked: boolean) => {
+    setZeroGapDcNeg(checked);
+    setZeroGapDcOnNegStock(checked);
+    setShowData(prev => prev.map(r => recalcRow(r)));
+    setVendorDocs(prev => prev.map(doc => ({ ...doc, data: doc.data.map(r => recalcRow(r)) })));
+  };
+
   // --- Paged data ---
   // Apply chip search to showData
   const filteredShowData = useMemo(() => {
@@ -3784,6 +3794,14 @@ function SRRDCItemPage() {
                   className="h-3.5 w-3.5"
                 />
                 <span>Show TT Min &gt; 0</span>
+              </label>
+              <label className="flex items-center gap-1.5 text-xs cursor-pointer ml-2 select-none">
+                <Checkbox
+                  checked={zeroGapDcNeg}
+                  onCheckedChange={(c) => toggleZeroGapDcNeg(!!c)}
+                  className="h-3.5 w-3.5"
+                />
+                <span>Stock DC &lt; 0 → Gap DC = 0</span>
               </label>
               {totalAmountByCurrency.length > 0 && (
                 <div className="ml-auto flex items-center gap-3 text-xs font-semibold text-red-600">
