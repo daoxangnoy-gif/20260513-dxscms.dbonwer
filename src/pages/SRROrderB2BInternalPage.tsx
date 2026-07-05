@@ -4727,7 +4727,13 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       const brandSet = new Set<string>();
       for (const it of items) {
         const sku = String(it.sku_code ?? "").trim();
-        const key = sku || (String(it.barcode ?? "").trim() ? `bc:${String(it.barcode).trim()}` : "");
+        const nm = String(it.product_name ?? "").trim();
+        // ไม่มี SKU → ใช้ชื่อสินค้าที่ import เป็นตัวจับกลุ่มแทน (fallback: barcode ถ้าไม่มีชื่อ)
+        const key = sku
+          ? sku
+          : nm ? `name:${nm}`
+          : String(it.barcode ?? "").trim() ? `bc:${String(it.barcode).trim()}`
+          : "";
         if (!key) continue;
         const brand = brandByDoc.get(it.doc_id) || "";
         if (brand) brandSet.add(brand);
@@ -4744,7 +4750,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       }
 
       // 3) enrich — ยิงขนานกัน (data_master / stock / po_cost / scm_stock_kr / scm_po_receive)
-      const skus = [...map.keys()].filter((k) => !k.startsWith("bc:"));
+      const skus = [...map.keys()].filter((k) => !k.startsWith("bc:") && !k.startsWith("name:"));
       setPoStatus("ดึงข้อมูลสินค้า / สต็อก / PO...");
       setPoProgress(35);
       const fetchPoReceiveAll = async () => {
