@@ -4186,10 +4186,13 @@ const PO_WRONG_VENDOR_CODES = new Set(["DC0288", "DC0504", "DC0426", "DC0287", "
 // vendor code ที่ถือว่า "ไม่ได้ผูกผู้สนอง"
 const PO_EMPTY_VENDOR_VALUES = new Set(["", "0", "0-0", "-"]);
 
-// Picking Type / Database ID สำหรับ Export PO (เลือกได้ 2 ค่า) — 2540 = DC (default)
+// Picking Type / Database ID สำหรับ Export PO — 2540 = DC (default), 7193 = DC (ทางเลือก)
 const PO_PICKING_DC = "2540";
+const PO_PICKING_DC_7193 = "7193";
 const PO_PICKING_STORE = "131010001-Phonsinuan: Received PO";
-const PO_PICKING_OPTIONS = [PO_PICKING_DC, PO_PICKING_STORE];
+const PO_PICKING_OPTIONS = [PO_PICKING_DC, PO_PICKING_DC_7193, PO_PICKING_STORE];
+// รหัสที่ถือเป็น DC (Inter Transfer = "") — ที่เหลือถือเป็น store (Inter Transfer = "true")
+const PO_PICKING_DC_IDS = new Set([PO_PICKING_DC, PO_PICKING_DC_7193]);
 // Action2 ที่อนุญาตให้ Export
 const PO_EXPORT_ACTION2 = new Set(["เร่งเปิด PO และ ตามของ", "รอทำ Po Cost"]);
 
@@ -4364,6 +4367,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   // Export PO dialog
   const [poExportOpen, setPoExportOpen] = useState(false);
   const [poExportAll, setPoExportAll] = useState(true);          // true = ทุก vendor
+  const [poExportAll7193, setPoExportAll7193] = useState(false); // ทุก vendor: ติกเพื่อใช้ 7193 แทน 2540
   const [poExportSel, setPoExportSel] = useState<Set<string>>(new Set());     // vendor ที่ติ๊ก
   const [poExportPick, setPoExportPick] = useState<Record<string, string>>({}); // vendor_code → picking type
   const [poExportSearch, setPoExportSearch] = useState("");
@@ -4924,8 +4928,10 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     for (const r of rows) { const vc = r.vendor_code || ""; if (!byVendor.has(vc)) byVendor.set(vc, []); byVendor.get(vc)!.push(r); }
     const out: Record<string, any>[] = [];
     for (const [vc, vRows] of byVendor) {
-      const pick = poExportAll ? PO_PICKING_DC : (poExportPick[vc] || PO_PICKING_DC);
-      const interTransfer = pick === PO_PICKING_DC ? "" : "true";
+      const pick = poExportAll
+        ? (poExportAll7193 ? PO_PICKING_DC_7193 : PO_PICKING_DC)
+        : (poExportPick[vc] || PO_PICKING_DC);
+      const interTransfer = PO_PICKING_DC_IDS.has(pick) ? "" : "true";
       vRows.forEach((r, idx) => {
         const diff = r.total - (r.stock_dc_kr ?? 0);
         out.push({
@@ -5211,7 +5217,15 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                 <label className="flex items-center gap-1.5 cursor-pointer">
                   <input type="radio" checked={!poExportAll} onChange={() => setPoExportAll(false)} /> เลือกบาง Vendor
                 </label>
-                {poExportAll && <span className="text-[11px] text-muted-foreground ml-auto">Picking Type = {PO_PICKING_DC} ทุกตัว</span>}
+                {poExportAll && (
+                  <div className="flex items-center gap-3 ml-auto">
+                    <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none">
+                      <input type="checkbox" className="h-3.5 w-3.5" checked={poExportAll7193} onChange={(e) => setPoExportAll7193(e.target.checked)} />
+                      <span>ใช้ 7193 (แทน 2540)</span>
+                    </label>
+                    <span className="text-[11px] text-muted-foreground">Picking Type = {poExportAll7193 ? PO_PICKING_DC_7193 : PO_PICKING_DC} ทุกตัว</span>
+                  </div>
+                )}
               </div>
               {!poExportAll && (
                 <div className="border rounded-lg">
