@@ -766,45 +766,71 @@ export default function SRROrderB2BInternalPage() {
           .in("sku_code", skus);
         for (const d of (dm || []) as any[]) { if (d.sku_code && !dmMap[d.sku_code]) dmMap[d.sku_code] = d; }
       }
-      const rows = items.map((it: any, i: number) => {
+      const headers = ["#", "ID (SKU)", "Barcode", "Barcode Unit", "Product name", "UOM",
+        "Monthly qty", "Daily qty", "Remark", "รูป",
+        "Division Group", "Division", "Department", "Buying Status", "Vendor Origin"];
+      const widths = [4, 14, 16, 16, 36, 8, 12, 12, 30, 14, 16, 14, 16, 14, 22];
+      const PIC_COL = 10; // 1-based ของคอลัมน์ "รูป"
+
+      // โหลด ExcelJS แบบ dynamic เฉพาะตอน export (ไม่ถ่วง bundle ตอนเปิดหน้า)
+      const ExcelJS = (await import("exceljs")).default;
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet("Monthly usage");
+      ws.columns = headers.map((h, i) => ({ header: h, width: widths[i] }));
+      ws.getRow(1).font = { bold: true };
+
+      // ดึงรูปทั้งหมดแบบ parallel: public URL → buffer + นามสกุล (สำหรับฝังลงเซลล์)
+      const picBuffers = await Promise.all(items.map(async (it: any) => {
+        if (!it.picture) return null;
+        try {
+          const res = await fetch(it.picture);
+          if (!res.ok) return null;
+          const ab = await res.arrayBuffer();
+          const m = String(it.picture).toLowerCase().match(/\.(png|jpe?g|gif)(?:$|\?)/);
+          let ext = m ? m[1] : ((res.headers.get("content-type") || "").split("/")[1] || "png");
+          if (ext === "jpg") ext = "jpeg";
+          if (!["png", "jpeg", "gif"].includes(ext)) ext = "png";
+          return { buffer: ab, extension: ext as "png" | "jpeg" | "gif" };
+        } catch { return null; }
+      }));
+
+      items.forEach((it: any, i: number) => {
         const d = dmMap[it.sku_code] || {};
         const vendorOrigin = (d.vendor_code && vendorOriginMapRef.current[d.vendor_code]) || "";
-        return {
-          "#": i + 1,
-          "ID (SKU)": it.sku_code || "",
-          Barcode: it.barcode || "",
-          "Barcode Unit": it.barcode_unit || "",
-          "Product name": it.product_name || "",
-          UOM: it.uom || "",
-          "Monthly qty": it.monthly_qty ?? "",
-          "Daily qty": it.daily_qty != null ? Number(it.daily_qty).toFixed(2) : "",
-          Remark: it.remark || "",
-          "รูป (ลิงก์)": it.picture ? "เปิดรูป" : "",
-          "Division Group": d.division_group || "",
-          Division: d.division || "",
-          Department: d.department || "",
-          "Buying Status": d.buying_status || "",
-          "Vendor Origin": vendorOrigin,
-        };
-      });
-      const ws = XLSX.utils.json_to_sheet(rows);
-      // ใส่ hyperlink ในคอลัมน์รูป (คอลัมน์สุดท้าย index 9)
-      const picCol = 9;
-      items.forEach((it: any, i: number) => {
-        if (it.picture) {
-          const ref = XLSX.utils.encode_cell({ c: picCol, r: i + 1 });
-          if (ws[ref]) ws[ref].l = { Target: it.picture, Tooltip: "เปิดรูป" };
+        const row = ws.addRow([
+          i + 1, it.sku_code || "", it.barcode || "", it.barcode_unit || "",
+          it.product_name || "", it.uom || "",
+          it.monthly_qty ?? "", it.daily_qty != null ? Number(it.daily_qty).toFixed(2) : "",
+          it.remark || "", "", // "รูป" เว้นว่างไว้ เดี๋ยวฝังรูปทับ
+          d.division_group || "", d.division || "", d.department || "",
+          d.buying_status || "", vendorOrigin,
+        ]);
+        const rowIdx = row.number; // 1-based (header = 1, data เริ่ม 2)
+        const pic = picBuffers[i];
+        if (pic) {
+          const imgId = wb.addImage({ buffer: new Uint8Array(pic.buffer) as any, extension: pic.extension });
+          ws.addImage(imgId, {
+            tl: { col: PIC_COL - 1 + 0.08, row: rowIdx - 1 + 0.08 } as any,
+            ext: { width: 56, height: 56 },
+            editAs: "oneCell",
+          });
+          row.height = 46;
+        } else if (it.picture) {
+          // ฝังรูปไม่สำเร็จ (fetch ล้มเหลว) → fallback เป็นลิงก์เหมือนเดิม
+          const cell = ws.getCell(rowIdx, PIC_COL);
+          cell.value = { text: "เปิดรูป", hyperlink: it.picture } as any;
+          cell.font = { color: { argb: "FF0563C1" }, underline: true };
         }
       });
-      ws["!cols"] = [
-        { wch: 4 }, { wch: 14 }, { wch: 16 }, { wch: 16 }, { wch: 36 },
-        { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 30 }, { wch: 12 },
-        { wch: 16 }, { wch: 14 }, { wch: 16 }, { wch: 14 }, { wch: 22 },
-      ];
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Monthly usage");
+
+      const buf = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
       const safeName = doc.doc_label.replace(/[\\/:*?"<>|]/g, "_");
-      XLSX.writeFile(wb, `${safeName}.xlsx`);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `${safeName}.xlsx`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
     } catch (e: any) {
       toast({ title: "Export ไม่สำเร็จ", description: e.message, variant: "destructive" });
     }
