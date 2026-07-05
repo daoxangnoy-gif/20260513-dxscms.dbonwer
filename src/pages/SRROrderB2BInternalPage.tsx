@@ -5422,6 +5422,22 @@ function POImportPanel({
     toast({ title: `ลบ ${n} แถว`, description: `กด Save เพื่อบันทึกถาวร` });
   };
 
+  // Export ตารางปัจจุบัน (ตามที่ค้นหา/กรองอยู่) เป็น Excel
+  const exportExcel = () => {
+    if (rows.length === 0) { toast({ title: "ไม่มีข้อมูลให้ export", variant: "destructive" }); return; }
+    const data = filtered.map(({ r }) => {
+      const o: Record<string, any> = {};
+      for (const c of cols) o[c.label] = r[c.key] ?? "";
+      return o;
+    });
+    const ws = XLSX.utils.json_to_sheet(data, { header: cols.map((c) => c.label) });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, title.slice(0, 31));
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    XLSX.writeFile(wb, `${title.replace(/\s+/g, "_")}_${stamp}.xlsx`);
+    toast({ title: `Export ${data.length} แถว` });
+  };
+
   return (
     <>
       <div className="flex items-center gap-2 flex-wrap">
@@ -5435,6 +5451,11 @@ function POImportPanel({
         <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={onTemplate}>
           <FileSpreadsheet className="w-3.5 h-3.5" /> Template
         </Button>
+        {can("export") && (
+        <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={exportExcel} disabled={rows.length === 0}>
+          <Download className="w-3.5 h-3.5" /> Export
+        </Button>
+        )}
         {can("create") && (
         <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={onSave} disabled={saving}>
           {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />} Save
