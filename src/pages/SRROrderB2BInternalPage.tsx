@@ -5186,6 +5186,23 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                 <Button size="sm" variant="ghost" className="h-6 px-2 text-[11px]" onClick={() => setVisCols(poDefaultVis())}>ค่าเริ่มต้น</Button>
               </div>
               <div className="max-h-72 overflow-auto py-1">
+                {(() => {
+                  const allKeys = orderedCols.map((c) => c.key);
+                  const allChecked = allKeys.length > 0 && allKeys.every((k) => visCols.has(k));
+                  const someChecked = allKeys.some((k) => visCols.has(k));
+                  return (
+                    <label className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium border-b hover:bg-muted/50 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="h-3.5 w-3.5"
+                        checked={allChecked}
+                        ref={(el) => { if (el) el.indeterminate = !allChecked && someChecked; }}
+                        onChange={() => setVisCols(allChecked ? new Set() : new Set(allKeys))}
+                      />
+                      <span>เลือกทั้งหมด ({visibleCols.length}/{allKeys.length})</span>
+                    </label>
+                  );
+                })()}
                 {orderedCols.map((c) => (
                   <label key={c.key} className="flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-muted/50 cursor-pointer">
                     <input type="checkbox" className="h-3.5 w-3.5" checked={visCols.has(c.key)} onChange={() => toggleCol(c.key)} />
