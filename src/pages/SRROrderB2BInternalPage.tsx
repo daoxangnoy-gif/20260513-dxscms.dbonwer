@@ -4119,6 +4119,7 @@ type POAgg = {
   total: number;
   byBrand: Map<string, number>;
   picByBrand: Map<string, string>; // brand → picture URL (เก็บ URL แรกที่เจอต่อแบรนด์)
+  orderGroups: Set<string>; // Order group ที่พบใน SKU นี้ (อาจมีหลายกลุ่มจากหลายแบรนด์)
 };
 type PORow = {
   division: string;
@@ -4129,6 +4130,7 @@ type PORow = {
   vendor_name: string;
   vendor_currency: string;
   vendor_origin: string;
+  order_group: string;
   id: string;
   barcode: string;
   product_name_en: string;
@@ -4180,6 +4182,7 @@ const PO_FIXED_COLS: POColMeta[] = [
   { key: "remark", label: "Remark", def: true, w: 230, tdCls: "text-muted-foreground" },
   { key: "action", label: "Action", def: true, w: 300, tdCls: "text-muted-foreground" },
   { key: "action2", label: "Action2", def: true, w: 200 },
+  { key: "order_group", label: "Order group", def: true, w: 150 },
   { key: "sku", label: "SKU", def: false, w: 120 },
   { key: "vendor_code", label: "Vendor code", def: true, w: 120 },
   { key: "vendor_name", label: "Vendor name", def: true, w: 220 },
@@ -4202,8 +4205,8 @@ const PO_FIXED_COLS: POColMeta[] = [
   { key: "diff", label: "DIFF", def: true, w: 80, thCls: "text-right", tdCls: "text-right tabular-nums" },
 ];
 const PO_BRAND_W = 90; // ความกว้างเริ่มต้นของคอลัมน์แบรนด์
-const PO_VIS_LS = "po_vis_cols_v4"; // bump version → ล้างค่าเก่าใน localStorage ให้ default ใหม่ทำงาน
-const PO_VIS_MIGRATED = "po_vis_migrated_v4"; // ล้างค่าคอลัมน์เก่าทิ้งครั้งเดียว → กลับไป default ที่กำหนด
+const PO_VIS_LS = "po_vis_cols_v5"; // bump version → ล้างค่าเก่าใน localStorage ให้ default ใหม่ทำงาน
+const PO_VIS_MIGRATED = "po_vis_migrated_v5"; // ล้างค่าคอลัมน์เก่าทิ้งครั้งเดียว → กลับไป default ที่กำหนด
 const PO_W_LS = "po_col_widths";
 const PO_VENDOR_OV_LS = "po_vendor_overrides_v2"; // override vendor code ที่ผู้ใช้คีย์ไว้ (key = sku)
 
@@ -4342,6 +4345,7 @@ const poCellValue = (key: string, r: PORow): React.ReactNode => {
     case "vendor_name": return r.vendor_name || "-";
     case "vendor_currency": return r.vendor_currency || "-";
     case "vendor_origin": return r.vendor_origin || "-";
+    case "order_group": return <span className="block truncate" title={r.order_group}>{r.order_group || "-"}</span>;
     case "po_number": return r.po_number || "-";
     case "po_date": return r.po_date || "-";
     case "po_status": return r.po_status || "-";
@@ -4706,7 +4710,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       for (let from = 0; ; from += PAGE) {
         const { data, error } = await (supabase as any)
           .from("monthly_usage_item")
-          .select("sku_code, barcode, product_name, monthly_qty, doc_id, picture")
+          .select("sku_code, barcode, product_name, monthly_qty, doc_id, picture, order_group")
           .range(from, from + PAGE - 1);
         if (error) throw error;
         if (!data || data.length === 0) break;
@@ -4728,9 +4732,11 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         const brand = brandByDoc.get(it.doc_id) || "";
         if (brand) brandSet.add(brand);
         const qty = Number(it.monthly_qty) || 0;
-        if (!map.has(key)) map.set(key, { sku, barcode: it.barcode || "", product_name: it.product_name || "", total: 0, byBrand: new Map(), picByBrand: new Map() });
+        if (!map.has(key)) map.set(key, { sku, barcode: it.barcode || "", product_name: it.product_name || "", total: 0, byBrand: new Map(), picByBrand: new Map(), orderGroups: new Set() });
         const a = map.get(key)!;
         a.total += qty;
+        const og = String(it.order_group ?? "").trim();
+        if (og) a.orderGroups.add(og);
         if (brand) a.byBrand.set(brand, (a.byBrand.get(brand) || 0) + qty);
         if (brand && it.picture && !a.picByBrand.has(brand)) a.picByBrand.set(brand, it.picture);
         if (!a.barcode && it.barcode) a.barcode = it.barcode;
@@ -4834,6 +4840,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           vendor_name: d.vendor_display_name || "",
           vendor_currency: v.supplier_currency || "",
           vendor_origin: origin,
+          order_group: [...a.orderGroups].sort((x, y) => x.localeCompare(y)).join(" / "),
           id: a.sku,
           barcode: rowBarcode,
           product_name_en: d.product_name_en || a.product_name || "",
@@ -4852,7 +4859,14 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           pictures: [...a.picByBrand.entries()].map(([brand, url]) => ({ url, brand })),
         };
       });
-      rows.sort((x, y) => (x.product_name_en || x.id).localeCompare(y.product_name_en || y.id, undefined, { sensitivity: "base" }));
+      // Sort: Order group → Vendor name → Product name EN
+      rows.sort((x, y) => {
+        const og = (x.order_group || "").localeCompare(y.order_group || "", undefined, { sensitivity: "base" });
+        if (og !== 0) return og;
+        const vn = (x.vendor_name || "").localeCompare(y.vendor_name || "", undefined, { sensitivity: "base" });
+        if (vn !== 0) return vn;
+        return (x.product_name_en || x.id).localeCompare(y.product_name_en || y.id, undefined, { sensitivity: "base" });
+      });
 
       // apply vendor overrides ที่ผู้ใช้คีย์ไว้ก่อนหน้า (รวม origin → Remark/Action ถูกต้อง)
       for (const r of rows) {
