@@ -274,6 +274,8 @@ export default function RangeStorePage() {
   const [pivotSpcFilter, setPivotSpcFilter] = useState<string[]>([]);
   const [pivotTypeStoreFilter, setPivotTypeStoreFilter] = useState<string[]>([]);
   const [importBusy, setImportBusy] = useState(false);
+  // ติกเพื่อข้าม skip "Product Owner ไม่ใช่ Lanexang" ตอน import (ยอมรับสินค้า owner อื่นด้วย)
+  const [importAllowNonLanexang, setImportAllowNonLanexang] = useState(false);
   const [importProgress, setImportProgress] = useState<{ kind: "range" | "super" | "mart"; phase: string; current: number; total: number } | null>(null);
   const [lastImportResult, setLastImportResult] = useState<{ kind: "range" | "super" | "mart"; saved: number; skipped: number; stores: number; skus: number; note: string } | null>(null);
   // Progress for clear (Min/Y) batch deletes
@@ -1438,8 +1440,8 @@ export default function RangeStorePage() {
             continue;
           }
           if (!s.product_name_en) s.product_name_en = m.product_name_en || "";
-          // ❌ Skip: Product Owner ไม่ใช่ Lanexang
-          if (m.product_owner && m.product_owner !== LANEXANG_OWNER) {
+          // ❌ Skip: Product Owner ไม่ใช่ Lanexang (ข้ามได้ถ้าติก importAllowNonLanexang)
+          if (!importAllowNonLanexang && m.product_owner && m.product_owner !== LANEXANG_OWNER) {
             s.reason = "Product Owner ไม่ใช่ Lanexang";
             s.detail = `owner = "${m.product_owner}" (รับเฉพาะ ${LANEXANG_OWNER})`;
             continue;
@@ -2407,15 +2409,25 @@ export default function RangeStorePage() {
                   <div>
                     <div className="text-[10px] font-semibold text-muted-foreground mb-1 flex items-center justify-between">
                       <span>IMPORT</span>
-                      {importProgress && (
-                        <span className="text-primary inline-flex items-center gap-1 normal-case">
-                          <Loader2 className="h-2.5 w-2.5 animate-spin" />
-                          {importProgress.kind.toUpperCase()} · {importProgress.phase}
-                          {importProgress.total > 0 && (
-                            <> · {importProgress.current.toLocaleString()}/{importProgress.total.toLocaleString()} ({Math.round((importProgress.current / importProgress.total) * 100)}%)</>
-                          )}
-                        </span>
-                      )}
+                      <div className="flex items-center gap-2">
+                        <label className="flex items-center gap-1 cursor-pointer normal-case font-normal" title="ติกแล้วตอน import จะไม่ข้ามสินค้าที่ Product Owner ไม่ใช่ Lanexang">
+                          <Checkbox
+                            checked={importAllowNonLanexang}
+                            onCheckedChange={(c) => setImportAllowNonLanexang(!!c)}
+                            className="h-3 w-3"
+                          />
+                          <span>รับ Owner อื่น</span>
+                        </label>
+                        {importProgress && (
+                          <span className="text-primary inline-flex items-center gap-1 normal-case">
+                            <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                            {importProgress.kind.toUpperCase()} · {importProgress.phase}
+                            {importProgress.total > 0 && (
+                              <> · {importProgress.current.toLocaleString()}/{importProgress.total.toLocaleString()} ({Math.round((importProgress.current / importProgress.total) * 100)}%)</>
+                            )}
+                          </span>
+                        )}
+                      </div>
                     </div>
                     {importProgress && importProgress.total > 0 && (
                       <div className="h-1 bg-muted rounded overflow-hidden mb-1">
