@@ -627,7 +627,7 @@ function SRRDCItemPage() {
       setSelectedDocSpc(d.spc_name ? [d.spc_name] : []);
       setVendorFilter(d.vendor_code ? [d.vendor_code] : []);
       setOrderDayFilter([]); setItemTypeFilter(["Basic"]); setBuyingStatusFilter([]); setPoGroupFilter([]); setShowOnlyTTMinGt0(true);
-      setShowData(rows);
+      setShowData(rows.map(r => recalcRow(r)));
       setPage(0);
       setSelectedRows(new Set());
       setActiveCell(null);
@@ -668,7 +668,7 @@ function SRRDCItemPage() {
       setSelectedDocSpc([...new Set(ds.map((d) => d.spc_name).filter(Boolean))]);
       setVendorFilter([...new Set(ds.map((d) => d.vendor_code).filter(Boolean))]);
       setOrderDayFilter([]); setItemTypeFilter(["Basic"]); setBuyingStatusFilter([]); setPoGroupFilter([]); setShowOnlyTTMinGt0(true);
-      setShowData(merged);
+      setShowData(merged.map(r => recalcRow(r)));
       setPage(0);
       setSelectedRows(new Set());
       setActiveCell(null);
@@ -3939,7 +3939,7 @@ function SRRDCItemPage() {
             rowData = patchSnapshotRows((dataMap.get(doc.id) || []) as SRRRow[]);
             setVendorDocs(prev => prev.map(x => x.id === doc.id ? { ...x, data: rowData } : x));
           }
-          setShowData(rowData);
+          setShowData(rowData.map(r => recalcRow(r)));
           setPage(0);
           setSelectedRows(new Set());
           setActiveCell(null);
@@ -3969,7 +3969,7 @@ function SRRDCItemPage() {
             const rows = loadedMap.has(doc.id) ? patchSnapshotRows((loadedMap.get(doc.id) || []) as SRRRow[]) : doc.data;
             for (const r of rows) { if (seen.has(r.id)) continue; seen.add(r.id); merged.push(r); }
           }
-          setShowData(merged);
+          setShowData(merged.map(r => recalcRow(r)));
           setPage(0);
           setSelectedRows(new Set());
           setActiveCell(null);
