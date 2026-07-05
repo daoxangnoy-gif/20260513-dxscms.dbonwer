@@ -541,6 +541,8 @@ function SRRDCItemPage() {
   const [exportDescription, setExportDescription] = useState("");
   const [exportVendors, setExportVendors] = useState<string[]>([]);
   const [exportMaxPerPO, setExportMaxPerPO] = useState<string>("");
+  // ติกเพื่อเปลี่ยน Picking Type / Database ID ใน Excel PO จาก 2540 → 7193 (เฉพาะ DC)
+  const [exportUse7193, setExportUse7193] = useState<boolean>(false);
 
   // Store Type data from DB
   const [storeTypes, setStoreTypes] = useState<{ ship_to: string; code: string; type_store: string; type_doc: string; store_name?: string }[]>([]);
@@ -2677,7 +2679,8 @@ function SRRDCItemPage() {
     const selectedStore = storeTypes.find(st => st.ship_to === pickingType);
     const isStore = selectedStore ? selectedStore.type_store !== "DC" : true;
     const interTransfer = isStore ? "true" : "";
-    const pickingDbId = selectedStore ? (selectedStore.type_store === "DC" ? "2540" : (selectedStore.ship_to || "")) : "";
+    const dcDbId = exportUse7193 ? "7193" : "2540";
+    const pickingDbId = selectedStore ? (selectedStore.type_store === "DC" ? dcDbId : (selectedStore.ship_to || "")) : "";
     const skusForLookup = showData
       .filter(r => exportVendors.includes(r.vendor_code) && r.final_suggest_qty > 0)
       .map(r => r.sku_code);
@@ -4115,7 +4118,15 @@ function SRRDCItemPage() {
               </ScrollArea>
             </div>
           </div>
-          <DialogFooter className="flex gap-2">
+          <DialogFooter className="flex items-center gap-2 sm:justify-between">
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none mr-auto">
+              <Checkbox
+                checked={exportUse7193}
+                onCheckedChange={(c) => setExportUse7193(!!c)}
+                className="h-3.5 w-3.5"
+              />
+              <span>ใช้ ID 7193 (แทน 2540)</span>
+            </label>
             <Button variant="outline" onClick={() => setExportOpen(false)} className="text-xs">ยกเลิก</Button>
             <Button onClick={doExport} className="text-xs">
               <Download className="w-3.5 h-3.5 mr-1" /> Export
