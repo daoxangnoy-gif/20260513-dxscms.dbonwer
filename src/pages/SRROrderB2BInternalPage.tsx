@@ -4965,6 +4965,11 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           "Picking Type / Database ID": idx === 0 ? pick : "",
           "Inter Transfer": idx === 0 ? interTransfer : "",
           "PO Group": idx === 0 ? vc : "",
+          "Vendor name": idx === 0 ? (r.vendor_name || "") : "",
+          "Brand": [...r.byBrand.entries()]
+            .filter(([b, q]) => (q ?? 0) > 0 && (allBrandsSelected || poSelBrands.has(b)))
+            .map(([b]) => b)
+            .join(" / "),
           "Products to Purchase/barcode": r.barcode,
           "Products to Purchase/Product": r.barcode,
           "Product name": r.product_name_en,
