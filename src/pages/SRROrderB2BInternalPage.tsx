@@ -306,6 +306,8 @@ const MU_COLS = [
   { key: "bunit", label: "Barcode Unit", def: 140, min: 90 },
   { key: "uom", label: "UOM", def: 80, min: 60 },
   { key: "pname_en", label: "Product name (EN)", def: 240, min: 120 },
+  { key: "iname", label: "ชื่อสินค้า (import)", def: 220, min: 120 },
+  { key: "ibarcode", label: "Barcode (import)", def: 150, min: 90 },
   { key: "pname", label: "Product name (LA)", def: 240, min: 120 },
   { key: "mqty", label: "Monthly qty", def: 110, min: 80 },
   { key: "order_group", label: "Order group", def: 130, min: 90 },
@@ -321,7 +323,7 @@ const MU_COLS = [
   { key: "act", label: "", def: 74, min: 64 },
 ] as const;
 const MU_COL_KEY = "mu_col_widths_v1";
-const MU_VIS_KEY = "mu_col_visible_v7";
+const MU_VIS_KEY = "mu_col_visible_v8";
 // คอลัมน์ที่ติกซ่อน/แสดงได้ (ยกเว้น # และ action)
 const MU_TOGGLE_COLS = MU_COLS.filter((c) => c.key !== "idx" && c.key !== "act");
 // คอลัมน์อ้างอิงที่ default ซ่อนไว้ (อยากดูค่อยติกเอง) — รวม Product name (LA) + Daily qty
@@ -3572,6 +3574,8 @@ export default function SRROrderB2BInternalPage() {
                                 </td>
                               : <td className="px-2 py-1 text-xs truncate" title={row.product_name_en || "-"}>{row.product_name_en || "-"}</td>
                           )}
+                          {isColShown("iname") && <td className="px-2 py-1 text-xs truncate text-muted-foreground" title={row.imported_name || "-"}>{row.imported_name || "-"}</td>}
+                          {isColShown("ibarcode") && <td className="px-2 py-1 text-xs truncate text-muted-foreground" title={row.barcode || "-"}>{row.barcode || "-"}</td>}
                           {isColShown("pname") && <td className="px-1 py-1">
                             <Input
                               data-r={idx}
