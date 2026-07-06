@@ -89,21 +89,24 @@ async function extractImagesFromXlsx(ab: ArrayBuffer): Promise<Map<number, { dat
   try {
     const JSZip = (await import("jszip")).default;
     const zip = await JSZip.loadAsync(ab);
+    // ใช้ result ก้อนเดียวรวมทั้ง 2 method (Method 2 เติมแถวที่ Method 1 ยังไม่มี)
+    const result = new Map<number, { data: Uint8Array; ext: string }>();
 
-    // --- Method 1: Traditional drawing XML (standard xlsx / old WPS) ---
-    const drawingFile = zip.file(/^xl\/drawings\/drawing\d+\.xml$/)?.[0];
-    const drawingRelsFile = zip.file(/^xl\/drawings\/_rels\/drawing\d+\.xml\.rels$/)?.[0];
-    if (drawingFile && drawingRelsFile) {
-      const [drawingXml, drawingRelsXml] = await Promise.all([
-        drawingFile.async("string"),
-        drawingRelsFile.async("string"),
-      ]);
+    // --- Method 1: Traditional drawing XML (รูปลอย) — อ่าน "ทุก" drawing part ---
+    const drawingFiles = zip.file(/^xl\/drawings\/drawing\d+\.xml$/) || [];
+    const drawingRelsByName = new Map<string, any>();
+    for (const rf of (zip.file(/^xl\/drawings\/_rels\/drawing\d+\.xml\.rels$/) || [])) {
+      drawingRelsByName.set(rf.name.replace("/_rels/", "/").replace(/\.rels$/, ""), rf);
+    }
+    for (const df of drawingFiles) {
+      const relsFile = drawingRelsByName.get(df.name);
+      if (!relsFile) continue;
+      const [drawingXml, drawingRelsXml] = await Promise.all([df.async("string"), relsFile.async("string")]);
       const rIdToPath = new Map<string, string>();
       for (const [, id, target] of drawingRelsXml.matchAll(/Id="([^"]+)"[^>]*Target="([^"]+)"/g)) {
         if (/\.(png|jpe?g|gif|webp|bmp)/i.test(target))
           rIdToPath.set(id, "xl/media/" + target.replace(/^.*\//, ""));
       }
-      const result = new Map<number, { data: Uint8Array; ext: string }>();
       const anchorRe = /<xdr:(?:two|one)CellAnchor[\s\S]*?<\/xdr:(?:two|one)CellAnchor>/g;
       for (const [anchor] of drawingXml.matchAll(anchorRe)) {
         const rowM = anchor.match(/<xdr:from>[\s\S]*?<xdr:row>(\d+)<\/xdr:row>/);
@@ -118,7 +121,6 @@ async function extractImagesFromXlsx(ab: ArrayBuffer): Promise<Map<number, { dat
         const ext = imgPath.split(".").pop()?.toLowerCase() || "png";
         result.set(row0, { data, ext });
       }
-      if (result.size > 0) return result;
     }
 
     // --- Method 2: Excel 365 Rich Value / Cell Images (WPS xlsx) ---
@@ -174,7 +176,6 @@ async function extractImagesFromXlsx(ab: ArrayBuffer): Promise<Map<number, { dat
         vmPos++;
       }
       // 5. sheet XML: <c r="COLROW" vm="N"> → vmIdx=N-1 → fmIdx → rvIdx → rId → media
-      const result = new Map<number, { data: Uint8Array; ext: string }>();
       for (const m of sheetXml.matchAll(/<c\b([^>]*)>/g)) {
         const attrs = m[1];
         const rM = attrs.match(/\br="([A-Z]+)(\d+)"/);
@@ -196,10 +197,9 @@ async function extractImagesFromXlsx(ab: ArrayBuffer): Promise<Map<number, { dat
         const ext = mediaPath.split(".").pop()?.toLowerCase() || "png";
         result.set(xdrRow, { data, ext });
       }
-      if (result.size > 0) return result;
     }
 
-    return new Map();
+    return result;
   } catch {
     return new Map();
   }
