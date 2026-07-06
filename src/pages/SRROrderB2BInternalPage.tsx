@@ -5147,8 +5147,13 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         ID: r.id,
         Barcode: r.barcode,
         "Product name EN": r.product_name_en,
+        "Picture": r.pictures[0]?.url || "", // จะถูกแปลงเป็นสูตร =IMAGE ด้านล่าง
+        "Picture From": r.pictures.length
+          ? r.pictures[0].brand + (r.pictures.length > 1 ? ` +${r.pictures.length - 1}` : "")
+          : "",
         "Stock DC": r.stock_dc ?? "",
         "Stock DC (KR)": r.stock_dc_kr ?? "",
+        "Brand Apply": [...r.byBrand.values()].filter((q) => (Number(q) || 0) > 0).length,
       };
       for (const b of poBrands) base[b] = r.byBrand.get(b) ?? "";
       base["Total qty"] = r.total;
@@ -5156,6 +5161,17 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       return base;
     });
     const ws = XLSX.utils.json_to_sheet(out);
+    // แปลงคอลัมน์ Picture เป็นสูตร =IMAGE(url) (Excel 365) — _xlfn. กัน #NAME?
+    const picColIdx = Object.keys(out[0] || {}).indexOf("Picture");
+    if (picColIdx >= 0) {
+      filteredPoRows.forEach((r, i) => {
+        const url = r.pictures[0]?.url;
+        if (url) {
+          const ref = XLSX.utils.encode_cell({ c: picColIdx, r: i + 1 }); // +1 = ข้าม header
+          ws[ref] = { t: "s", v: "", f: `_xlfn.IMAGE("${url}")` } as any;
+        }
+      });
+    }
     // ซ่อนคอลัมน์ SKU (ลำดับที่ 6 → index 5)
     const skuIdx = Object.keys(out[0] || {}).indexOf("SKU");
     if (skuIdx >= 0) {
