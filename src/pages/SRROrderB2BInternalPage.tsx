@@ -790,8 +790,8 @@ export default function SRROrderB2BInternalPage() {
         d.buying_status || "", vendorOrigin,
       ]);
       const rowIdx = row.number; // 1-based (header = 1, data เริ่ม 2)
+      row.height = 36; // ทุกแถวสูงเท่ากัน ~48px (มี/ไม่มีรูปก็เท่ากัน)
       if (it.picture) {
-        row.height = 60; // ให้ =IMAGE โชว์รูปได้พอเห็น (ปรับสูงต่ำได้)
         const linkCell = ws.getCell(rowIdx, PIC_COL);
         linkCell.value = { text: "เปิดรูป", hyperlink: it.picture } as any;
         linkCell.font = { color: { argb: "FF0563C1" }, underline: true };
@@ -879,8 +879,8 @@ export default function SRROrderB2BInternalPage() {
           d.buying_status || "", vendorOrigin,
         ]);
         const rowIdx = row.number;
+        row.height = 36; // ทุกแถวสูงเท่ากัน ~48px (มี/ไม่มีรูปก็เท่ากัน)
         if (it.picture) {
-          row.height = 60; // ให้ =IMAGE โชว์รูปได้พอเห็น (ปรับสูงต่ำได้)
           const linkCell = ws.getCell(rowIdx, PIC_COL);
           linkCell.value = { text: "เปิดรูป", hyperlink: it.picture } as any;
           linkCell.font = { color: { argb: "FF0563C1" }, underline: true };
