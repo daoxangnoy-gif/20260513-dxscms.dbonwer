@@ -796,7 +796,7 @@ export default function SRROrderB2BInternalPage() {
         linkCell.value = { text: "เปิดรูป", hyperlink: it.picture } as any;
         linkCell.font = { color: { argb: "FF0563C1" }, underline: true };
         // Excel 365: แสดงรูปในเซลล์จาก URL (เวอร์ชันที่ไม่รองรับจะขึ้น #NAME? — ใช้คอลัมน์ลิงก์แทน)
-        ws.getCell(rowIdx, PIC_COL + 1).value = { formula: `IMAGE("${it.picture}")` } as any;
+        ws.getCell(rowIdx, PIC_COL + 1).value = { formula: `_xlfn.IMAGE("${it.picture}")` } as any;
       }
     });
     return true;
@@ -885,7 +885,7 @@ export default function SRROrderB2BInternalPage() {
           linkCell.value = { text: "เปิดรูป", hyperlink: it.picture } as any;
           linkCell.font = { color: { argb: "FF0563C1" }, underline: true };
           // Excel 365: แสดงรูปในเซลล์จาก URL (เวอร์ชันที่ไม่รองรับจะขึ้น #NAME? — ใช้คอลัมน์ลิงก์แทน)
-          ws.getCell(rowIdx, PIC_COL + 1).value = { formula: `IMAGE("${it.picture}")` } as any;
+          ws.getCell(rowIdx, PIC_COL + 1).value = { formula: `_xlfn.IMAGE("${it.picture}")` } as any;
         }
       });
 
