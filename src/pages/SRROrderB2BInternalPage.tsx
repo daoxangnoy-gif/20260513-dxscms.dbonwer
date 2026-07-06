@@ -830,9 +830,10 @@ export default function SRROrderB2BInternalPage() {
       const pic = picBuffers[i];
       if (pic) {
         const imgId = wb.addImage({ buffer: new Uint8Array(pic.buffer) as any, extension: pic.extension });
+        // two-cell anchor (tl→br) + เว้นขอบเล็กน้อย → รูปฝังในเซลล์ ขยับ/ย่อตามเซลล์ (ไม่ลอย)
         ws.addImage(imgId, {
-          tl: { col: PIC_COL - 1 + 0.08, row: rowIdx - 1 + 0.08 } as any,
-          ext: { width: 56, height: 56 },
+          tl: { col: PIC_COL - 1 + 0.06, row: rowIdx - 1 + 0.06 } as any,
+          br: { col: PIC_COL - 0.06, row: rowIdx - 0.06 } as any,
           editAs: "oneCell",
         });
         row.height = 46;
@@ -920,9 +921,10 @@ export default function SRROrderB2BInternalPage() {
         const pic = picBuffers[i];
         if (pic) {
           const imgId = wb.addImage({ buffer: new Uint8Array(pic.buffer) as any, extension: pic.extension });
+          // two-cell anchor (tl→br) + เว้นขอบเล็กน้อย → รูปฝังในเซลล์ ขยับ/ย่อตามเซลล์ (ไม่ลอย)
           ws.addImage(imgId, {
-            tl: { col: PIC_COL - 1 + 0.08, row: rowIdx - 1 + 0.08 } as any,
-            ext: { width: 56, height: 56 },
+            tl: { col: PIC_COL - 1 + 0.06, row: rowIdx - 1 + 0.06 } as any,
+            br: { col: PIC_COL - 0.06, row: rowIdx - 0.06 } as any,
             editAs: "oneCell",
           });
           row.height = 46;
