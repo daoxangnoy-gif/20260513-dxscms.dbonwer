@@ -213,6 +213,7 @@ type MonthlyUsageForm = {
   barcode_unit: string;
   product_name: string;     // ชื่อสินค้า LA (ดั้งเดิม — ซ่อน default)
   product_name_en: string;  // ชื่อสินค้า EN
+  imported_name: string;    // ชื่อสินค้าดิบที่พิมพ์ตอน import (ไม่ถูก resolve ทับ)
   uom: string;
   monthly_qty: string;
   order_group: string;  // ใช้แยก/จัดกลุ่มออเดอร์ภายหลัง (คีย์เอง)
@@ -255,6 +256,7 @@ const EMPTY_MU: MonthlyUsageForm = {
   barcode_unit: "",
   product_name: "",
   product_name_en: "",
+  imported_name: "",
   uom: "",
   monthly_qty: "",
   order_group: "",
@@ -772,8 +774,8 @@ export default function SRROrderB2BInternalPage() {
     }
     const headers = ["#", "ID (SKU)", "Barcode", "Barcode Unit", "Product name", "UOM",
       "3monthly qty", "Monthly qty", "Remark", "รูป", "รูป (IMAGE)",
-      "Division Group", "Division", "Department", "Buying Status", "Vendor Origin"];
-    const widths = [4, 14, 16, 16, 36, 8, 14, 12, 30, 14, 18, 16, 14, 16, 14, 22];
+      "Division Group", "Division", "Department", "Buying Status", "Vendor Origin", "Product name (import)"];
+    const widths = [4, 14, 16, 16, 36, 8, 14, 12, 30, 14, 18, 16, 14, 16, 14, 22, 36];
     const PIC_COL = 10; // 1-based: "รูป"(ลิงก์) · "รูป (IMAGE)" = PIC_COL+1
     const ws = wb.addWorksheet(sheetName);
     ws.columns = headers.map((h, i) => ({ header: h, width: widths[i] }));
@@ -790,6 +792,7 @@ export default function SRROrderB2BInternalPage() {
         it.remark || "", "", "", // "รูป"(ลิงก์) + "รูป (IMAGE)"(สูตร) — ใส่ด้านล่าง
         d.division_group || "", d.division || "", d.department || "",
         d.buying_status || "", vendorOrigin,
+        it.imported_name || "", // Product name (import) — ชื่อดิบจากไฟล์
       ]);
       const rowIdx = row.number; // 1-based (header = 1, data เริ่ม 2)
       row.height = 36; // ทุกแถวสูงเท่ากัน ~48px (มี/ไม่มีรูปก็เท่ากัน)
@@ -862,8 +865,8 @@ export default function SRROrderB2BInternalPage() {
       }
       const headers = ["#", "แบรนด์", "ID (SKU)", "Barcode", "Barcode Unit", "Product name", "UOM",
         "3monthly qty", "Monthly qty", "Remark", "รูป", "รูป (IMAGE)",
-        "Division Group", "Division", "Department", "Buying Status", "Vendor Origin"];
-      const widths = [4, 20, 14, 16, 16, 36, 8, 14, 12, 30, 14, 18, 16, 14, 16, 14, 22];
+        "Division Group", "Division", "Department", "Buying Status", "Vendor Origin", "Product name (import)"];
+      const widths = [4, 20, 14, 16, 16, 36, 8, 14, 12, 30, 14, 18, 16, 14, 16, 14, 22, 36];
       const PIC_COL = 11; // 1-based: "รูป"(ลิงก์) · "รูป (IMAGE)" = PIC_COL+1
       const wb = new ExcelJS.Workbook();
       const ws = wb.addWorksheet("Monthly usage");
@@ -882,6 +885,7 @@ export default function SRROrderB2BInternalPage() {
           it.remark || "", "", "", // "รูป"(ลิงก์) + "รูป (IMAGE)"(สูตร) — ใส่ด้านล่าง
           d.division_group || "", d.division || "", d.department || "",
           d.buying_status || "", vendorOrigin,
+          it.imported_name || "", // Product name (import) — ชื่อดิบจากไฟล์
         ]);
         const rowIdx = row.number;
         row.height = 36; // ทุกแถวสูงเท่ากัน ~48px (มี/ไม่มีรูปก็เท่ากัน)
@@ -1228,6 +1232,7 @@ export default function SRROrderB2BInternalPage() {
           product_name: it.product_name ?? "",
           // ถ้าพบใน master ใช้ EN จาก master, ถ้าไม่พบ fallback เป็นชื่อที่ import มา (เก็บใน it.product_name)
           product_name_en: d.product_name_en ?? (it.product_name ?? ""),
+          imported_name: it.imported_name ?? "",
           uom: it.uom ?? "",
           monthly_qty: it.monthly_qty != null ? String(it.monthly_qty) : "",
           order_group: it.order_group ?? "",
@@ -1457,6 +1462,7 @@ export default function SRROrderB2BInternalPage() {
             uom: res.found ? res.uom : "",
             product_name: res.found ? res.product_name : (importedName || "ไม่พบข้อมูล"),
             product_name_en: res.found ? res.product_name_en : importedName,
+            imported_name: importedName, // ชื่อดิบจากไฟล์ import (ไม่ถูก resolve ทับ)
             monthly_qty: qty,
             order_group: orderGroup,
             picture,
@@ -1743,6 +1749,7 @@ export default function SRROrderB2BInternalPage() {
         product_name: it.product_name ?? "",
         // ชื่อ EN จาก master ก่อน, ถ้าไม่พบ fallback เป็นชื่อที่เก็บใน item (ชื่อ import)
         product_name_en: (it.sku_code && enMap[it.sku_code]) || it.product_name || "",
+        imported_name: it.imported_name ?? "",
         uom: it.uom ?? "",
         monthly_qty: it.monthly_qty != null ? String(it.monthly_qty) : "",
         picture: it.picture ?? "",
@@ -1875,6 +1882,7 @@ export default function SRROrderB2BInternalPage() {
               uom: res.found ? res.uom : "",
               product_name: res.found ? res.product_name : (rr.name || "ไม่พบข้อมูล"),
               product_name_en: res.found ? (res.product_name_en || "") : rr.name,
+              imported_name: rr.name || "", // ชื่อดิบจากไฟล์ import
               monthly_qty: rr.qty,
               order_group: rr.orderGroup,
               remark: rr.remark,
@@ -1913,6 +1921,7 @@ export default function SRROrderB2BInternalPage() {
           barcode: x.barcode || null,
           barcode_unit: x.barcode_unit || null,
           product_name: x.product_name || null,
+          imported_name: (x as any).imported_name?.trim() || null,
           uom: x.uom || null,
           monthly_qty: x.monthly_qty.trim() ? Number(x.monthly_qty) : null,
           daily_qty: x.monthly_qty.trim() ? Number(x.monthly_qty) / 30 : null,
@@ -2029,6 +2038,7 @@ export default function SRROrderB2BInternalPage() {
         barcode: r.barcode.trim() || null,
         barcode_unit: r.barcode_unit || null,
         product_name: r.product_name || null,
+        imported_name: r.imported_name?.trim() || null,
         uom: r.uom || null,
         monthly_qty: r.monthly_qty.trim() ? Number(r.monthly_qty) : null,
         daily_qty: r.monthly_qty.trim() ? Number(r.monthly_qty) / 30 : null,
