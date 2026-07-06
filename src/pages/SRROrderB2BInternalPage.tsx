@@ -743,94 +743,130 @@ export default function SRROrderB2BInternalPage() {
     }
   };
 
+  // เลือกเอกสาร (multi-select) สำหรับ Export หลายฉบับ
+  const [muSelected, setMuSelected] = useState<Set<string>>(new Set());
+  const toggleMuSel = (id: string) => setMuSelected((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  // เพิ่ม worksheet ของ 1 เอกสารลง workbook (คืน false ถ้าเอกสารว่าง) — ใช้ร่วม single + multi export
+  const addMuSheet = async (wb: any, ExcelJS: any, doc: MUDoc, sheetName: string): Promise<boolean> => {
+    const { data, error } = await (supabase as any)
+      .from("monthly_usage_item")
+      .select("*")
+      .eq("doc_id", doc.id)
+      .order("sort_order", { ascending: true });
+    if (error) throw error;
+    const items = data || [];
+    if (items.length === 0) return false;
+    // enrich ข้อมูลอ้างอิงจาก data_master ตาม sku_code
+    const skus = [...new Set(items.map((it: any) => it.sku_code).filter(Boolean))] as string[];
+    const dmMap: Record<string, any> = {};
+    if (skus.length) {
+      const { data: dm } = await (supabase as any)
+        .from("data_master")
+        .select("sku_code, division_group, division, department, buying_status, vendor_code, vendor_display_name")
+        .in("sku_code", skus);
+      for (const d of (dm || []) as any[]) { if (d.sku_code && !dmMap[d.sku_code]) dmMap[d.sku_code] = d; }
+    }
+    const headers = ["#", "ID (SKU)", "Barcode", "Barcode Unit", "Product name", "UOM",
+      "Monthly qty", "Daily qty", "Remark", "รูป",
+      "Division Group", "Division", "Department", "Buying Status", "Vendor Origin"];
+    const widths = [4, 14, 16, 16, 36, 8, 12, 12, 30, 14, 16, 14, 16, 14, 22];
+    const PIC_COL = 10; // 1-based ของคอลัมน์ "รูป"
+    const ws = wb.addWorksheet(sheetName);
+    ws.columns = headers.map((h, i) => ({ header: h, width: widths[i] }));
+    ws.getRow(1).font = { bold: true };
+
+    // ดึงรูปทั้งหมดแบบ parallel: public URL → buffer + นามสกุล (สำหรับฝังลงเซลล์)
+    const picBuffers = await Promise.all(items.map(async (it: any) => {
+      if (!it.picture) return null;
+      try {
+        const res = await fetch(it.picture);
+        if (!res.ok) return null;
+        const ab = await res.arrayBuffer();
+        const m = String(it.picture).toLowerCase().match(/\.(png|jpe?g|gif)(?:$|\?)/);
+        let ext = m ? m[1] : ((res.headers.get("content-type") || "").split("/")[1] || "png");
+        if (ext === "jpg") ext = "jpeg";
+        if (!["png", "jpeg", "gif"].includes(ext)) ext = "png";
+        return { buffer: ab, extension: ext as "png" | "jpeg" | "gif" };
+      } catch { return null; }
+    }));
+
+    items.forEach((it: any, i: number) => {
+      const d = dmMap[it.sku_code] || {};
+      const vendorOrigin = (d.vendor_code && vendorOriginMapRef.current[d.vendor_code]) || "";
+      const row = ws.addRow([
+        i + 1, it.sku_code || "", it.barcode || "", it.barcode_unit || "",
+        it.product_name || "", it.uom || "",
+        it.monthly_qty ?? "", it.daily_qty != null ? Number(it.daily_qty).toFixed(2) : "",
+        it.remark || "", "", // "รูป" เว้นว่างไว้ เดี๋ยวฝังรูปทับ
+        d.division_group || "", d.division || "", d.department || "",
+        d.buying_status || "", vendorOrigin,
+      ]);
+      const rowIdx = row.number; // 1-based (header = 1, data เริ่ม 2)
+      const pic = picBuffers[i];
+      if (pic) {
+        const imgId = wb.addImage({ buffer: new Uint8Array(pic.buffer) as any, extension: pic.extension });
+        ws.addImage(imgId, {
+          tl: { col: PIC_COL - 1 + 0.08, row: rowIdx - 1 + 0.08 } as any,
+          ext: { width: 56, height: 56 },
+          editAs: "oneCell",
+        });
+        row.height = 46;
+      } else if (it.picture) {
+        // ฝังรูปไม่สำเร็จ (fetch ล้มเหลว) → fallback เป็นลิงก์เหมือนเดิม
+        const cell = ws.getCell(rowIdx, PIC_COL);
+        cell.value = { text: "เปิดรูป", hyperlink: it.picture } as any;
+        cell.font = { color: { argb: "FF0563C1" }, underline: true };
+      }
+    });
+    return true;
+  };
+
+  const downloadWb = async (wb: any, fileBase: string) => {
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `${fileBase}.xlsx`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
+
   const exportDoc = async (doc: MUDoc) => {
     try {
-      const { data, error } = await (supabase as any)
-        .from("monthly_usage_item")
-        .select("*")
-        .eq("doc_id", doc.id)
-        .order("sort_order", { ascending: true });
-      if (error) throw error;
-      const items = data || [];
-      if (items.length === 0) {
-        toast({ title: "เอกสารว่าง ไม่มีรายการให้ export", variant: "destructive" });
-        return;
-      }
-      // enrich ข้อมูลอ้างอิงจาก data_master ตาม sku_code
-      const skus = [...new Set(items.map((it: any) => it.sku_code).filter(Boolean))] as string[];
-      const dmMap: Record<string, any> = {};
-      if (skus.length) {
-        const { data: dm } = await (supabase as any)
-          .from("data_master")
-          .select("sku_code, division_group, division, department, buying_status, vendor_code, vendor_display_name")
-          .in("sku_code", skus);
-        for (const d of (dm || []) as any[]) { if (d.sku_code && !dmMap[d.sku_code]) dmMap[d.sku_code] = d; }
-      }
-      const headers = ["#", "ID (SKU)", "Barcode", "Barcode Unit", "Product name", "UOM",
-        "Monthly qty", "Daily qty", "Remark", "รูป",
-        "Division Group", "Division", "Department", "Buying Status", "Vendor Origin"];
-      const widths = [4, 14, 16, 16, 36, 8, 12, 12, 30, 14, 16, 14, 16, 14, 22];
-      const PIC_COL = 10; // 1-based ของคอลัมน์ "รูป"
-
-      // โหลด ExcelJS แบบ dynamic เฉพาะตอน export (ไม่ถ่วง bundle ตอนเปิดหน้า)
       const ExcelJS = (await import("exceljs")).default;
       const wb = new ExcelJS.Workbook();
-      const ws = wb.addWorksheet("Monthly usage");
-      ws.columns = headers.map((h, i) => ({ header: h, width: widths[i] }));
-      ws.getRow(1).font = { bold: true };
+      const ok = await addMuSheet(wb, ExcelJS, doc, "Monthly usage");
+      if (!ok) { toast({ title: "เอกสารว่าง ไม่มีรายการให้ export", variant: "destructive" }); return; }
+      await downloadWb(wb, doc.doc_label.replace(/[\\/:*?"<>|]/g, "_"));
+    } catch (e: any) {
+      toast({ title: "Export ไม่สำเร็จ", description: e.message, variant: "destructive" });
+    }
+  };
 
-      // ดึงรูปทั้งหมดแบบ parallel: public URL → buffer + นามสกุล (สำหรับฝังลงเซลล์)
-      const picBuffers = await Promise.all(items.map(async (it: any) => {
-        if (!it.picture) return null;
-        try {
-          const res = await fetch(it.picture);
-          if (!res.ok) return null;
-          const ab = await res.arrayBuffer();
-          const m = String(it.picture).toLowerCase().match(/\.(png|jpe?g|gif)(?:$|\?)/);
-          let ext = m ? m[1] : ((res.headers.get("content-type") || "").split("/")[1] || "png");
-          if (ext === "jpg") ext = "jpeg";
-          if (!["png", "jpeg", "gif"].includes(ext)) ext = "png";
-          return { buffer: ab, extension: ext as "png" | "jpeg" | "gif" };
-        } catch { return null; }
-      }));
-
-      items.forEach((it: any, i: number) => {
-        const d = dmMap[it.sku_code] || {};
-        const vendorOrigin = (d.vendor_code && vendorOriginMapRef.current[d.vendor_code]) || "";
-        const row = ws.addRow([
-          i + 1, it.sku_code || "", it.barcode || "", it.barcode_unit || "",
-          it.product_name || "", it.uom || "",
-          it.monthly_qty ?? "", it.daily_qty != null ? Number(it.daily_qty).toFixed(2) : "",
-          it.remark || "", "", // "รูป" เว้นว่างไว้ เดี๋ยวฝังรูปทับ
-          d.division_group || "", d.division || "", d.department || "",
-          d.buying_status || "", vendorOrigin,
-        ]);
-        const rowIdx = row.number; // 1-based (header = 1, data เริ่ม 2)
-        const pic = picBuffers[i];
-        if (pic) {
-          const imgId = wb.addImage({ buffer: new Uint8Array(pic.buffer) as any, extension: pic.extension });
-          ws.addImage(imgId, {
-            tl: { col: PIC_COL - 1 + 0.08, row: rowIdx - 1 + 0.08 } as any,
-            ext: { width: 56, height: 56 },
-            editAs: "oneCell",
-          });
-          row.height = 46;
-        } else if (it.picture) {
-          // ฝังรูปไม่สำเร็จ (fetch ล้มเหลว) → fallback เป็นลิงก์เหมือนเดิม
-          const cell = ws.getCell(rowIdx, PIC_COL);
-          cell.value = { text: "เปิดรูป", hyperlink: it.picture } as any;
-          cell.font = { color: { argb: "FF0563C1" }, underline: true };
-        }
-      });
-
-      const buf = await wb.xlsx.writeBuffer();
-      const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-      const safeName = doc.doc_label.replace(/[\\/:*?"<>|]/g, "_");
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = `${safeName}.xlsx`;
-      document.body.appendChild(a); a.click(); a.remove();
-      URL.revokeObjectURL(url);
+  // Export หลายเอกสารที่เลือก → 1 ไฟล์ Excel (1 sheet ต่อ 1 เอกสาร)
+  const exportSelectedDocs = async () => {
+    const selectedDocs = docs.filter((d) => muSelected.has(d.id));
+    if (selectedDocs.length === 0) { toast({ title: "ยังไม่ได้เลือกเอกสาร", variant: "destructive" }); return; }
+    try {
+      const ExcelJS = (await import("exceljs")).default;
+      const wb = new ExcelJS.Workbook();
+      const usedNames = new Set<string>();
+      let added = 0;
+      for (let i = 0; i < selectedDocs.length; i++) {
+        const d = selectedDocs[i];
+        // sheet name: brand (<=27 chars) + suffix กันซ้ำ, ตัดอักขระต้องห้ามของ Excel
+        const base = (d.brand_name || d.doc_label || `Doc${i + 1}`).replace(/[\\/*?:\[\]]/g, " ").trim().slice(0, 27) || `Doc${i + 1}`;
+        let name = base; let n = 1;
+        while (usedNames.has(name)) { name = `${base.slice(0, 27)} ${++n}`; }
+        usedNames.add(name);
+        const ok = await addMuSheet(wb, ExcelJS, d, name);
+        if (ok) added++;
+      }
+      if (added === 0) { toast({ title: "เอกสารที่เลือกว่างทั้งหมด", variant: "destructive" }); return; }
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+      await downloadWb(wb, `MonthlyUsage_${added}docs_${stamp}`);
+      toast({ title: `Export ${added} เอกสาร` });
     } catch (e: any) {
       toast({ title: "Export ไม่สำเร็จ", description: e.message, variant: "destructive" });
     }
@@ -2731,11 +2767,25 @@ export default function SRROrderB2BInternalPage() {
               <BarChart3 className="w-4 h-4 text-muted-foreground" />
               <span className="text-sm font-medium">เอกสาร Monthly usage</span>
               {docsLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
+              {muSelected.size > 0 && can("b2b_brand", "export") && (
+                <Button size="sm" className="h-7 gap-1.5 text-xs ml-auto" onClick={exportSelectedDocs}>
+                  <Download className="w-3.5 h-3.5" /> Export ที่เลือก ({muSelected.size})
+                </Button>
+              )}
             </div>
             <div className="flex-1 overflow-auto min-h-0">
             <table className="w-full text-sm">
               <thead className="sticky top-0 z-30">
                 <tr className="text-left text-muted-foreground [&_th]:bg-background [&_th]:shadow-[0_1px_0_0_hsl(var(--border))]">
+                  <th className="px-3 py-1.5 font-medium w-10">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 align-middle"
+                      checked={docs.length > 0 && docs.every((d) => muSelected.has(d.id))}
+                      ref={(el) => { if (el) el.indeterminate = docs.some((d) => muSelected.has(d.id)) && !docs.every((d) => muSelected.has(d.id)); }}
+                      onChange={(e) => setMuSelected(e.target.checked ? new Set(docs.map((d) => d.id)) : new Set())}
+                    />
+                  </th>
                   <th className="px-3 py-1.5 font-medium">Doc</th>
                   <th className="px-3 py-1.5 font-medium w-28">Logo</th>
                   <th className="px-3 py-1.5 font-medium">Brand</th>
@@ -2750,10 +2800,13 @@ export default function SRROrderB2BInternalPage() {
                 {groupDocsByBrand(docs).map(({ group, items }) => (
                   <Fragment key={group}>
                     <tr className="bg-muted/60 border-b">
-                      <td colSpan={8} className="px-3 py-1 text-xs font-semibold text-primary/80">{group} · {items.length}</td>
+                      <td colSpan={9} className="px-3 py-1 text-xs font-semibold text-primary/80">{group} · {items.length}</td>
                     </tr>
                     {items.map((d) => (
-                  <tr key={d.id} className="border-b last:border-0 hover:bg-muted/40">
+                  <tr key={d.id} className={cn("border-b last:border-0 hover:bg-muted/40", muSelected.has(d.id) && "bg-primary/5")}>
+                    <td className="px-3 py-1.5">
+                      <input type="checkbox" className="h-4 w-4 align-middle" checked={muSelected.has(d.id)} onChange={() => toggleMuSel(d.id)} />
+                    </td>
                     <td className="px-3 py-1.5 font-medium">{d.doc_label}</td>
                     <td className="px-3 py-1.5">
                       <label
@@ -2870,7 +2923,7 @@ export default function SRROrderB2BInternalPage() {
                 ))}
                 {docs.length === 0 && !docsLoading && (
                   <tr>
-                    <td colSpan={8} className="px-3 py-6 text-center text-muted-foreground">
+                    <td colSpan={9} className="px-3 py-6 text-center text-muted-foreground">
                       ยังไม่มีเอกสาร — กด "Monthly usage" เพื่อสร้างใหม่
                     </td>
                   </tr>
