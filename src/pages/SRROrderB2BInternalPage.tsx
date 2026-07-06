@@ -746,6 +746,8 @@ export default function SRROrderB2BInternalPage() {
   // เลือกเอกสาร (multi-select) สำหรับ Export หลายฉบับ
   const [muSelected, setMuSelected] = useState<Set<string>>(new Set());
   const toggleMuSel = (id: string) => setMuSelected((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const [muExporting, setMuExporting] = useState(false);
+  const [muExportMsg, setMuExportMsg] = useState<{ phase: string; current: number; total: number } | null>(null);
 
   // โหลด bytes ของรูปสำหรับฝังใน Excel — ลองผ่าน Supabase Storage client ก่อน (เลี่ยง CORS ของ public CDN URL)
   // แล้วค่อย fallback เป็น fetch ตรง คืน null ถ้าโหลดไม่ได้
@@ -873,12 +875,17 @@ export default function SRROrderB2BInternalPage() {
   const exportSelectedDocs = async () => {
     const selectedDocs = docs.filter((d) => muSelected.has(d.id));
     if (selectedDocs.length === 0) { toast({ title: "ยังไม่ได้เลือกเอกสาร", variant: "destructive" }); return; }
+    setMuExporting(true);
+    setMuExportMsg({ phase: "เริ่มต้น", current: 0, total: selectedDocs.length });
     try {
       const ExcelJS = (await import("exceljs")).default;
       // รวม items ของทุกเอกสาร (ต่อกันลงล่าง) + แนบชื่อแบรนด์ต่อแถว
       const allRows: { it: any; brand: string }[] = [];
       const allSkus = new Set<string>();
+      let di = 0;
       for (const d of selectedDocs) {
+        di++;
+        setMuExportMsg({ phase: `ดึงรายการ: ${d.brand_name || d.doc_label || ""}`, current: di, total: selectedDocs.length });
         const { data, error } = await (supabase as any)
           .from("monthly_usage_item").select("*").eq("doc_id", d.id).order("sort_order", { ascending: true });
         if (error) throw error;
@@ -886,6 +893,7 @@ export default function SRROrderB2BInternalPage() {
       }
       if (allRows.length === 0) { toast({ title: "เอกสารที่เลือกว่างทั้งหมด", variant: "destructive" }); return; }
       // enrich data_master
+      setMuExportMsg({ phase: "เตรียมข้อมูลสินค้า", current: 0, total: 0 });
       const dmMap: Record<string, any> = {};
       const skuArr = [...allSkus];
       for (let i = 0; i < skuArr.length; i += 500) {
@@ -905,7 +913,15 @@ export default function SRROrderB2BInternalPage() {
       ws.columns = headers.map((h, i) => ({ header: h, width: widths[i] }));
       ws.getRow(1).font = { bold: true };
 
-      const picBuffers = await Promise.all(allRows.map((r) => loadPicBytes(r.it.picture)));
+      setMuExportMsg({ phase: "โหลดรูป", current: 0, total: allRows.length });
+      let picDone = 0;
+      const picBuffers = await Promise.all(allRows.map(async (r) => {
+        const res = await loadPicBytes(r.it.picture);
+        picDone++;
+        if (picDone % 5 === 0 || picDone === allRows.length) setMuExportMsg({ phase: "โหลดรูป", current: picDone, total: allRows.length });
+        return res;
+      }));
+      setMuExportMsg({ phase: "สร้างไฟล์ Excel", current: 0, total: 0 });
       allRows.forEach(({ it, brand }, i) => {
         const d = dmMap[it.sku_code] || {};
         const vendorOrigin = (d.vendor_code && vendorOriginMapRef.current[d.vendor_code]) || "";
@@ -940,6 +956,9 @@ export default function SRROrderB2BInternalPage() {
       toast({ title: `Export ${selectedDocs.length} แบรนด์ · ${allRows.length} แถว` });
     } catch (e: any) {
       toast({ title: "Export ไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setMuExporting(false);
+      setMuExportMsg(null);
     }
   };
 
@@ -2838,11 +2857,21 @@ export default function SRROrderB2BInternalPage() {
               <BarChart3 className="w-4 h-4 text-muted-foreground" />
               <span className="text-sm font-medium">เอกสาร Monthly usage</span>
               {docsLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
-              {muSelected.size > 0 && can("b2b_brand", "export") && (
+              {muExporting ? (
+                <div className="ml-auto flex items-center gap-1.5 text-xs text-primary font-medium max-w-[60%] truncate">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+                  <span className="truncate">
+                    กำลัง Export · {muExportMsg?.phase}
+                    {muExportMsg && muExportMsg.total > 0
+                      ? ` ${muExportMsg.current}/${muExportMsg.total} (${Math.round((muExportMsg.current / muExportMsg.total) * 100)}%)`
+                      : "..."}
+                  </span>
+                </div>
+              ) : (muSelected.size > 0 && can("b2b_brand", "export") && (
                 <Button size="sm" className="h-7 gap-1.5 text-xs ml-auto" onClick={exportSelectedDocs}>
                   <Download className="w-3.5 h-3.5" /> Export ที่เลือก ({muSelected.size})
                 </Button>
-              )}
+              ))}
             </div>
             <div className="flex-1 overflow-auto min-h-0">
             <table className="w-full text-sm">
