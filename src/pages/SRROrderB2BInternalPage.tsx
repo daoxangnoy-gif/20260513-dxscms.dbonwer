@@ -766,6 +766,7 @@ export default function SRROrderB2BInternalPage() {
       const { data: dm } = await (supabase as any)
         .from("data_master")
         .select("sku_code, division_group, division, department, buying_status, vendor_code, vendor_display_name")
+        .eq("packing_size_qty", 1) // 1 sku = 1 row → กันชน 1000-row cap เมื่อ sku มีหลาย packing size
         .in("sku_code", skus);
       for (const d of (dm || []) as any[]) { if (d.sku_code && !dmMap[d.sku_code]) dmMap[d.sku_code] = d; }
     }
@@ -854,6 +855,7 @@ export default function SRROrderB2BInternalPage() {
         const { data: dm } = await (supabase as any)
           .from("data_master")
           .select("sku_code, division_group, division, department, buying_status, vendor_code, vendor_display_name")
+          .eq("packing_size_qty", 1) // 1 sku = 1 row → กันชน 1000-row cap เมื่อ sku มีหลาย packing size
           .in("sku_code", skuArr.slice(i, i + 500));
         for (const d of (dm || []) as any[]) { if (d.sku_code && !dmMap[d.sku_code]) dmMap[d.sku_code] = d; }
       }
