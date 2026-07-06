@@ -295,7 +295,7 @@ const sortRowsAZ = (rows: MonthlyUsageForm[]): MonthlyUsageForm[] =>
 
 // คอลัมน์ของตาราง Monthly usage (1 item = 1 แถว) + ความกว้างเริ่มต้น (px) — ลากปรับได้
 const MU_COLS = [
-  { key: "idx", label: "#", def: 44, min: 36 },
+  { key: "idx", label: "#", def: 64, min: 52 },
   { key: "dgroup", label: "Division Group", def: 130, min: 90 },
   { key: "division", label: "Division", def: 120, min: 90 },
   { key: "dept", label: "Department", def: 130, min: 90 },
@@ -1251,6 +1251,7 @@ export default function SRROrderB2BInternalPage() {
         };
       });
       setMuRows(sortRowsAZ(loadedRows));
+      setMuEditSel(new Set());
     } catch (e: any) {
       toast({ title: "เปิดเอกสารไม่สำเร็จ", description: e.message, variant: "destructive" });
       setMuRows([{ ...EMPTY_MU }]);
@@ -1381,14 +1382,27 @@ export default function SRROrderB2BInternalPage() {
 
   const addMuRow = () => setMuRows((prev) => [...prev, { ...EMPTY_MU }]);
 
-  const duplicateMuRow = (idx: number) =>
+  // เลือกแถว (multi) + ลบที่เลือก — index-based (ล้าง selection เมื่อ index เลื่อน)
+  const [muEditSel, setMuEditSel] = useState<Set<number>>(new Set());
+  const toggleMuEditSel = (idx: number) => setMuEditSel((prev) => { const n = new Set(prev); n.has(idx) ? n.delete(idx) : n.add(idx); return n; });
+  const deleteMuSelected = () => {
+    if (muEditSel.size === 0) return;
+    const n = muEditSel.size;
+    setMuRows((prev) => prev.filter((_, i) => !muEditSel.has(i)));
+    setMuEditSel(new Set());
+    toast({ title: `ลบ ${n} แถว`, description: "กด Save เพื่อบันทึกถาวร" });
+  };
+
+  const duplicateMuRow = (idx: number) => {
     setMuRows((prev) => {
       const next = [...prev];
       next.splice(idx + 1, 0, { ...prev[idx] });
       return next;
     });
+    setMuEditSel(new Set()); // index เลื่อน → ล้าง selection
+  };
 
-  const removeMuRow = (idx: number) => setMuRows((prev) => prev.filter((_, i) => i !== idx));
+  const removeMuRow = (idx: number) => { setMuRows((prev) => prev.filter((_, i) => i !== idx)); setMuEditSel(new Set()); };
 
   // ดาวน์โหลด template สำหรับนำเข้า Monthly usage
   const downloadMuTemplate = () => {
@@ -1504,6 +1518,7 @@ export default function SRROrderB2BInternalPage() {
         }
       }
       setMuRows(result.length ? sortRowsAZ(result) : [{ ...EMPTY_MU }]);
+      setMuEditSel(new Set());
       const notFound = resolved.filter((r) => r.product_name === "ไม่พบข้อมูล").length;
       toast({ title: "นำเข้าสำเร็จ", description: `เพิ่ม ${added} · อัปเดต ${updated}${notFound ? ` · ไม่พบ ${notFound}` : ""}` });
     } catch (e: any) {
@@ -3447,7 +3462,22 @@ export default function SRROrderB2BInternalPage() {
                     <tr className="bg-muted text-left">
                       {muShownCols.map((c) => (
                         <th key={c.key} className="relative px-2 py-1.5 font-medium border-r last:border-r-0 select-none whitespace-nowrap">
-                          <span className="block truncate">{c.label}</span>
+                          {c.key === "idx" ? (
+                            <div className="flex items-center justify-center gap-1.5">
+                              {!muReadOnly && (
+                                <input
+                                  type="checkbox"
+                                  className="h-3.5 w-3.5"
+                                  checked={muRows.length > 0 && muRows.every((_, i) => muEditSel.has(i))}
+                                  ref={(el) => { if (el) el.indeterminate = muEditSel.size > 0 && muEditSel.size < muRows.length; }}
+                                  onChange={(e) => setMuEditSel(e.target.checked ? new Set(muRows.map((_, i) => i)) : new Set())}
+                                />
+                              )}
+                              <span>#</span>
+                            </div>
+                          ) : (
+                            <span className="block truncate">{c.label}</span>
+                          )}
                           {c.key !== "act" && (
                             <span
                               onMouseDown={(e) => startColResize(c.key, c.min, e)}
@@ -3464,8 +3494,15 @@ export default function SRROrderB2BInternalPage() {
                         row.monthly_qty.trim() && !isNaN(Number(row.monthly_qty)) ? (Number(row.monthly_qty) / 30).toFixed(2) : "";
                       const notFound = row.product_name === "ไม่พบข้อมูล";
                       return (
-                        <tr key={idx} className="border-t align-middle">
-                          <td className="px-2 py-1 text-center text-muted-foreground tabular-nums">{idx + 1}</td>
+                        <tr key={idx} className={cn("border-t align-middle", muEditSel.has(idx) && "bg-primary/5")}>
+                          <td className="px-2 py-1 text-center text-muted-foreground tabular-nums">
+                            <div className="flex items-center justify-center gap-1.5">
+                              {!muReadOnly && (
+                                <input type="checkbox" className="h-3.5 w-3.5" checked={muEditSel.has(idx)} onChange={() => toggleMuEditSel(idx)} />
+                              )}
+                              <span>{idx + 1}</span>
+                            </div>
+                          </td>
                           {isColShown("dgroup") && <td className="px-2 py-1 text-xs text-muted-foreground truncate" title={row.division_group}>{row.division_group || "-"}</td>}
                           {isColShown("division") && <td className="px-2 py-1 text-xs text-muted-foreground truncate" title={row.division}>{row.division || "-"}</td>}
                           {isColShown("dept") && <td className="px-2 py-1 text-xs text-muted-foreground truncate" title={row.department}>{row.department || "-"}</td>}
@@ -3735,9 +3772,16 @@ export default function SRROrderB2BInternalPage() {
               </div>
 
               {!muReadOnly && (
-                <Button variant="outline" size="sm" onClick={addMuRow} className="gap-1.5">
-                  <Plus className="w-4 h-4" /> เพิ่มรายการ
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" size="sm" onClick={addMuRow} className="gap-1.5">
+                    <Plus className="w-4 h-4" /> เพิ่มรายการ
+                  </Button>
+                  {muEditSel.size > 0 && can("b2b_brand", "delete") && (
+                    <Button variant="outline" size="sm" onClick={deleteMuSelected} className="gap-1.5 text-destructive border-destructive/40">
+                      <Trash2 className="w-4 h-4" /> ลบที่เลือก ({muEditSel.size})
+                    </Button>
+                  )}
+                </div>
               )}
               </>
               )}
