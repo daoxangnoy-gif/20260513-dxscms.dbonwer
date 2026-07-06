@@ -1628,14 +1628,11 @@ function SRRDCItemPage() {
               return recalcRow(next);
             }
             if (qUnit && qUnit > 0) {
-              // Qty Unit ส่งตรงไป finalorder qty (roundup MOQ) — order_uom_edit เว้นว่าง
-              const roundedUnit = moq > 0 ? Math.ceil(qUnit / moq) * moq : qUnit;
-              const uomCount = moq > 0 ? roundedUnit / moq : roundedUnit;
-              next.order_uom_edit = "";
-              const recalced = recalcRow(next);
-              recalced.final_suggest_qty = Math.round(roundedUnit * 100) / 100;
-              recalced.final_suggest_uom = Math.round(uomCount * 100) / 100;
-              return recalced;
+              // Qty Unit (pcs) → roundup MOQ แล้วแปลงเป็นจำนวน UOM เขียนลง order_uom_edit
+              // (คงอยู่เหมือน Qty Uom ไม่ถูก recalc ทับ) — recalcRow จะได้ final_qty = uomCount * MOQ
+              const uomCount = moq > 0 ? Math.ceil(qUnit / moq) : qUnit;
+              next.order_uom_edit = String(uomCount);
+              return recalcRow(next);
             }
             return recalcRow(next);
           });
