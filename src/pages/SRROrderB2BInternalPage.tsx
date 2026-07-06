@@ -747,6 +747,42 @@ export default function SRROrderB2BInternalPage() {
   const [muSelected, setMuSelected] = useState<Set<string>>(new Set());
   const toggleMuSel = (id: string) => setMuSelected((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
+  // โหลด bytes ของรูปสำหรับฝังใน Excel — ลองผ่าน Supabase Storage client ก่อน (เลี่ยง CORS ของ public CDN URL)
+  // แล้วค่อย fallback เป็น fetch ตรง คืน null ถ้าโหลดไม่ได้
+  const loadPicBytes = async (pictureUrl?: string): Promise<{ buffer: ArrayBuffer; extension: "png" | "jpeg" | "gif" } | null> => {
+    if (!pictureUrl) return null;
+    const normExt = (s: string): "png" | "jpeg" | "gif" => {
+      let e = (s || "").toLowerCase();
+      if (e === "jpg") e = "jpeg";
+      return (["png", "jpeg", "gif"].includes(e) ? e : "png") as any;
+    };
+    const extFromName = (s: string): string => { const m = String(s).toLowerCase().match(/\.(png|jpe?g|gif)(?:$|\?)/); return m ? m[1] : ""; };
+    // 1) Supabase Storage download (ผ่าน client — น่าเชื่อถือกว่า fetch ตรง)
+    try {
+      const marker = `/${MU_BUCKET}/`;
+      const idx = pictureUrl.indexOf(marker);
+      if (idx >= 0) {
+        const path = decodeURIComponent(pictureUrl.slice(idx + marker.length).split("?")[0]);
+        const { data: blob } = await supabase.storage.from(MU_BUCKET).download(path);
+        if (blob) {
+          const buffer = await blob.arrayBuffer();
+          const ext = normExt(extFromName(path) || (blob.type || "").split("/")[1] || "png");
+          return { buffer, extension: ext };
+        }
+      }
+    } catch { /* fallback ด้านล่าง */ }
+    // 2) fallback: fetch ตรง
+    try {
+      const res = await fetch(pictureUrl);
+      if (res.ok) {
+        const buffer = await res.arrayBuffer();
+        const ext = normExt(extFromName(pictureUrl) || (res.headers.get("content-type") || "").split("/")[1] || "png");
+        return { buffer, extension: ext };
+      }
+    } catch { /* ยอมแพ้ */ }
+    return null;
+  };
+
   // เพิ่ม worksheet ของ 1 เอกสารลง workbook (คืน false ถ้าเอกสารว่าง) — ใช้ร่วม single + multi export
   const addMuSheet = async (wb: any, ExcelJS: any, doc: MUDoc, sheetName: string): Promise<boolean> => {
     const { data, error } = await (supabase as any)
@@ -776,20 +812,8 @@ export default function SRROrderB2BInternalPage() {
     ws.columns = headers.map((h, i) => ({ header: h, width: widths[i] }));
     ws.getRow(1).font = { bold: true };
 
-    // ดึงรูปทั้งหมดแบบ parallel: public URL → buffer + นามสกุล (สำหรับฝังลงเซลล์)
-    const picBuffers = await Promise.all(items.map(async (it: any) => {
-      if (!it.picture) return null;
-      try {
-        const res = await fetch(it.picture);
-        if (!res.ok) return null;
-        const ab = await res.arrayBuffer();
-        const m = String(it.picture).toLowerCase().match(/\.(png|jpe?g|gif)(?:$|\?)/);
-        let ext = m ? m[1] : ((res.headers.get("content-type") || "").split("/")[1] || "png");
-        if (ext === "jpg") ext = "jpeg";
-        if (!["png", "jpeg", "gif"].includes(ext)) ext = "png";
-        return { buffer: ab, extension: ext as "png" | "jpeg" | "gif" };
-      } catch { return null; }
-    }));
+    // ดึงรูปทั้งหมดแบบ parallel (ผ่าน Storage client → fallback fetch)
+    const picBuffers = await Promise.all(items.map((it: any) => loadPicBytes(it.picture)));
 
     items.forEach((it: any, i: number) => {
       const d = dmMap[it.sku_code] || {};
@@ -844,29 +868,74 @@ export default function SRROrderB2BInternalPage() {
     }
   };
 
-  // Export หลายเอกสารที่เลือก → 1 ไฟล์ Excel (1 sheet ต่อ 1 เอกสาร)
+  // Export หลายเอกสารที่เลือก → 1 ไฟล์ Excel · 1 sheet เดียว ต่อกันลงล่าง + คอลัมน์ "แบรนด์"
   const exportSelectedDocs = async () => {
     const selectedDocs = docs.filter((d) => muSelected.has(d.id));
     if (selectedDocs.length === 0) { toast({ title: "ยังไม่ได้เลือกเอกสาร", variant: "destructive" }); return; }
     try {
       const ExcelJS = (await import("exceljs")).default;
-      const wb = new ExcelJS.Workbook();
-      const usedNames = new Set<string>();
-      let added = 0;
-      for (let i = 0; i < selectedDocs.length; i++) {
-        const d = selectedDocs[i];
-        // sheet name: brand (<=27 chars) + suffix กันซ้ำ, ตัดอักขระต้องห้ามของ Excel
-        const base = (d.brand_name || d.doc_label || `Doc${i + 1}`).replace(/[\\/*?:\[\]]/g, " ").trim().slice(0, 27) || `Doc${i + 1}`;
-        let name = base; let n = 1;
-        while (usedNames.has(name)) { name = `${base.slice(0, 27)} ${++n}`; }
-        usedNames.add(name);
-        const ok = await addMuSheet(wb, ExcelJS, d, name);
-        if (ok) added++;
+      // รวม items ของทุกเอกสาร (ต่อกันลงล่าง) + แนบชื่อแบรนด์ต่อแถว
+      const allRows: { it: any; brand: string }[] = [];
+      const allSkus = new Set<string>();
+      for (const d of selectedDocs) {
+        const { data, error } = await (supabase as any)
+          .from("monthly_usage_item").select("*").eq("doc_id", d.id).order("sort_order", { ascending: true });
+        if (error) throw error;
+        for (const it of (data || [])) { allRows.push({ it, brand: d.brand_name || d.doc_label || "" }); if (it.sku_code) allSkus.add(it.sku_code); }
       }
-      if (added === 0) { toast({ title: "เอกสารที่เลือกว่างทั้งหมด", variant: "destructive" }); return; }
+      if (allRows.length === 0) { toast({ title: "เอกสารที่เลือกว่างทั้งหมด", variant: "destructive" }); return; }
+      // enrich data_master
+      const dmMap: Record<string, any> = {};
+      const skuArr = [...allSkus];
+      for (let i = 0; i < skuArr.length; i += 500) {
+        const { data: dm } = await (supabase as any)
+          .from("data_master")
+          .select("sku_code, division_group, division, department, buying_status, vendor_code, vendor_display_name")
+          .in("sku_code", skuArr.slice(i, i + 500));
+        for (const d of (dm || []) as any[]) { if (d.sku_code && !dmMap[d.sku_code]) dmMap[d.sku_code] = d; }
+      }
+      const headers = ["#", "แบรนด์", "ID (SKU)", "Barcode", "Barcode Unit", "Product name", "UOM",
+        "Monthly qty", "Daily qty", "Remark", "รูป",
+        "Division Group", "Division", "Department", "Buying Status", "Vendor Origin"];
+      const widths = [4, 20, 14, 16, 16, 36, 8, 12, 12, 30, 14, 16, 14, 16, 14, 22];
+      const PIC_COL = 11; // 1-based ของ "รูป" (ขยับ +1 เพราะเพิ่มคอลัมน์แบรนด์)
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet("Monthly usage");
+      ws.columns = headers.map((h, i) => ({ header: h, width: widths[i] }));
+      ws.getRow(1).font = { bold: true };
+
+      const picBuffers = await Promise.all(allRows.map((r) => loadPicBytes(r.it.picture)));
+      allRows.forEach(({ it, brand }, i) => {
+        const d = dmMap[it.sku_code] || {};
+        const vendorOrigin = (d.vendor_code && vendorOriginMapRef.current[d.vendor_code]) || "";
+        const row = ws.addRow([
+          i + 1, brand, it.sku_code || "", it.barcode || "", it.barcode_unit || "",
+          it.product_name || "", it.uom || "",
+          it.monthly_qty ?? "", it.daily_qty != null ? Number(it.daily_qty).toFixed(2) : "",
+          it.remark || "", "", // "รูป" เว้นว่างไว้ เดี๋ยวฝังรูปทับ
+          d.division_group || "", d.division || "", d.department || "",
+          d.buying_status || "", vendorOrigin,
+        ]);
+        const rowIdx = row.number;
+        const pic = picBuffers[i];
+        if (pic) {
+          const imgId = wb.addImage({ buffer: new Uint8Array(pic.buffer) as any, extension: pic.extension });
+          ws.addImage(imgId, {
+            tl: { col: PIC_COL - 1 + 0.08, row: rowIdx - 1 + 0.08 } as any,
+            ext: { width: 56, height: 56 },
+            editAs: "oneCell",
+          });
+          row.height = 46;
+        } else if (it.picture) {
+          const cell = ws.getCell(rowIdx, PIC_COL);
+          cell.value = { text: "เปิดรูป", hyperlink: it.picture } as any;
+          cell.font = { color: { argb: "FF0563C1" }, underline: true };
+        }
+      });
+
       const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-      await downloadWb(wb, `MonthlyUsage_${added}docs_${stamp}`);
-      toast({ title: `Export ${added} เอกสาร` });
+      await downloadWb(wb, `MonthlyUsage_${selectedDocs.length}brands_${stamp}`);
+      toast({ title: `Export ${selectedDocs.length} แบรนด์ · ${allRows.length} แถว` });
     } catch (e: any) {
       toast({ title: "Export ไม่สำเร็จ", description: e.message, variant: "destructive" });
     }
