@@ -808,7 +808,7 @@ export default function SRROrderB2BInternalPage() {
     const headers = ["#", "ID (SKU)", "Barcode", "Barcode Unit", "Product name", "UOM",
       "Monthly qty", "Daily qty", "Remark", "รูป",
       "Division Group", "Division", "Department", "Buying Status", "Vendor Origin"];
-    const widths = [4, 14, 16, 16, 36, 8, 12, 12, 30, 14, 16, 14, 16, 14, 22];
+    const widths = [4, 14, 16, 16, 36, 8, 12, 12, 30, 11, 16, 14, 16, 14, 22];
     const PIC_COL = 10; // 1-based ของคอลัมน์ "รูป"
     const ws = wb.addWorksheet(sheetName);
     ws.columns = headers.map((h, i) => ({ header: h, width: widths[i] }));
@@ -831,14 +831,13 @@ export default function SRROrderB2BInternalPage() {
       const rowIdx = row.number; // 1-based (header = 1, data เริ่ม 2)
       const pic = picBuffers[i];
       if (pic) {
+        row.height = 64; // ตั้งความสูงแถว "ก่อน" ฝังรูป (two-cell anchor อิงขนาดเซลล์)
         const imgId = wb.addImage({ buffer: new Uint8Array(pic.buffer) as any, extension: pic.extension });
-        // two-cell anchor (tl→br) + เว้นขอบเล็กน้อย → รูปฝังในเซลล์ ขยับ/ย่อตามเซลล์ (ไม่ลอย)
+        // two-cell anchor เต็มเซลล์ (เว้นขอบนิด) → รูปพอดีเซลล์ + ย่อ/ขยายตามเซลล์
         ws.addImage(imgId, {
-          tl: { col: PIC_COL - 1 + 0.06, row: rowIdx - 1 + 0.06 } as any,
-          br: { col: PIC_COL - 0.06, row: rowIdx - 0.06 } as any,
-          editAs: "oneCell",
+          tl: { col: PIC_COL - 1 + 0.03, row: rowIdx - 1 + 0.03 } as any,
+          br: { col: PIC_COL - 0.03, row: rowIdx - 0.03 } as any,
         });
-        row.height = 46;
       } else if (it.picture) {
         // ฝังรูปไม่สำเร็จ (fetch ล้มเหลว) → fallback เป็นลิงก์เหมือนเดิม
         const cell = ws.getCell(rowIdx, PIC_COL);
@@ -906,7 +905,7 @@ export default function SRROrderB2BInternalPage() {
       const headers = ["#", "แบรนด์", "ID (SKU)", "Barcode", "Barcode Unit", "Product name", "UOM",
         "Monthly qty", "Daily qty", "Remark", "รูป",
         "Division Group", "Division", "Department", "Buying Status", "Vendor Origin"];
-      const widths = [4, 20, 14, 16, 16, 36, 8, 12, 12, 30, 14, 16, 14, 16, 14, 22];
+      const widths = [4, 20, 14, 16, 16, 36, 8, 12, 12, 30, 11, 16, 14, 16, 14, 22];
       const PIC_COL = 11; // 1-based ของ "รูป" (ขยับ +1 เพราะเพิ่มคอลัมน์แบรนด์)
       const wb = new ExcelJS.Workbook();
       const ws = wb.addWorksheet("Monthly usage");
@@ -936,14 +935,13 @@ export default function SRROrderB2BInternalPage() {
         const rowIdx = row.number;
         const pic = picBuffers[i];
         if (pic) {
+          row.height = 64; // ตั้งความสูงแถว "ก่อน" ฝังรูป (two-cell anchor อิงขนาดเซลล์)
           const imgId = wb.addImage({ buffer: new Uint8Array(pic.buffer) as any, extension: pic.extension });
-          // two-cell anchor (tl→br) + เว้นขอบเล็กน้อย → รูปฝังในเซลล์ ขยับ/ย่อตามเซลล์ (ไม่ลอย)
+          // two-cell anchor เต็มเซลล์ (เว้นขอบนิด) → รูปพอดีเซลล์ + ย่อ/ขยายตามเซลล์
           ws.addImage(imgId, {
-            tl: { col: PIC_COL - 1 + 0.06, row: rowIdx - 1 + 0.06 } as any,
-            br: { col: PIC_COL - 0.06, row: rowIdx - 0.06 } as any,
-            editAs: "oneCell",
+            tl: { col: PIC_COL - 1 + 0.03, row: rowIdx - 1 + 0.03 } as any,
+            br: { col: PIC_COL - 0.03, row: rowIdx - 0.03 } as any,
           });
-          row.height = 46;
         } else if (it.picture) {
           const cell = ws.getCell(rowIdx, PIC_COL);
           cell.value = { text: "เปิดรูป", hyperlink: it.picture } as any;
