@@ -5121,7 +5121,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   };
 
   // export ตาราง PO เป็น Excel (รวมคอลัมน์ pivot + tracking ว่าง)
-  const exportPO = () => {
+  const exportPO = async () => {
     if (filteredPoRows.length === 0) { toast({ title: "ไม่มีข้อมูลให้ export", variant: "destructive" }); return; }
     const out = filteredPoRows.map((r, i) => {
       const { remark, action } = getPoRemarkAction(r);
@@ -5147,7 +5147,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         ID: r.id,
         Barcode: r.barcode,
         "Product name EN": r.product_name_en,
-        "Picture": r.pictures[0]?.url || "", // จะถูกแปลงเป็นสูตร =IMAGE ด้านล่าง
+        "Picture": "", // ใส่สูตร =IMAGE ด้านล่าง
         "Picture From": r.pictures.length
           ? r.pictures[0].brand + (r.pictures.length > 1 ? ` +${r.pictures.length - 1}` : "")
           : "",
@@ -5160,32 +5160,39 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       base["DIFF"] = r.total - (r.stock_dc_kr ?? 0);
       return base;
     });
-    const ws = XLSX.utils.json_to_sheet(out);
-    // แปลงคอลัมน์ Picture เป็นสูตร =IMAGE(url) (Excel 365) — _xlfn. กัน #NAME?
-    const picColIdx = Object.keys(out[0] || {}).indexOf("Picture");
-    if (picColIdx >= 0) {
-      filteredPoRows.forEach((r, i) => {
-        const url = r.pictures[0]?.url;
-        if (url) {
-          const ref = XLSX.utils.encode_cell({ c: picColIdx, r: i + 1 }); // +1 = ข้าม header
-          ws[ref] = { t: "s", v: "", f: `_xlfn.IMAGE("${url}")` } as any;
-        }
-      });
-    }
-    // ซ่อนคอลัมน์ SKU (ลำดับที่ 6 → index 5)
-    const skuIdx = Object.keys(out[0] || {}).indexOf("SKU");
-    if (skuIdx >= 0) {
-      const cols: any[] = [];
-      for (let c = 0; c <= skuIdx; c++) cols[c] = cols[c] || {};
-      cols[skuIdx] = { hidden: true };
-      ws["!cols"] = cols;
-    }
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "PO");
+    const headers = Object.keys(out[0]);
+    const wCol = (h: string) => h === "Product name EN" ? 34 : h === "Vendor name" ? 24
+      : (h === "Remark" || h === "Action" || h === "Action2") ? 22 : h === "Picture From" ? 14 : h === "Picture" ? 12 : 12;
+
+    const ExcelJS = (await import("exceljs")).default;
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("PO");
+    ws.columns = headers.map((h) => ({ header: h, width: wCol(h) }));
+    ws.getRow(1).font = { bold: true };
+    ws.getRow(1).alignment = { vertical: "middle" };
+    const picIdx = headers.indexOf("Picture"); // 0-based
+    out.forEach((rowObj, i) => {
+      const row = ws.addRow(headers.map((h) => rowObj[h]));
+      row.height = 36; // ~48px ทุกแถวที่มีข้อมูล
+      row.alignment = { vertical: "middle" }; // จัดกึ่งกลางแนวตั้ง
+      const url = filteredPoRows[i].pictures[0]?.url;
+      if (url && picIdx >= 0) {
+        ws.getCell(row.number, picIdx + 1).value = { formula: `_xlfn.IMAGE("${url}")` } as any;
+      }
+    });
+    const skuIdx = headers.indexOf("SKU");
+    if (skuIdx >= 0) ws.getColumn(skuIdx + 1).hidden = true; // ซ่อน SKU
+
     const pad = (n: number) => String(n).padStart(2, "0");
     const now = new Date();
     const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`;
-    XLSX.writeFile(wb, `${stamp}-PO.xlsx`);
+    const buf = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const dl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = dl; a.download = `${stamp}-PO.xlsx`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(dl);
   };
 
   // parse Excel ตาม column config → array of row objects (key = col.key)
