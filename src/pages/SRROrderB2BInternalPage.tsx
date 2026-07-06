@@ -749,42 +749,6 @@ export default function SRROrderB2BInternalPage() {
   const [muExporting, setMuExporting] = useState(false);
   const [muExportMsg, setMuExportMsg] = useState<{ phase: string; current: number; total: number } | null>(null);
 
-  // โหลด bytes ของรูปสำหรับฝังใน Excel — ลองผ่าน Supabase Storage client ก่อน (เลี่ยง CORS ของ public CDN URL)
-  // แล้วค่อย fallback เป็น fetch ตรง คืน null ถ้าโหลดไม่ได้
-  const loadPicBytes = async (pictureUrl?: string): Promise<{ buffer: ArrayBuffer; extension: "png" | "jpeg" | "gif" } | null> => {
-    if (!pictureUrl) return null;
-    const normExt = (s: string): "png" | "jpeg" | "gif" => {
-      let e = (s || "").toLowerCase();
-      if (e === "jpg") e = "jpeg";
-      return (["png", "jpeg", "gif"].includes(e) ? e : "png") as any;
-    };
-    const extFromName = (s: string): string => { const m = String(s).toLowerCase().match(/\.(png|jpe?g|gif)(?:$|\?)/); return m ? m[1] : ""; };
-    // 1) Supabase Storage download (ผ่าน client — น่าเชื่อถือกว่า fetch ตรง)
-    try {
-      const marker = `/${MU_BUCKET}/`;
-      const idx = pictureUrl.indexOf(marker);
-      if (idx >= 0) {
-        const path = decodeURIComponent(pictureUrl.slice(idx + marker.length).split("?")[0]);
-        const { data: blob } = await supabase.storage.from(MU_BUCKET).download(path);
-        if (blob) {
-          const buffer = await blob.arrayBuffer();
-          const ext = normExt(extFromName(path) || (blob.type || "").split("/")[1] || "png");
-          return { buffer, extension: ext };
-        }
-      }
-    } catch { /* fallback ด้านล่าง */ }
-    // 2) fallback: fetch ตรง
-    try {
-      const res = await fetch(pictureUrl);
-      if (res.ok) {
-        const buffer = await res.arrayBuffer();
-        const ext = normExt(extFromName(pictureUrl) || (res.headers.get("content-type") || "").split("/")[1] || "png");
-        return { buffer, extension: ext };
-      }
-    } catch { /* ยอมแพ้ */ }
-    return null;
-  };
-
   // เพิ่ม worksheet ของ 1 เอกสารลง workbook (คืน false ถ้าเอกสารว่าง) — ใช้ร่วม single + multi export
   const addMuSheet = async (wb: any, ExcelJS: any, doc: MUDoc, sheetName: string): Promise<boolean> => {
     const { data, error } = await (supabase as any)
@@ -808,14 +772,11 @@ export default function SRROrderB2BInternalPage() {
     const headers = ["#", "ID (SKU)", "Barcode", "Barcode Unit", "Product name", "UOM",
       "Monthly qty", "Daily qty", "Remark", "รูป",
       "Division Group", "Division", "Department", "Buying Status", "Vendor Origin"];
-    const widths = [4, 14, 16, 16, 36, 8, 12, 12, 30, 9, 16, 14, 16, 14, 22];
+    const widths = [4, 14, 16, 16, 36, 8, 12, 12, 30, 14, 16, 14, 16, 14, 22];
     const PIC_COL = 10; // 1-based ของคอลัมน์ "รูป"
     const ws = wb.addWorksheet(sheetName);
     ws.columns = headers.map((h, i) => ({ header: h, width: widths[i] }));
     ws.getRow(1).font = { bold: true };
-
-    // ดึงรูปทั้งหมดแบบ parallel (ผ่าน Storage client → fallback fetch)
-    const picBuffers = await Promise.all(items.map((it: any) => loadPicBytes(it.picture)));
 
     items.forEach((it: any, i: number) => {
       const d = dmMap[it.sku_code] || {};
@@ -824,22 +785,12 @@ export default function SRROrderB2BInternalPage() {
         i + 1, it.sku_code || "", it.barcode || "", it.barcode_unit || "",
         it.product_name || "", it.uom || "",
         it.monthly_qty ?? "", it.daily_qty != null ? Number(it.daily_qty).toFixed(2) : "",
-        it.remark || "", "", // "รูป" เว้นว่างไว้ เดี๋ยวฝังรูปทับ
+        it.remark || "", "", // "รูป" = ลิงก์ (ใส่ด้านล่าง)
         d.division_group || "", d.division || "", d.department || "",
         d.buying_status || "", vendorOrigin,
       ]);
       const rowIdx = row.number; // 1-based (header = 1, data เริ่ม 2)
-      const pic = picBuffers[i];
-      if (pic) {
-        row.height = 80; // ตั้งความสูงแถว "ก่อน" ฝังรูป (two-cell anchor อิงขนาดเซลล์)
-        const imgId = wb.addImage({ buffer: new Uint8Array(pic.buffer) as any, extension: pic.extension });
-        // two-cell anchor เต็มเซลล์ (เว้นขอบนิด) → รูปพอดีเซลล์ + ย่อ/ขยายตามเซลล์
-        ws.addImage(imgId, {
-          tl: { col: PIC_COL - 1 + 0.03, row: rowIdx - 1 + 0.03 } as any,
-          br: { col: PIC_COL - 0.03, row: rowIdx - 0.03 } as any,
-        });
-      } else if (it.picture) {
-        // ฝังรูปไม่สำเร็จ (fetch ล้มเหลว) → fallback เป็นลิงก์เหมือนเดิม
+      if (it.picture) {
         const cell = ws.getCell(rowIdx, PIC_COL);
         cell.value = { text: "เปิดรูป", hyperlink: it.picture } as any;
         cell.font = { color: { argb: "FF0563C1" }, underline: true };
@@ -905,21 +856,13 @@ export default function SRROrderB2BInternalPage() {
       const headers = ["#", "แบรนด์", "ID (SKU)", "Barcode", "Barcode Unit", "Product name", "UOM",
         "Monthly qty", "Daily qty", "Remark", "รูป",
         "Division Group", "Division", "Department", "Buying Status", "Vendor Origin"];
-      const widths = [4, 20, 14, 16, 16, 36, 8, 12, 12, 30, 9, 16, 14, 16, 14, 22];
+      const widths = [4, 20, 14, 16, 16, 36, 8, 12, 12, 30, 14, 16, 14, 16, 14, 22];
       const PIC_COL = 11; // 1-based ของ "รูป" (ขยับ +1 เพราะเพิ่มคอลัมน์แบรนด์)
       const wb = new ExcelJS.Workbook();
       const ws = wb.addWorksheet("Monthly usage");
       ws.columns = headers.map((h, i) => ({ header: h, width: widths[i] }));
       ws.getRow(1).font = { bold: true };
 
-      setMuExportMsg({ phase: "โหลดรูป", current: 0, total: allRows.length });
-      let picDone = 0;
-      const picBuffers = await Promise.all(allRows.map(async (r) => {
-        const res = await loadPicBytes(r.it.picture);
-        picDone++;
-        if (picDone % 5 === 0 || picDone === allRows.length) setMuExportMsg({ phase: "โหลดรูป", current: picDone, total: allRows.length });
-        return res;
-      }));
       setMuExportMsg({ phase: "สร้างไฟล์ Excel", current: 0, total: 0 });
       allRows.forEach(({ it, brand }, i) => {
         const d = dmMap[it.sku_code] || {};
@@ -928,21 +871,12 @@ export default function SRROrderB2BInternalPage() {
           i + 1, brand, it.sku_code || "", it.barcode || "", it.barcode_unit || "",
           it.product_name || "", it.uom || "",
           it.monthly_qty ?? "", it.daily_qty != null ? Number(it.daily_qty).toFixed(2) : "",
-          it.remark || "", "", // "รูป" เว้นว่างไว้ เดี๋ยวฝังรูปทับ
+          it.remark || "", "", // "รูป" = ลิงก์ (ใส่ด้านล่าง)
           d.division_group || "", d.division || "", d.department || "",
           d.buying_status || "", vendorOrigin,
         ]);
         const rowIdx = row.number;
-        const pic = picBuffers[i];
-        if (pic) {
-          row.height = 80; // ตั้งความสูงแถว "ก่อน" ฝังรูป (two-cell anchor อิงขนาดเซลล์)
-          const imgId = wb.addImage({ buffer: new Uint8Array(pic.buffer) as any, extension: pic.extension });
-          // two-cell anchor เต็มเซลล์ (เว้นขอบนิด) → รูปพอดีเซลล์ + ย่อ/ขยายตามเซลล์
-          ws.addImage(imgId, {
-            tl: { col: PIC_COL - 1 + 0.03, row: rowIdx - 1 + 0.03 } as any,
-            br: { col: PIC_COL - 0.03, row: rowIdx - 0.03 } as any,
-          });
-        } else if (it.picture) {
+        if (it.picture) {
           const cell = ws.getCell(rowIdx, PIC_COL);
           cell.value = { text: "เปิดรูป", hyperlink: it.picture } as any;
           cell.font = { color: { argb: "FF0563C1" }, underline: true };
