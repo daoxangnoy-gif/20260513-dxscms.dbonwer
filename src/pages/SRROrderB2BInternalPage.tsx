@@ -791,6 +791,7 @@ export default function SRROrderB2BInternalPage() {
       ]);
       const rowIdx = row.number; // 1-based (header = 1, data เริ่ม 2)
       row.height = 36; // ทุกแถวสูงเท่ากัน ~48px (มี/ไม่มีรูปก็เท่ากัน)
+      row.alignment = { vertical: "middle" }; // ตัวหนังสือกึ่งกลางแนวตั้ง
       if (it.picture) {
         const linkCell = ws.getCell(rowIdx, PIC_COL);
         linkCell.value = { text: "เปิดรูป", hyperlink: it.picture } as any;
@@ -880,6 +881,7 @@ export default function SRROrderB2BInternalPage() {
         ]);
         const rowIdx = row.number;
         row.height = 36; // ทุกแถวสูงเท่ากัน ~48px (มี/ไม่มีรูปก็เท่ากัน)
+        row.alignment = { vertical: "middle" }; // ตัวหนังสือกึ่งกลางแนวตั้ง
         if (it.picture) {
           const linkCell = ws.getCell(rowIdx, PIC_COL);
           linkCell.value = { text: "เปิดรูป", hyperlink: it.picture } as any;
