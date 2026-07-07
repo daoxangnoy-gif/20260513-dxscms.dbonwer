@@ -401,6 +401,69 @@ function CustomerCombo({ value, options, onChange }: { value: string; options: C
   );
 }
 
+// Dropdown เลือก Vendor (ค้นหาได้) — ใช้ตอน Convert เมื่อไฟล์ไม่ได้ใส่ Vendor code (ค่าเริ่มต้นทั้งไฟล์)
+function VendorPickCombo({ value, options, onChange }: { value: string; options: CustomerOpt[]; onChange: (code: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    const base = s ? options.filter((o) => o.name.toLowerCase().includes(s) || o.code.toLowerCase().includes(s)) : options;
+    return base.slice(0, 50);
+  }, [q, options]);
+  const sel = options.find((o) => o.code === value);
+  return (
+    <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setQ(""); }}>
+      <PopoverTrigger asChild>
+        <button className="flex items-center gap-1 h-8 px-2 border rounded-md text-left text-xs w-64 bg-background hover:bg-muted/50">
+          <span className="truncate flex-1">{sel ? `${sel.code} · ${sel.name}` : (value || "— เลือก Vendor เริ่มต้น —")}</span>
+          <ChevronsUpDown className="w-3 h-3 shrink-0 opacity-50" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-80 p-0" align="start">
+        <Command shouldFilter={false}>
+          <CommandInput placeholder="ค้นหา Vendor / รหัส" value={q} onValueChange={setQ} />
+          <CommandList>
+            <CommandEmpty>ไม่พบ Vendor</CommandEmpty>
+            <CommandGroup>
+              {value && (
+                <CommandItem value="__clear__" onSelect={() => { onChange(""); setOpen(false); setQ(""); }}>
+                  <X className="mr-2 h-3.5 w-3.5 opacity-70" /> <span className="text-muted-foreground">ล้างค่า</span>
+                </CommandItem>
+              )}
+              {filtered.map((o) => (
+                <CommandItem key={o.code} value={o.code} onSelect={() => { onChange(o.code); setOpen(false); setQ(""); }}>
+                  <Check className={cn("mr-2 h-3.5 w-3.5", value === o.code ? "opacity-100" : "opacity-0")} />
+                  <span className="truncate">{o.name}</span>
+                  <span className="ml-auto pl-2 text-[10px] text-muted-foreground shrink-0">{o.code}</span>
+                </CommandItem>
+              ))}
+              {q.trim() === "" && options.length > 50 && (
+                <div className="px-2 py-1.5 text-[11px] text-muted-foreground">พิมพ์เพื่อค้นหา (แสดง 50 จาก {options.length})</div>
+              )}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+// ===== Convert (SCM Control → tab PO) — import รหัส+จำนวน แล้ว Convert เป็น PO/SO Excel (ไม่ filter) =====
+// แต่ละแถวหลัง enrich: resolve barcode → sku + unit barcode (packing_size_qty=1) + product/vendor/pocost
+type ConvertRow = {
+  inputCode: string;      // รหัสที่ import เข้ามา (barcode/sku)
+  qty: number;
+  fileVendor: string;     // Vendor code จากไฟล์ (ถ้ามี)
+  found: boolean;         // เจอใน data_master ไหม
+  sku: string;
+  unitBarcode: string;    // main_barcode ของแถว packing_size_qty=1
+  productName: string;    // la > en > th (สำหรับ SO)
+  productNameEn: string;  // สำหรับ PO
+  uom: string;
+  dmVendor: string;       // vendor_code จาก data_master
+  pocost: number | null;
+};
+
 // ===== SO Doc (SCM Control → tab SO) — สร้างอัตโนมัติตอน Save Order, แยกตาม order_group =====
 type SODoc = {
   id: string;
@@ -4556,6 +4619,18 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   const [poExportSel, setPoExportSel] = useState<Set<string>>(new Set());     // vendor ที่ติ๊ก
   const [poExportPick, setPoExportPick] = useState<Record<string, string>>({}); // vendor_code → picking type
   const [poExportSearch, setPoExportSearch] = useState("");
+  // ---- Convert dialog (import รหัส+จำนวน → Convert เป็น PO/SO Excel, ไม่ filter) ----
+  const [convertOpen, setConvertOpen] = useState(false);
+  const [convertRows, setConvertRows] = useState<ConvertRow[]>([]);
+  const [convertNameMap, setConvertNameMap] = useState<Record<string, string>>({}); // vendor_code → name
+  const [convertImporting, setConvertImporting] = useState(false);
+  const [convertExporting, setConvertExporting] = useState(false);
+  const [convertItemPerPo, setConvertItemPerPo] = useState(25);        // จำนวน SKU ต่อ 1 Group PO/SO
+  const [convertPicking, setConvertPicking] = useState(PO_PICKING_DC); // Picking Type สำหรับ Convert PO
+  const [convertVendorDefault, setConvertVendorDefault] = useState(""); // vendor เริ่มต้น (ถ้าไฟล์ไม่ได้ใส่)
+  const [convertCustomer, setConvertCustomer] = useState(SO_DEFAULT_CUSTOMER); // ลูกค้าสำหรับ Convert SO
+  const [convertVendorOpts, setConvertVendorOpts] = useState<CustomerOpt[]>([]); // dropdown vendor
+  const [convertCustomerOpts, setConvertCustomerOpts] = useState<CustomerOpt[]>([]); // dropdown ลูกค้า
   const [poReportOpen, setPoReportOpen] = useState(false);
   const [poLoading, setPoLoading] = useState(false);
   const [poLoaded, setPoLoaded] = useState(false);
@@ -5168,6 +5243,250 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     toast({ title: "Export PO สำเร็จ", description: `${out.length} แถว · ${byVendor.size} vendor` });
   };
 
+  // ===== Convert: import รหัส+จำนวน → Convert เป็น PO/SO Excel (ไม่ filter รายการออก) =====
+  // Vendor เรียงลำดับ: จากไฟล์ > จาก data_master > dropdown เริ่มต้น
+  const convertFinalVendor = (r: ConvertRow) => r.fileVendor || r.dmVendor || convertVendorDefault || "";
+
+  // โหลด dropdown vendor (vendor_master) + ลูกค้า (customers) ตอนเปิด dialog
+  const loadConvertOpts = async () => {
+    try {
+      const out: CustomerOpt[] = [];
+      const seen = new Set<string>();
+      for (let from = 0; ; from += 1000) {
+        const { data } = await (supabase as any).from("vendor_master").select("vendor_code, vendor_name_en, vendor_name_la").range(from, from + 999);
+        if (!data || data.length === 0) break;
+        for (const v of data as any[]) if (v.vendor_code && !seen.has(v.vendor_code)) { seen.add(v.vendor_code); out.push({ code: v.vendor_code, name: v.vendor_name_en || v.vendor_name_la || v.vendor_code }); }
+        if (data.length < 1000) break;
+      }
+      setConvertVendorOpts(out.sort((a, b) => a.code.localeCompare(b.code)));
+    } catch { /* โหลดไม่ได้ก็ปล่อยว่าง */ }
+    try {
+      const out: CustomerOpt[] = [];
+      for (let from = 0; ; from += 1000) {
+        const { data } = await (supabase as any).from("customers").select("customer_code, name").range(from, from + 999);
+        if (!data || data.length === 0) break;
+        for (const c of data as any[]) if (c.name) out.push({ code: c.customer_code || "", name: c.name });
+        if (data.length < 1000) break;
+      }
+      setConvertCustomerOpts(out);
+    } catch { /* โหลดไม่ได้ก็ปล่อยว่าง */ }
+  };
+
+  // Download template (Barcode + Quantity + Vendor code)
+  const downloadConvertTemplate = () => {
+    const ws = XLSX.utils.aoa_to_sheet([["Barcode", "Quantity", "Vendor code"]]);
+    ws["!cols"] = [{ wch: 18 }, { wch: 12 }, { wch: 16 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Template");
+    XLSX.writeFile(wb, "Convert_Template.xlsx");
+  };
+
+  // enrich: resolve barcode → sku + unit barcode + product/vendor/pocost (batch)
+  const enrichConvert = async (inputs: { barcode: string; qty: number; fileVendor: string }[]): Promise<{ rows: ConvertRow[]; nameMap: Record<string, string> }> => {
+    const codes = [...new Set(inputs.map((i) => i.barcode).filter(Boolean))];
+    // 1) code → sku (ลองทีละคอลัมน์ main_barcode / sku_code / barcode)
+    const [byMain, bySku, byBc] = await Promise.all([
+      fetchInChunks("data_master", "sku_code, main_barcode", "main_barcode", codes).catch(() => [] as any[]),
+      fetchInChunks("data_master", "sku_code", "sku_code", codes).catch(() => [] as any[]),
+      fetchInChunks("data_master", "sku_code, barcode", "barcode", codes).catch(() => [] as any[]),
+    ]);
+    const codeToSku = new Map<string, string>();
+    for (const d of byMain) if (d.main_barcode && d.sku_code && !codeToSku.has(String(d.main_barcode))) codeToSku.set(String(d.main_barcode), String(d.sku_code));
+    for (const d of bySku) if (d.sku_code && !codeToSku.has(String(d.sku_code))) codeToSku.set(String(d.sku_code), String(d.sku_code));
+    for (const d of byBc) if (d.barcode && d.sku_code && !codeToSku.has(String(d.barcode))) codeToSku.set(String(d.barcode), String(d.sku_code));
+    // 2) sku → ข้อมูลสินค้า (เลือกแถว packing_size_qty=1 ก่อน)
+    const skus = [...new Set([...codeToSku.values()])];
+    const dmRows = skus.length
+      ? await fetchInChunks("data_master", "sku_code, main_barcode, packing_size_qty, product_name_en, product_name_la, product_name_th, unit_of_measure, vendor_code, vendor_display_name", "sku_code", skus)
+      : [];
+    const infoBySku = new Map<string, any>();
+    for (const d of dmRows) {
+      const isUnit = Number(d.packing_size_qty) === 1;
+      const cur = infoBySku.get(d.sku_code);
+      const rec = {
+        isUnit,
+        unitBarcode: d.main_barcode || cur?.unitBarcode || "",
+        productNameEn: d.product_name_en || cur?.productNameEn || "",
+        productName: d.product_name_la || d.product_name_en || d.product_name_th || cur?.productName || "",
+        uom: d.unit_of_measure || cur?.uom || "",
+        vendorCode: d.vendor_code || cur?.vendorCode || "",
+        vendorName: d.vendor_display_name || cur?.vendorName || "",
+      };
+      if (!cur || (isUnit && !cur.isUnit)) infoBySku.set(d.sku_code, rec);
+    }
+    // 3) pocost by sku
+    const pc = skus.length ? await fetchInChunks("po_cost", "item_id, po_cost", "item_id", skus).catch(() => [] as any[]) : [];
+    const pcMap = new Map<string, number | null>();
+    for (const p of pc) { const id = String(p.item_id ?? ""); if (id && !pcMap.has(id)) pcMap.set(id, p.po_cost == null ? null : Number(p.po_cost)); }
+    // 4) vendor name map (ไฟล์ + data_master) — data_master.vendor_display_name ชนะ vendor_master
+    const vendorCodes = [...new Set([...inputs.map((i) => i.fileVendor).filter(Boolean), ...dmRows.map((d: any) => d.vendor_code).filter(Boolean)])] as string[];
+    const nameMap: Record<string, string> = {};
+    if (vendorCodes.length) {
+      const [dmN, vmN] = await Promise.all([
+        fetchInChunks("data_master", "vendor_code, vendor_display_name", "vendor_code", vendorCodes).catch(() => [] as any[]),
+        fetchInChunks("vendor_master", "vendor_code, vendor_name_en, vendor_name_la", "vendor_code", vendorCodes).catch(() => [] as any[]),
+      ]);
+      for (const v of vmN) if (v.vendor_code && !nameMap[v.vendor_code]) nameMap[v.vendor_code] = v.vendor_name_en || v.vendor_name_la || "";
+      for (const d of dmN) if (d.vendor_code && d.vendor_display_name) nameMap[d.vendor_code] = d.vendor_display_name;
+    }
+    const rows: ConvertRow[] = inputs.map((inp) => {
+      const sku = codeToSku.get(inp.barcode) || "";
+      const info = sku ? infoBySku.get(sku) : null;
+      return {
+        inputCode: inp.barcode,
+        qty: inp.qty,
+        fileVendor: inp.fileVendor,
+        found: !!info,
+        sku,
+        unitBarcode: info?.unitBarcode || inp.barcode,
+        productName: info?.productName || "",
+        productNameEn: info?.productNameEn || "",
+        uom: info?.uom || "Unit",
+        dmVendor: info?.vendorCode || "",
+        pocost: sku ? (pcMap.get(sku) ?? null) : null,
+      };
+    });
+    return { rows, nameMap };
+  };
+
+  const handleConvertImport = async (file: File) => {
+    setConvertImporting(true);
+    try {
+      const ab = await file.arrayBuffer();
+      const wb = XLSX.read(ab);
+      const raw: any[][] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
+      if (raw.length < 2) { toast({ title: "ไฟล์ว่าง", variant: "destructive" }); return; }
+      const headers = (raw[0] as any[]).map((h) => String(h ?? "").toLowerCase().trim());
+      const bcIdx = headers.findIndex((h) => h.includes("barcode") || h === "code" || h.includes("รหัส") || h.includes("sku"));
+      const qtyIdx = headers.findIndex((h) => h.includes("qty") || h.includes("quantity") || h.includes("จำนวน"));
+      const vcIdx = headers.findIndex((h) => h.includes("vendor") || h.includes("ผู้สนอง"));
+      if (bcIdx < 0 || qtyIdx < 0) { toast({ title: "ไม่พบคอลัมน์ Barcode / Quantity", variant: "destructive" }); return; }
+      const inputs = raw.slice(1)
+        .map((r) => ({ barcode: String(r[bcIdx] ?? "").trim(), qty: Number(r[qtyIdx]) || 0, fileVendor: vcIdx >= 0 ? String(r[vcIdx] ?? "").trim() : "" }))
+        .filter((i) => i.barcode);
+      if (inputs.length === 0) { toast({ title: "ไม่พบข้อมูล (ต้องมี Barcode)", variant: "destructive" }); return; }
+      const { rows, nameMap } = await enrichConvert(inputs);
+      setConvertRows(rows);
+      setConvertNameMap(nameMap);
+      const notFound = rows.filter((r) => !r.found).length;
+      toast({ title: "นำเข้าสำเร็จ", description: `${rows.length} รายการ${notFound ? ` · ไม่พบข้อมูล ${notFound}` : ""}` });
+    } catch (e: any) {
+      toast({ title: "นำเข้าไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setConvertImporting(false);
+    }
+  };
+
+  // group by vendor → chunk ทีละ N (Item Per PO)
+  const chunkConvertByVendor = (): { vc: string; chunks: ConvertRow[][] }[] => {
+    const N = Math.max(1, Number(convertItemPerPo) || 25);
+    const byVendor = new Map<string, ConvertRow[]>();
+    for (const r of convertRows) { const vc = convertFinalVendor(r); if (!byVendor.has(vc)) byVendor.set(vc, []); byVendor.get(vc)!.push(r); }
+    const out: { vc: string; chunks: ConvertRow[][] }[] = [];
+    for (const [vc, vRows] of byVendor) {
+      const chunks: ConvertRow[][] = [];
+      for (let i = 0; i < vRows.length; i += N) chunks.push(vRows.slice(i, i + N));
+      out.push({ vc, chunks });
+    }
+    return out;
+  };
+
+  const stampNow = () => {
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const d = new Date();
+    return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}${pad(d.getHours())}${pad(d.getMinutes())}`;
+  };
+
+  // Convert → PO (คอลัมน์/หัวตารางเดียวกับ Export PO สีฟ้า)
+  const doConvertExportPO = async () => {
+    if (convertRows.length === 0) { toast({ title: "ยังไม่มีข้อมูล — กด Import ก่อน", variant: "destructive" }); return; }
+    setConvertExporting(true);
+    try {
+      const pick = convertPicking;
+      const interTransfer = PO_PICKING_DC_IDS.has(pick) ? "" : "true";
+      const groups = chunkConvertByVendor();
+      const out: Record<string, any>[] = [];
+      let groupCount = 0;
+      for (const { vc, chunks } of groups) {
+        const vName = convertNameMap[vc] || convertVendorOpts.find((o) => o.code === vc)?.name || "";
+        chunks.forEach((chunk, ci) => {
+          groupCount++;
+          const groupId = chunks.length > 1 ? `${vc || "NOVENDOR"}-${ci + 1}` : (vc || "NOVENDOR");
+          chunk.forEach((r, idx) => {
+            out.push({
+              "partner_id": idx === 0 ? vc : "",
+              "Picking Type / Database ID": idx === 0 ? pick : "",
+              "Inter Transfer": idx === 0 ? interTransfer : "",
+              "PO Group": idx === 0 ? groupId : "",
+              "Vendor name": vName,
+              "Brand": "",
+              "Products to Purchase/barcode": r.unitBarcode || r.inputCode,
+              "Products to Purchase/Product": r.unitBarcode || r.inputCode,
+              "Product name": r.productNameEn || r.productName,
+              "Products to Purchase/UoM": "Unit",
+              "Products to Purchase/Exclude In Package": "True",
+              "Products to Purchase/Quantity": r.qty,
+              "Products to Purchase/Unit Price": r.pocost ?? "",
+              "assigned_to": idx === 0 ? "SPC manager01" : "",
+              "description": "",
+            });
+          });
+        });
+      }
+      const ws = XLSX.utils.json_to_sheet(out);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "PO");
+      XLSX.writeFile(wb, `${stampNow()}-PO-Convert.xlsx`);
+      toast({ title: "Convert PO สำเร็จ", description: `${out.length} แถว · ${groupCount} PO Group` });
+    } catch (e: any) {
+      toast({ title: "Convert PO ไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setConvertExporting(false);
+    }
+  };
+
+  // Convert → SO (ใช้ template srr_special_so เหมือนหน้า SO Order B2B)
+  const doConvertExportSO = async () => {
+    if (convertRows.length === 0) { toast({ title: "ยังไม่มีข้อมูล — กด Import ก่อน", variant: "destructive" }); return; }
+    setConvertExporting(true);
+    try {
+      const customer = convertCustomer || SO_DEFAULT_CUSTOMER;
+      const groups = chunkConvertByVendor();
+      const base: Record<string, any>[] = [];
+      let groupCount = 0;
+      for (const { chunks } of groups) {
+        chunks.forEach((chunk) => {
+          groupCount++;
+          chunk.forEach((r, idx) => {
+            base.push({
+              "Order Reference": "",
+              "Customer": idx === 0 ? customer : "",
+              "Pricelist": idx === 0 ? SO_PRICELIST : "",
+              "Order Lines/Barcode": r.unitBarcode || r.inputCode,
+              "Order Lines/Product": r.unitBarcode || r.inputCode,
+              "Product Name": r.productName || r.productNameEn,
+              "UOM": r.uom,
+              "Order Lines/Quantity": r.qty,
+              "Source Document": "",
+              "Warehouse": idx === 0 ? SO_WAREHOUSE : "",
+              "Company": idx === 0 ? SO_COMPANY : "",
+            });
+          });
+        });
+      }
+      const mapped = await remapRowsByTemplate("srr_special_so", base);
+      const ws = XLSX.utils.json_to_sheet(mapped);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "SO");
+      XLSX.writeFile(wb, `${stampNow()}-SO-Convert.xlsx`);
+      toast({ title: "Convert SO สำเร็จ", description: `${base.length} แถว · ${groupCount} SO Group` });
+    } catch (e: any) {
+      toast({ title: "Convert SO ไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setConvertExporting(false);
+    }
+  };
+
   // export ตาราง PO เป็น Excel (รวมคอลัมน์ pivot + tracking ว่าง)
   const exportPO = async () => {
     if (filteredPoRows.length === 0) { toast({ title: "ไม่มีข้อมูลให้ export", variant: "destructive" }); return; }
@@ -5429,6 +5748,16 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
             <ShoppingCart className="w-3.5 h-3.5" /> Export PO
           </Button>
           )}
+          {(can("import") || can("export")) && (
+          <Button
+            size="sm" variant="outline"
+            className="h-8 gap-1.5 text-xs border-primary/60 text-primary"
+            onClick={() => { if (convertVendorOpts.length === 0 || convertCustomerOpts.length === 0) loadConvertOpts(); setConvertOpen(true); }}
+            title="Convert: import รหัส+จำนวน → PO/SO Excel (ไม่ filter รายการ)"
+          >
+            <Route className="w-3.5 h-3.5" /> Convert
+          </Button>
+          )}
           <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={() => setPoReportOpen(true)} disabled={poRows.length === 0} title="รายงานสรุปจำนวน SKU (Remark / Action2) + เก็บ snapshot">
             <BarChart3 className="w-3.5 h-3.5" /> Report
           </Button>
@@ -5516,6 +5845,84 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
               <Button onClick={doExportPO} disabled={!poExportAll && poExportSel.size === 0}>
                 <Download className="w-4 h-4 mr-1.5" /> Export Excel
               </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* ===== Convert Dialog (import รหัส+จำนวน → PO/SO Excel, ไม่ filter) ===== */}
+        <Dialog open={convertOpen} onOpenChange={setConvertOpen}>
+          <DialogContent className="w-[720px] max-w-[94vw] bg-background overflow-hidden">
+            <DialogHeader>
+              <DialogTitle>Convert เป็น PO / SO</DialogTitle>
+            </DialogHeader>
+            <p className="text-[11px] text-muted-foreground -mt-1">
+              Import ไฟล์ (Barcode + Quantity + Vendor code) → Convert เป็น Excel · ใส่รหัส/จำนวนมาเท่าไหร่ Convert เท่านั้น (ไม่ filter รายการออก) · คอลัมน์/หัวตารางเดียวกับ Export PO / SO
+            </p>
+
+            <div className="space-y-3">
+              {/* แถวเครื่องมือ: template + import + สถานะ */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={downloadConvertTemplate}>
+                  <FileSpreadsheet className="w-3.5 h-3.5" /> Download Template
+                </Button>
+                <label className={cn("inline-flex items-center gap-1.5 h-8 px-3 rounded-md border text-xs cursor-pointer hover:bg-muted/50", convertImporting && "opacity-60 pointer-events-none")}>
+                  <input type="file" accept=".xlsx,.xls" className="hidden" disabled={convertImporting} onChange={(e) => { const f = e.target.files?.[0]; if (f) handleConvertImport(f); e.target.value = ""; }} />
+                  {convertImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />} Import Convert Excel
+                </label>
+                {convertRows.length > 0 && (
+                  <span className="text-[11px] text-muted-foreground">
+                    {convertRows.length} รายการ · รวม {convertRows.reduce((s, r) => s + (r.qty || 0), 0)} · ไม่พบข้อมูล {convertRows.filter((r) => !r.found).length}
+                  </span>
+                )}
+              </div>
+
+              {/* Item Per PO */}
+              <div className="flex items-center gap-2">
+                <Label className="text-xs whitespace-nowrap">Item Per PO/SO (SKU ต่อ 1 Group)</Label>
+                <Input type="number" min={1} value={convertItemPerPo} onChange={(e) => setConvertItemPerPo(Math.max(1, Number(e.target.value) || 1))} className="h-8 w-24 text-xs" />
+                <span className="text-[11px] text-muted-foreground">จัดกลุ่มตาม Vendor ก่อน แล้วตัดทีละ {Math.max(1, Number(convertItemPerPo) || 25)}</span>
+              </div>
+
+              {/* Convert PO */}
+              <div className="border rounded-lg p-3 space-y-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-medium w-24">Convert PO</span>
+                  <select
+                    className="h-8 text-xs border rounded px-2 bg-background"
+                    value={convertPicking}
+                    onChange={(e) => setConvertPicking(e.target.value)}
+                    title="Picking Type / Database ID"
+                  >
+                    {PO_PICKING_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                  <VendorPickCombo value={convertVendorDefault} options={convertVendorOpts} onChange={setConvertVendorDefault} />
+                  <Button size="sm" className="h-8 gap-1.5 text-xs ml-auto" onClick={doConvertExportPO} disabled={convertRows.length === 0 || convertExporting}>
+                    {convertExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShoppingCart className="w-3.5 h-3.5" />} Convert Excel PO
+                  </Button>
+                </div>
+                <p className="text-[10px] text-muted-foreground">Vendor: ใช้จากไฟล์ก่อน → ไม่มีใช้จากฐานข้อมูล → ไม่มีใช้ Vendor เริ่มต้นที่เลือก · Picking Type = {convertPicking}</p>
+              </div>
+
+              {/* Convert SO */}
+              <div className="border rounded-lg p-3 space-y-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-medium w-24">Convert SO</span>
+                  <div className="flex items-center gap-1.5">
+                    <Label className="text-xs">Customer</Label>
+                    <div className="h-8 px-2 border rounded-md flex items-center">
+                      <CustomerCombo value={convertCustomer} options={convertCustomerOpts} onChange={setConvertCustomer} />
+                    </div>
+                  </div>
+                  <Button size="sm" className="h-8 gap-1.5 text-xs ml-auto" onClick={doConvertExportSO} disabled={convertRows.length === 0 || convertExporting}>
+                    {convertExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileSpreadsheet className="w-3.5 h-3.5" />} Convert Excel SO
+                  </Button>
+                </div>
+                <p className="text-[10px] text-muted-foreground">ใช้ template SO เดียวกับหน้า SO Order B2B (srr_special_so)</p>
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setConvertOpen(false)}>ปิด</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
