@@ -4436,12 +4436,13 @@ const PO_FIXED_COLS: POColMeta[] = [
   { key: "picture", label: "Picture", def: true, w: 90 },
   { key: "stock_dc", label: "Stock DC", def: true, w: 90, thCls: "text-right", tdCls: "text-right tabular-nums" },
   { key: "stock_dc_kr", label: "Stock DC (KR)", def: true, w: 110, thCls: "text-right", tdCls: "text-right tabular-nums" },
+  { key: "brand_names", label: "Brand", def: true, w: 180, tdCls: "text-muted-foreground" },
   { key: "total", label: "Total qty", def: true, w: 90, thCls: "text-right bg-emerald-50", tdCls: "text-right tabular-nums font-semibold bg-emerald-50/40" },
   { key: "diff", label: "DIFF", def: true, w: 80, thCls: "text-right", tdCls: "text-right tabular-nums" },
 ];
 const PO_BRAND_W = 90; // ความกว้างเริ่มต้นของคอลัมน์แบรนด์
-const PO_VIS_LS = "po_vis_cols_v5"; // bump version → ล้างค่าเก่าใน localStorage ให้ default ใหม่ทำงาน
-const PO_VIS_MIGRATED = "po_vis_migrated_v5"; // ล้างค่าคอลัมน์เก่าทิ้งครั้งเดียว → กลับไป default ที่กำหนด
+const PO_VIS_LS = "po_vis_cols_v6"; // bump version → ล้างค่าเก่าใน localStorage ให้ default ใหม่ทำงาน (v6: +คอลัมน์ Brand)
+const PO_VIS_MIGRATED = "po_vis_migrated_v6"; // ล้างค่าคอลัมน์เก่าทิ้งครั้งเดียว → กลับไป default ที่กำหนด
 const PO_W_LS = "po_col_widths";
 const PO_VENDOR_OV_LS = "po_vendor_overrides_v2"; // override vendor code ที่ผู้ใช้คีย์ไว้ (key = sku)
 
@@ -4583,6 +4584,10 @@ const poCellValue = (key: string, r: PORow): React.ReactNode => {
     case "vendor_currency": return r.vendor_currency || "-";
     case "vendor_origin": return r.vendor_origin || "-";
     case "order_group": return <span className="block truncate" title={r.order_group}>{r.order_group || "-"}</span>;
+    case "brand_names": {
+      const names = [...r.byBrand.entries()].filter(([, q]) => (Number(q) || 0) > 0).map(([b]) => b).sort((a, b) => a.localeCompare(b)).join(" / ");
+      return <span className="block truncate" title={names}>{names || "-"}</span>;
+    }
     case "po_number": return r.po_number || "-";
     case "po_date": return r.po_date || "-";
     case "po_status": return r.po_status || "-";
@@ -5628,6 +5633,8 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     if (filteredPoRows.length === 0) { toast({ title: "ไม่มีข้อมูลให้ export", variant: "destructive" }); return; }
     const out = filteredPoRows.map((r, i) => {
       const { remark, action } = getPoRemarkAction(r);
+      // ชื่อแบรนด์ที่มีจำนวน (qty > 0) ในแถวนั้น ต่อกันด้วย " / "
+      const brandNames = [...r.byBrand.entries()].filter(([, q]) => (Number(q) || 0) > 0).map(([b]) => b).sort((a, b) => a.localeCompare(b)).join(" / ");
       const base: Record<string, any> = {
         "#": i + 1,
         Division: r.division,
@@ -5635,6 +5642,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         Remark: remark,
         Action: action,
         Action2: getPoAction2(r),
+        "Order group": r.order_group,
         SKU: r.sku, // ซ่อนคอลัมน์ไว้ก่อน (ตั้ง hidden ด้านล่าง)
         "Vendor code": r.vendor_code,
         "Vendor name": r.vendor_name,
@@ -5656,6 +5664,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           : "",
         "Stock DC": r.stock_dc ?? "",
         "Stock DC (KR)": r.stock_dc_kr ?? "",
+        "Brand": brandNames,
         "Brand Apply": [...r.byBrand.values()].filter((q) => (Number(q) || 0) > 0).length,
       };
       for (const b of poBrands) base[b] = r.byBrand.get(b) ?? "";
@@ -5665,7 +5674,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     });
     const headers = Object.keys(out[0]);
     const wCol = (h: string) => h === "Product name EN" ? 34 : h === "Vendor name" ? 24
-      : (h === "Remark" || h === "Action" || h === "Action2") ? 22 : h === "Picture From" ? 14 : h === "Picture" ? 12 : 12;
+      : (h === "Remark" || h === "Action" || h === "Action2") ? 22 : (h === "Brand" || h === "Order group") ? 20 : h === "Picture From" ? 14 : h === "Picture" ? 12 : 12;
 
     const ExcelJS = (await import("exceljs")).default;
     const wb = new ExcelJS.Workbook();
