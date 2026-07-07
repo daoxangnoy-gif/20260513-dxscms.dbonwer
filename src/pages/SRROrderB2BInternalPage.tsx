@@ -4361,10 +4361,10 @@ type PORow = {
   po_status: string;
   po_qty: string;
   rec_po: string;
-  // จาก PO Cost (match ด้วย id อย่างเดียว)
+  // จาก PO Cost (moq/po_cost match ด้วย id) — po_cost_unit เก็บแยกตาม vendor (match ID+Vendor ตอน Export)
   moq_1x: number | null;
   pocost: number | null;
-  pocost_unit: number | null; // PO Cost Unit (ต้นทุนต่อหน่วย) — ใช้เป็น Unit Price ตอน Export PO / Convert
+  costByVendor: Record<string, { unit: number; ccy: string }>; // vendor code → { PO Cost Unit, สกุลเงิน } ของ SKU นี้
   byBrand: Map<string, number>;
   total: number;
   pictures: Array<{ url: string; brand: string }>; // รูปสินค้า (URL แรกต่อแบรนด์)
@@ -5023,7 +5023,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       const [dm, stock, pc, krRows, recRows] = await Promise.all([
         skus.length ? fetchInChunks("data_master", "sku_code, division, department, product_name_en, vendor_code, vendor_display_name, main_barcode, packing_size_qty", "sku_code", skus) : Promise.resolve([] as any[]),
         skus.length ? fetchInChunks("stock", "id, item_id, type_store, quantity", "item_id", skus, "id") : Promise.resolve([] as any[]),
-        (skus.length ? fetchInChunks("po_cost", "item_id, moq, po_cost, po_cost_unit", "item_id", skus) : Promise.resolve([] as any[])).catch(() => [] as any[]),
+        (skus.length ? fetchInChunks("po_cost", "item_id, moq, po_cost, po_cost_unit, vendor", "item_id", skus) : Promise.resolve([] as any[])).catch(() => [] as any[]),
         (skus.length ? fetchInChunks("scm_stock_kr", "id, qty", "id", skus) : Promise.resolve([] as any[])).catch(() => [] as any[]),
         fetchPoReceiveAll().catch(() => [] as any[]),
       ]);
@@ -5039,14 +5039,17 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           barcodeMap.set(d.sku_code, String(d.main_barcode));
         }
       }
-      // vendor_master (ต้องใช้ vendor_code จาก data_master ก่อน)
+      // vendor_master — รวม vendor จาก data_master + vendor เจ้าของ po_cost (ต้องใช้สกุลเงินตอนแปลง LAK)
       setPoStatus("ดึงข้อมูลผู้สนอง...");
-      const vendorCodes = [...new Set(dm.map((d: any) => d.vendor_code).filter(Boolean))] as string[];
+      const costVendorCodes = new Set<string>();
+      for (const p of pc) { const v = String(p.vendor ?? "").trim(); if (v) costVendorCodes.add(v); }
+      const vendorCodes = [...new Set([...dm.map((d: any) => d.vendor_code).filter(Boolean), ...costVendorCodes])] as string[];
       const vm = vendorCodes.length
         ? await fetchInChunks("vendor_master", "vendor_code, supplier_currency, vendor_origin", "vendor_code", vendorCodes)
         : [];
       const vmMap = new Map<string, any>();
       for (const v of vm) if (v.vendor_code && !vmMap.has(v.vendor_code)) vmMap.set(v.vendor_code, v);
+      const ccyOf = (vc: string) => String(vmMap.get(vc)?.supplier_currency ?? "").toUpperCase();
       setPoProgress(88);
       setPoStatus("คำนวณ...");
       // stock DC
@@ -5054,9 +5057,20 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       for (const s of stock) {
         if (String(s.type_store) === "DC") stockDcMap.set(s.item_id, (stockDcMap.get(s.item_id) || 0) + (Number(s.quantity) || 0));
       }
-      // PO Cost — 1x = moq, Pocost = po_cost, Pocost Unit = po_cost_unit (match ด้วย item_id)
-      const pcMap = new Map<string, { moq: number | null; po_cost: number | null; po_cost_unit: number | null }>();
-      for (const p of pc) { const id = String(p.item_id ?? ""); if (id && !pcMap.has(id)) pcMap.set(id, { moq: p.moq == null ? null : Number(p.moq), po_cost: p.po_cost == null ? null : Number(p.po_cost), po_cost_unit: p.po_cost_unit == null ? null : Number(p.po_cost_unit) }); }
+      // PO Cost — 1x = moq, Pocost = po_cost (match ด้วย item_id) · po_cost_unit เก็บแยกตาม vendor (match ID+Vendor)
+      const pcMap = new Map<string, { moq: number | null; po_cost: number | null }>();
+      const costByItem = new Map<string, Record<string, { unit: number; ccy: string }>>(); // item_id → { vendor: {unit, ccy} }
+      for (const p of pc) {
+        const id = String(p.item_id ?? "");
+        if (!id) continue;
+        if (!pcMap.has(id)) pcMap.set(id, { moq: p.moq == null ? null : Number(p.moq), po_cost: p.po_cost == null ? null : Number(p.po_cost) });
+        const unit = p.po_cost_unit == null ? null : Number(p.po_cost_unit);
+        if (unit == null || !Number.isFinite(unit)) continue;
+        const vc = String(p.vendor ?? "").trim(); // "" = po_cost ที่ไม่ผูก vendor
+        if (!costByItem.has(id)) costByItem.set(id, {});
+        const m = costByItem.get(id)!;
+        if (m[vc] == null) m[vc] = { unit, ccy: ccyOf(vc) };
+      }
       // Stock DC (KR) — SUMIF qty
       const krMap = new Map<string, number>();
       for (const k of krRows) { const id = String(k.id ?? ""); if (id) krMap.set(id, (krMap.get(id) || 0) + (Number(k.qty) || 0)); }
@@ -5114,7 +5128,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           rec_po: str(rec.received_qty),
           moq_1x: (pc as any).moq ?? null,
           pocost: (pc as any).po_cost ?? null,
-          pocost_unit: (pc as any).po_cost_unit ?? null,
+          costByVendor: costByItem.get(a.sku) || {},
           byBrand: a.byBrand,
           total: a.total,
           pictures: [...a.picByBrand.entries()].map(([brand, url]) => ({ url, brand })),
@@ -5224,14 +5238,22 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     let rows = poExportEligible;
     if (!poExportAll) rows = rows.filter((r) => poExportSel.has(r.vendor_code));
     if (rows.length === 0) { toast({ title: "ไม่มีรายการให้ export", description: "ตรวจเงื่อนไข Action2 / DIFF / Vendor ที่เลือก", variant: "destructive" }); return; }
-    // Unit Price = PO Cost Unit — ติ๊ก Pocost Unit Lak → แปลงเป็น LAK ด้วยเรท (ตามสกุลเงิน vendor)
+    // Unit Price = PO Cost Unit match ID+Vendor (r.vendor_code = vendor ตัวที่ export/override) → ไม่เจอ fallback vendor อื่นของ SKU เดียวกัน
+    // ติ๊ก Pocost Unit Lak → แปลงเป็น LAK ด้วยเรทตามสกุลเงินของ vendor เจ้าของ cost ที่หยิบมาจริง
     const { rThb, rUsd } = readFxRates();
     let lakMissing = 0;
+    // เลือก cost ตาม vendor ปัจจุบันของแถว (rวมกรณี override) → ไม่เจอ fallback ราคา vendor อื่นของ SKU เดียวกัน
+    const pickCost = (r: PORow): { unit: number; ccy: string } | null => {
+      const cbv = r.costByVendor || {};
+      if (cbv[r.vendor_code]) return cbv[r.vendor_code];
+      const keys = Object.keys(cbv);
+      return keys.length ? cbv[keys[0]] : null;
+    };
     const unitPrice = (r: PORow): number | string => {
-      const base = r.pocost_unit;
-      if (base == null) return "";
-      if (!poExportUnitLak) return base;
-      const lak = costToLak(base, r.vendor_currency, rThb, rUsd);
+      const c = pickCost(r);
+      if (!c) return "";
+      if (!poExportUnitLak) return c.unit;
+      const lak = costToLak(c.unit, c.ccy, rThb, rUsd);
       if (lak == null) { lakMissing++; return ""; } // ไม่มีเรทสำหรับสกุลนี้
       return lak;
     };
