@@ -4649,6 +4649,8 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   const [convertRows, setConvertRows] = useState<ConvertRow[]>([]);
   const [convertNameMap, setConvertNameMap] = useState<Record<string, string>>({}); // vendor_code → name
   const [convertImporting, setConvertImporting] = useState(false);
+  const [convertProgress, setConvertProgress] = useState(0);   // 0-100 ตอน import Convert
+  const [convertStatus, setConvertStatus] = useState("");      // ข้อความสถานะ + นับรายการ
   const [convertExporting, setConvertExporting] = useState(false);
   const [convertItemPerPo, setConvertItemPerPo] = useState(25);        // จำนวน SKU ต่อ 1 Group PO/SO
   const [convertPicking, setConvertPicking] = useState(PO_PICKING_DC); // Picking Type สำหรับ Convert PO
@@ -5380,6 +5382,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   // enrich: resolve barcode → sku + unit barcode + product/vendor/pocost unit (batch)
   const enrichConvert = async (inputs: { barcode: string; qty: number; fileVendor: string; fileUnitPrice: number | null }[]): Promise<{ rows: ConvertRow[]; nameMap: Record<string, string>; currencyByVendor: Record<string, string> }> => {
     const codes = [...new Set(inputs.map((i) => i.barcode).filter(Boolean))];
+    setConvertStatus(`ค้นหารหัสสินค้า ${codes.length} รหัส...`); setConvertProgress(15);
     // 1) code → sku (ลองทีละคอลัมน์ main_barcode / sku_code / barcode)
     const [byMain, bySku, byBc] = await Promise.all([
       fetchInChunks("data_master", "sku_code, main_barcode", "main_barcode", codes).catch(() => [] as any[]),
@@ -5392,6 +5395,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     for (const d of byBc) if (d.barcode && d.sku_code && !codeToSku.has(String(d.barcode))) codeToSku.set(String(d.barcode), String(d.sku_code));
     // 2) sku → ข้อมูลสินค้า (เลือกแถว packing_size_qty=1 ก่อน)
     const skus = [...new Set([...codeToSku.values()])];
+    setConvertStatus(`ดึงข้อมูลสินค้า ${skus.length} รายการ...`); setConvertProgress(45);
     const dmRows = skus.length
       ? await fetchInChunks("data_master", "sku_code, main_barcode, packing_size_qty, product_name_en, product_name_la, product_name_th, unit_of_measure, vendor_code, vendor_display_name", "sku_code", skus)
       : [];
@@ -5411,6 +5415,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       if (!cur || (isUnit && !cur.isUnit)) infoBySku.set(d.sku_code, rec);
     }
     // 3) PO Cost Unit by (sku, vendor) — เก็บทุก vendor ของ SKU เพื่อ match ID+Vendor ตอน Convert (fallback vendor อื่น)
+    setConvertStatus(`ดึงราคา PO Cost ${skus.length} รายการ...`); setConvertProgress(70);
     const pc = skus.length ? await fetchInChunks("po_cost", "item_id, vendor, po_cost_unit", "item_id", skus).catch(() => [] as any[]) : [];
     const costByItem = new Map<string, Record<string, number>>(); // item_id → { vendor: po_cost_unit }
     const costVendorCodes = new Set<string>();
@@ -5428,6 +5433,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     const vendorCodes = [...new Set([...inputs.map((i) => i.fileVendor).filter(Boolean), ...dmRows.map((d: any) => d.vendor_code).filter(Boolean), ...costVendorCodes])] as string[];
     const nameMap: Record<string, string> = {};
     const currencyByVendor: Record<string, string> = {}; // vendor_code → supplier_currency (สำหรับแปลง LAK)
+    setConvertStatus(`ดึงข้อมูลผู้สนอง ${vendorCodes.length} ราย...`); setConvertProgress(88);
     if (vendorCodes.length) {
       const [dmN, vmN] = await Promise.all([
         fetchInChunks("data_master", "vendor_code, vendor_display_name", "vendor_code", vendorCodes).catch(() => [] as any[]),
@@ -5463,6 +5469,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
 
   const handleConvertImport = async (file: File) => {
     setConvertImporting(true);
+    setConvertProgress(5); setConvertStatus("อ่านไฟล์...");
     try {
       const ab = await file.arrayBuffer();
       const wb = XLSX.read(ab);
@@ -5485,8 +5492,10 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       setConvertNameMap(nameMap);
       setConvertCurrencyByVendor(currencyByVendor);
       const notFound = rows.filter((r) => !r.found).length;
+      setConvertProgress(100); setConvertStatus(`เสร็จสิ้น · ${rows.length} รายการ`);
       toast({ title: "นำเข้าสำเร็จ", description: `${rows.length} รายการ${notFound ? ` · ไม่พบข้อมูล ${notFound}` : ""}` });
     } catch (e: any) {
+      setConvertStatus("");
       toast({ title: "นำเข้าไม่สำเร็จ", description: e.message, variant: "destructive" });
     } finally {
       setConvertImporting(false);
@@ -6024,12 +6033,22 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                   <input type="file" accept=".xlsx,.xls" className="hidden" disabled={convertImporting} onChange={(e) => { const f = e.target.files?.[0]; if (f) handleConvertImport(f); e.target.value = ""; }} />
                   {convertImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />} Import Convert Excel
                 </label>
-                {convertRows.length > 0 && (
+                {!convertImporting && convertRows.length > 0 && (
                   <span className="text-[11px] text-muted-foreground">
                     {convertRows.length} รายการ · รวม {convertRows.reduce((s, r) => s + (r.qty || 0), 0)} · ไม่พบข้อมูล {convertRows.filter((r) => !r.found).length}
                   </span>
                 )}
               </div>
+
+              {/* แถบ % ตอน import Convert + นับรายการ */}
+              {convertImporting && (
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 h-2 rounded-full bg-muted overflow-hidden">
+                    <div className="h-full bg-primary transition-all duration-300" style={{ width: `${convertProgress}%` }} />
+                  </div>
+                  <span className="text-[11px] text-muted-foreground tabular-nums whitespace-nowrap">{convertStatus} {convertProgress}/100%</span>
+                </div>
+              )}
 
               {/* Item Per PO */}
               <div className="flex items-center gap-2">
