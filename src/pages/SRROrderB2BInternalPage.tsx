@@ -4603,9 +4603,9 @@ const poCellValue = (key: string, r: PORow): React.ReactNode => {
       const first = r.pictures[0];
       const multi = r.pictures.length > 1;
       return (
-        <a href={first.url} target="_blank" rel="noopener noreferrer" className="flex flex-col items-center gap-0.5 group w-fit">
-          <img src={first.url} alt={first.brand} className="w-14 h-14 object-contain rounded border border-border group-hover:opacity-80 transition-opacity" />
-          <span className="text-[10px] text-muted-foreground leading-tight text-center max-w-[72px] truncate">{first.brand}{multi ? ` +${r.pictures.length - 1}` : ""}</span>
+        <a href={first.url} target="_blank" rel="noopener noreferrer" title={`${first.brand}${multi ? ` +${r.pictures.length - 1}` : ""}`} className="flex flex-col items-center gap-0 group w-fit">
+          <img src={first.url} alt={first.brand} className="w-10 h-10 object-contain rounded border border-border group-hover:opacity-80 transition-opacity" />
+          <span className="text-[9px] text-muted-foreground leading-none text-center max-w-[72px] truncate">{first.brand}{multi ? ` +${r.pictures.length - 1}` : ""}</span>
         </a>
       );
     }
@@ -6125,7 +6125,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
             </thead>
             <tbody>
               {filteredPoRows.map((r, i) => (
-                <tr key={r.id || i} className="border-b last:border-0 hover:bg-muted/40 [&_td]:px-3 [&_td]:py-1.5 [&_td]:overflow-hidden [&_td]:text-ellipsis">
+                <tr key={r.id || i} className="h-16 border-b last:border-0 hover:bg-muted/40 [&_td]:px-3 [&_td]:py-1.5 [&_td]:align-middle [&_td]:overflow-hidden [&_td]:text-ellipsis">
                   <td className="text-muted-foreground tabular-nums">{i + 1}</td>
                   {visibleCols.map((c) =>
                     c.key === "vendor_code" ? (
