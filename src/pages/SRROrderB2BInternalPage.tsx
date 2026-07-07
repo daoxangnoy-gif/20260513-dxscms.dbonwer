@@ -380,7 +380,7 @@ function CustomerCombo({ value, options, onChange }: { value: string; options: C
       <PopoverContent className="w-80 p-0" align="start">
         <Command shouldFilter={false}>
           <CommandInput placeholder="ค้นหาลูกค้า / รหัส" value={q} onValueChange={setQ} />
-          <CommandList>
+          <CommandList onWheel={(e) => { e.currentTarget.scrollTop += e.deltaY; }}>
             <CommandEmpty>ไม่พบลูกค้า</CommandEmpty>
             <CommandGroup>
               {filtered.map((o) => (
@@ -422,7 +422,7 @@ function VendorPickCombo({ value, options, onChange }: { value: string; options:
       <PopoverContent className="w-80 p-0" align="start">
         <Command shouldFilter={false}>
           <CommandInput placeholder="ค้นหา Vendor / รหัส" value={q} onValueChange={setQ} />
-          <CommandList>
+          <CommandList onWheel={(e) => { e.currentTarget.scrollTop += e.deltaY; }}>
             <CommandEmpty>ไม่พบ Vendor</CommandEmpty>
             <CommandGroup>
               {value && (
