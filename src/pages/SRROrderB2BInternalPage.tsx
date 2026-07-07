@@ -4458,6 +4458,8 @@ const PO_PICKING_STORE = "131010001-Phonsinuan: Received PO";
 const PO_PICKING_OPTIONS = [PO_PICKING_DC, PO_PICKING_DC_7193, PO_PICKING_STORE];
 // รหัสที่ถือเป็น DC (Inter Transfer = "") — ที่เหลือถือเป็น store (Inter Transfer = "true")
 const PO_PICKING_DC_IDS = new Set([PO_PICKING_DC, PO_PICKING_DC_7193]);
+// Type Store ที่เอาสาขามาเป็นตัวเลือก Picking Type (ค่า = store_type.ship_to ตรงตามที่ Odoo ใช้)
+const PO_STORE_PICK_GROUPS = ["Jmart", "Kokkok"];
 // Action2 ที่อนุญาตให้ Export
 const PO_EXPORT_ACTION2 = new Set(["เร่งเปิด PO และ ตามของ", "รอทำ Po Cost"]);
 
@@ -4651,6 +4653,8 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   const [convertCustomer, setConvertCustomer] = useState(SO_DEFAULT_CUSTOMER); // ลูกค้าสำหรับ Convert SO
   const [convertVendorOpts, setConvertVendorOpts] = useState<CustomerOpt[]>([]); // dropdown vendor
   const [convertCustomerOpts, setConvertCustomerOpts] = useState<CustomerOpt[]>([]); // dropdown ลูกค้า
+  // ตัวเลือก Picking Type เพิ่มเติม = สาขาของ Type Jmart/Kokkok (ค่า = ship_to จาก store_type ตรงตามที่ Odoo ใช้)
+  const [pickStoreOpts, setPickStoreOpts] = useState<{ value: string; label: string }[]>([]);
   const [poReportOpen, setPoReportOpen] = useState(false);
   const [poLoading, setPoLoading] = useState(false);
   const [poLoaded, setPoLoaded] = useState(false);
@@ -5282,6 +5286,36 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   // Vendor เรียงลำดับ: จากไฟล์ > Vendor เริ่มต้นที่เลือก (override Master) > จาก data_master
   const convertFinalVendor = (r: ConvertRow) => r.fileVendor || convertVendorDefault || r.dmVendor || "";
 
+  // โหลดสาขา Type Jmart/Kokkok มาเป็นตัวเลือก Picking Type — ค่า = ship_to (ตรงตามที่ Odoo ต้องการ) → export ถูกต้อง
+  const loadPickStoreOpts = async () => {
+    if (pickStoreOpts.length > 0) return;
+    try {
+      const rows: any[] = [];
+      for (let from = 0; ; from += 1000) {
+        const { data } = await (supabase as any).from("store_type").select("code, store_name, type_store, ship_to").in("type_store", PO_STORE_PICK_GROUPS).order("code").range(from, from + 999);
+        if (!data || data.length === 0) break;
+        rows.push(...data);
+        if (data.length < 1000) break;
+      }
+      const seen = new Set<string>();
+      const opts: { value: string; label: string }[] = [];
+      for (const r of rows) {
+        const val = String(r.ship_to ?? "").trim(); // ship_to = ค่า Picking Type จริงที่ Odoo ใช้
+        if (!val || seen.has(val)) continue;
+        seen.add(val);
+        opts.push({ value: val, label: `${String(r.store_name ?? "").trim() || val} · ${r.type_store}` });
+      }
+      setPickStoreOpts(opts);
+    } catch { /* โหลดไม่ได้ = ใช้แค่ 2540/7193 + สาขา default */ }
+  };
+
+  // ตัวเลือก Picking Type สำหรับ dropdown (DC 2 ตัว + สาขา Jmart/Kokkok) — ถ้ายังไม่โหลด fallback สาขา default เดิม
+  const pickingSelectOpts: { value: string; label: string }[] = [
+    { value: PO_PICKING_DC, label: PO_PICKING_DC },
+    { value: PO_PICKING_DC_7193, label: PO_PICKING_DC_7193 },
+    ...(pickStoreOpts.length ? pickStoreOpts : [{ value: PO_PICKING_STORE, label: PO_PICKING_STORE }]),
+  ];
+
   // โหลด dropdown vendor (vendor_master) + ลูกค้า (customers) ตอนเปิด dialog
   const loadConvertOpts = async () => {
     try {
@@ -5800,7 +5834,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           <Button
             size="sm"
             className="h-8 gap-1.5 text-xs"
-            onClick={() => { setPoExportPick({}); setPoExportSel(new Set()); setPoExportAll(true); setPoExportSearch(""); setPoExportOpen(true); }}
+            onClick={() => { loadPickStoreOpts(); setPoExportPick({}); setPoExportSel(new Set()); setPoExportAll(true); setPoExportSearch(""); setPoExportOpen(true); }}
             disabled={poExportEligible.length === 0}
             title="Export PO (Excel) สำหรับ import เข้า Odoo"
           >
@@ -5811,7 +5845,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           <Button
             size="sm" variant="outline"
             className="h-8 gap-1.5 text-xs border-primary/60 text-primary"
-            onClick={() => { if (convertVendorOpts.length === 0 || convertCustomerOpts.length === 0) loadConvertOpts(); setConvertOpen(true); }}
+            onClick={() => { if (convertVendorOpts.length === 0 || convertCustomerOpts.length === 0) loadConvertOpts(); loadPickStoreOpts(); setConvertOpen(true); }}
             title="Convert: import รหัส+จำนวน → PO/SO Excel (ไม่ filter รายการ)"
           >
             <Route className="w-3.5 h-3.5" /> Convert
@@ -5899,7 +5933,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                               value={poExportPick[v.code] || PO_PICKING_DC}
                               onChange={(e) => setPoExportPick((prev) => ({ ...prev, [v.code]: e.target.value }))}
                             >
-                              {PO_PICKING_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
+                              {pickingSelectOpts.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                             </select>
                           ) : <span />}
                         </div>
@@ -5957,12 +5991,12 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs font-medium w-24">Convert PO</span>
                   <select
-                    className="h-8 text-xs border rounded px-2 bg-background"
+                    className="h-8 text-xs border rounded px-2 bg-background max-w-[280px]"
                     value={convertPicking}
                     onChange={(e) => setConvertPicking(e.target.value)}
                     title="Picking Type / Database ID"
                   >
-                    {PO_PICKING_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
+                    {pickingSelectOpts.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
                   <VendorPickCombo value={convertVendorDefault} options={convertVendorOpts} onChange={setConvertVendorDefault} />
                   <Button size="sm" className="h-8 gap-1.5 text-xs ml-auto" onClick={doConvertExportPO} disabled={convertRows.length === 0 || convertExporting}>
