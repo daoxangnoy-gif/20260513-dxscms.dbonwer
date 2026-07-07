@@ -461,7 +461,8 @@ type ConvertRow = {
   productNameEn: string;  // สำหรับ PO
   uom: string;
   dmVendor: string;       // vendor_code จาก data_master
-  pocost: number | null;
+  pocostUnit: number | null;    // PO Cost Unit จากฐานข้อมูล (fallback)
+  fileUnitPrice: number | null; // Pocost Unit จากไฟล์ import (ถ้ากรอก = override)
 };
 
 // ===== SO Doc (SCM Control → tab SO) — สร้างอัตโนมัติตอน Save Order, แยกตาม order_group =====
@@ -4363,6 +4364,7 @@ type PORow = {
   // จาก PO Cost (match ด้วย id อย่างเดียว)
   moq_1x: number | null;
   pocost: number | null;
+  pocost_unit: number | null; // PO Cost Unit (ต้นทุนต่อหน่วย) — ใช้เป็น Unit Price ตอน Export PO / Convert
   byBrand: Map<string, number>;
   total: number;
   pictures: Array<{ url: string; brand: string }>; // รูปสินค้า (URL แรกต่อแบรนด์)
@@ -4391,6 +4393,21 @@ const PO_RECEIVE_COLS = [
 
 // cache ข้อมูล PO ไว้ข้ามการสลับ tab/หน้า (ไม่ต้องกดโหลดใหม่ทุกครั้ง)
 let poDataCache: { rows: PORow[]; brands: string[] } | null = null;
+
+// เรทแปลงค่าเงิน → LAK (ตั้งไว้ที่ Data Control, เก็บใน localStorage) — ใช้ตอนติ๊ก Pocost Unit Lak
+function readFxRates(): { rThb: number | null; rUsd: number | null } {
+  const p = (k: string) => { const n = parseFloat(localStorage.getItem(k) || ""); return Number.isFinite(n) && n > 0 ? n : null; };
+  return { rThb: p("po_cost_rate_thb"), rUsd: p("po_cost_rate_usd") };
+}
+// แปลงต้นทุน (สกุลเงิน vendor) → LAK — LAK/ว่างใช้ค่าเดิม, THB/USD คูณเรท, สกุลอื่นคืนค่าเดิม, ถ้าไม่มีเรทคืน null
+function costToLak(cost: number | null | undefined, currency: string, rThb: number | null, rUsd: number | null): number | null {
+  if (cost == null || !Number.isFinite(cost)) return null;
+  const cur = (currency || "").toUpperCase();
+  if (cur === "LAK" || cur === "") return cost;
+  if (cur === "THB") return rThb ? cost * rThb : null;
+  if (cur === "USD") return rUsd ? cost * rUsd : null;
+  return cost;
+}
 
 // meta คอลัมน์ตาราง PO (def = แสดงค่าเริ่มต้นตามไฟล์ template) — brands แทรกก่อน Total qty (def hidden)
 type POColMeta = { key: string; label: string; def: boolean; w: number; thCls?: string; tdCls?: string };
@@ -4618,6 +4635,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   const [poExportAll7193, setPoExportAll7193] = useState(false); // ทุก vendor: ติกเพื่อใช้ 7193 แทน 2540
   const [poExportSel, setPoExportSel] = useState<Set<string>>(new Set());     // vendor ที่ติ๊ก
   const [poExportPick, setPoExportPick] = useState<Record<string, string>>({}); // vendor_code → picking type
+  const [poExportUnitLak, setPoExportUnitLak] = useState(false); // ติ๊ก = Unit Price ใช้ PO Cost Unit แปลงเป็น LAK
   const [poExportSearch, setPoExportSearch] = useState("");
   // ---- Convert dialog (import รหัส+จำนวน → Convert เป็น PO/SO Excel, ไม่ filter) ----
   const [convertOpen, setConvertOpen] = useState(false);
@@ -4999,7 +5017,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       const [dm, stock, pc, krRows, recRows] = await Promise.all([
         skus.length ? fetchInChunks("data_master", "sku_code, division, department, product_name_en, vendor_code, vendor_display_name, main_barcode, packing_size_qty", "sku_code", skus) : Promise.resolve([] as any[]),
         skus.length ? fetchInChunks("stock", "id, item_id, type_store, quantity", "item_id", skus, "id") : Promise.resolve([] as any[]),
-        (skus.length ? fetchInChunks("po_cost", "item_id, moq, po_cost", "item_id", skus) : Promise.resolve([] as any[])).catch(() => [] as any[]),
+        (skus.length ? fetchInChunks("po_cost", "item_id, moq, po_cost, po_cost_unit", "item_id", skus) : Promise.resolve([] as any[])).catch(() => [] as any[]),
         (skus.length ? fetchInChunks("scm_stock_kr", "id, qty", "id", skus) : Promise.resolve([] as any[])).catch(() => [] as any[]),
         fetchPoReceiveAll().catch(() => [] as any[]),
       ]);
@@ -5030,9 +5048,9 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       for (const s of stock) {
         if (String(s.type_store) === "DC") stockDcMap.set(s.item_id, (stockDcMap.get(s.item_id) || 0) + (Number(s.quantity) || 0));
       }
-      // PO Cost — 1x = moq, Pocost = po_cost (match ด้วย item_id)
-      const pcMap = new Map<string, { moq: number | null; po_cost: number | null }>();
-      for (const p of pc) { const id = String(p.item_id ?? ""); if (id && !pcMap.has(id)) pcMap.set(id, { moq: p.moq == null ? null : Number(p.moq), po_cost: p.po_cost == null ? null : Number(p.po_cost) }); }
+      // PO Cost — 1x = moq, Pocost = po_cost, Pocost Unit = po_cost_unit (match ด้วย item_id)
+      const pcMap = new Map<string, { moq: number | null; po_cost: number | null; po_cost_unit: number | null }>();
+      for (const p of pc) { const id = String(p.item_id ?? ""); if (id && !pcMap.has(id)) pcMap.set(id, { moq: p.moq == null ? null : Number(p.moq), po_cost: p.po_cost == null ? null : Number(p.po_cost), po_cost_unit: p.po_cost_unit == null ? null : Number(p.po_cost_unit) }); }
       // Stock DC (KR) — SUMIF qty
       const krMap = new Map<string, number>();
       for (const k of krRows) { const id = String(k.id ?? ""); if (id) krMap.set(id, (krMap.get(id) || 0) + (Number(k.qty) || 0)); }
@@ -5090,6 +5108,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           rec_po: str(rec.received_qty),
           moq_1x: (pc as any).moq ?? null,
           pocost: (pc as any).po_cost ?? null,
+          pocost_unit: (pc as any).po_cost_unit ?? null,
           byBrand: a.byBrand,
           total: a.total,
           pictures: [...a.picByBrand.entries()].map(([brand, url]) => ({ url, brand })),
@@ -5199,6 +5218,17 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     let rows = poExportEligible;
     if (!poExportAll) rows = rows.filter((r) => poExportSel.has(r.vendor_code));
     if (rows.length === 0) { toast({ title: "ไม่มีรายการให้ export", description: "ตรวจเงื่อนไข Action2 / DIFF / Vendor ที่เลือก", variant: "destructive" }); return; }
+    // Unit Price = PO Cost Unit — ติ๊ก Pocost Unit Lak → แปลงเป็น LAK ด้วยเรท (ตามสกุลเงิน vendor)
+    const { rThb, rUsd } = readFxRates();
+    let lakMissing = 0;
+    const unitPrice = (r: PORow): number | string => {
+      const base = r.pocost_unit;
+      if (base == null) return "";
+      if (!poExportUnitLak) return base;
+      const lak = costToLak(base, r.vendor_currency, rThb, rUsd);
+      if (lak == null) { lakMissing++; return ""; } // ไม่มีเรทสำหรับสกุลนี้
+      return lak;
+    };
     // group ตาม vendor
     const byVendor = new Map<string, PORow[]>();
     for (const r of rows) { const vc = r.vendor_code || ""; if (!byVendor.has(vc)) byVendor.set(vc, []); byVendor.get(vc)!.push(r); }
@@ -5226,11 +5256,14 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           "Products to Purchase/UoM": "Unit",
           "Products to Purchase/Exclude In Package": "True",
           "Products to Purchase/Quantity": diff,
-          "Products to Purchase/Unit Price": r.pocost ?? "",
+          "Products to Purchase/Unit Price": unitPrice(r),
           "assigned_to": idx === 0 ? "SPC manager01" : "",
           "description": "",
         });
       });
+    }
+    if (poExportUnitLak && lakMissing > 0) {
+      toast({ title: "เตือน: ขาดเรทแปลง LAK", description: `${lakMissing} รายการที่เป็น THB/USD ยังไม่ได้ตั้งเรท (ตั้งที่ Data Control) → Unit Price ว่าง`, variant: "destructive" });
     }
     const ws = XLSX.utils.json_to_sheet(out);
     const wb = XLSX.utils.book_new();
@@ -5272,17 +5305,17 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     } catch { /* โหลดไม่ได้ก็ปล่อยว่าง */ }
   };
 
-  // Download template (Barcode + Quantity + Vendor code)
+  // Download template (Barcode + Quantity + Vendor code + Pocost Unit)
   const downloadConvertTemplate = () => {
-    const ws = XLSX.utils.aoa_to_sheet([["Barcode", "Quantity", "Vendor code"]]);
-    ws["!cols"] = [{ wch: 18 }, { wch: 12 }, { wch: 16 }];
+    const ws = XLSX.utils.aoa_to_sheet([["Barcode", "Quantity", "Vendor code", "Pocost Unit"]]);
+    ws["!cols"] = [{ wch: 18 }, { wch: 12 }, { wch: 16 }, { wch: 14 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Template");
     XLSX.writeFile(wb, "Convert_Template.xlsx");
   };
 
-  // enrich: resolve barcode → sku + unit barcode + product/vendor/pocost (batch)
-  const enrichConvert = async (inputs: { barcode: string; qty: number; fileVendor: string }[]): Promise<{ rows: ConvertRow[]; nameMap: Record<string, string> }> => {
+  // enrich: resolve barcode → sku + unit barcode + product/vendor/pocost unit (batch)
+  const enrichConvert = async (inputs: { barcode: string; qty: number; fileVendor: string; fileUnitPrice: number | null }[]): Promise<{ rows: ConvertRow[]; nameMap: Record<string, string> }> => {
     const codes = [...new Set(inputs.map((i) => i.barcode).filter(Boolean))];
     // 1) code → sku (ลองทีละคอลัมน์ main_barcode / sku_code / barcode)
     const [byMain, bySku, byBc] = await Promise.all([
@@ -5314,10 +5347,10 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       };
       if (!cur || (isUnit && !cur.isUnit)) infoBySku.set(d.sku_code, rec);
     }
-    // 3) pocost by sku
-    const pc = skus.length ? await fetchInChunks("po_cost", "item_id, po_cost", "item_id", skus).catch(() => [] as any[]) : [];
+    // 3) PO Cost Unit by sku (ใช้เป็น Unit Price fallback)
+    const pc = skus.length ? await fetchInChunks("po_cost", "item_id, po_cost_unit", "item_id", skus).catch(() => [] as any[]) : [];
     const pcMap = new Map<string, number | null>();
-    for (const p of pc) { const id = String(p.item_id ?? ""); if (id && !pcMap.has(id)) pcMap.set(id, p.po_cost == null ? null : Number(p.po_cost)); }
+    for (const p of pc) { const id = String(p.item_id ?? ""); if (id && !pcMap.has(id)) pcMap.set(id, p.po_cost_unit == null ? null : Number(p.po_cost_unit)); }
     // 4) vendor name map (ไฟล์ + data_master) — data_master.vendor_display_name ชนะ vendor_master
     const vendorCodes = [...new Set([...inputs.map((i) => i.fileVendor).filter(Boolean), ...dmRows.map((d: any) => d.vendor_code).filter(Boolean)])] as string[];
     const nameMap: Record<string, string> = {};
@@ -5343,7 +5376,8 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         productNameEn: info?.productNameEn || "",
         uom: info?.uom || "Unit",
         dmVendor: info?.vendorCode || "",
-        pocost: sku ? (pcMap.get(sku) ?? null) : null,
+        pocostUnit: sku ? (pcMap.get(sku) ?? null) : null,
+        fileUnitPrice: inp.fileUnitPrice,
       };
     });
     return { rows, nameMap };
@@ -5360,9 +5394,12 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       const bcIdx = headers.findIndex((h) => h.includes("barcode") || h === "code" || h.includes("รหัส") || h.includes("sku"));
       const qtyIdx = headers.findIndex((h) => h.includes("qty") || h.includes("quantity") || h.includes("จำนวน"));
       const vcIdx = headers.findIndex((h) => h.includes("vendor") || h.includes("ผู้สนอง"));
+      // Pocost Unit (override Unit Price) — จับ "pocost", "po cost unit", "unit price", "ต้นทุน"
+      const puIdx = headers.findIndex((h) => h.includes("pocost") || (h.includes("cost") && h.includes("unit")) || h.includes("unit price") || h.includes("ต้นทุน"));
       if (bcIdx < 0 || qtyIdx < 0) { toast({ title: "ไม่พบคอลัมน์ Barcode / Quantity", variant: "destructive" }); return; }
+      const parsePrice = (v: any): number | null => { const s = String(v ?? "").trim(); if (s === "") return null; const n = Number(s.replace(/,/g, "")); return Number.isFinite(n) ? n : null; };
       const inputs = raw.slice(1)
-        .map((r) => ({ barcode: String(r[bcIdx] ?? "").trim(), qty: Number(r[qtyIdx]) || 0, fileVendor: vcIdx >= 0 ? String(r[vcIdx] ?? "").trim() : "" }))
+        .map((r) => ({ barcode: String(r[bcIdx] ?? "").trim(), qty: Number(r[qtyIdx]) || 0, fileVendor: vcIdx >= 0 ? String(r[vcIdx] ?? "").trim() : "", fileUnitPrice: puIdx >= 0 ? parsePrice(r[puIdx]) : null }))
         .filter((i) => i.barcode);
       if (inputs.length === 0) { toast({ title: "ไม่พบข้อมูล (ต้องมี Barcode)", variant: "destructive" }); return; }
       const { rows, nameMap } = await enrichConvert(inputs);
@@ -5426,7 +5463,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
               "Products to Purchase/UoM": "Unit",
               "Products to Purchase/Exclude In Package": "True",
               "Products to Purchase/Quantity": r.qty,
-              "Products to Purchase/Unit Price": r.pocost ?? "",
+              "Products to Purchase/Unit Price": r.fileUnitPrice ?? r.pocostUnit ?? "",
               "assigned_to": idx === 0 ? "SPC manager01" : "",
               "description": "",
             });
@@ -5802,6 +5839,16 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                   </div>
                 )}
               </div>
+              {/* Unit Price = PO Cost Unit — ติ๊กเพื่อแปลงเป็น LAK ด้วยเรท (แทนการใช้ตามสกุลเงิน vendor) */}
+              <label className="flex items-center gap-2 text-xs cursor-pointer select-none border rounded-lg px-3 py-2">
+                <input type="checkbox" className="h-3.5 w-3.5" checked={poExportUnitLak} onChange={(e) => setPoExportUnitLak(e.target.checked)} />
+                <span>Pocost Unit Lak — Unit Price ใช้ PO Cost Unit แปลงเป็น LAK</span>
+                <span className="ml-auto text-[11px] text-muted-foreground">
+                  {poExportUnitLak
+                    ? (() => { const { rThb, rUsd } = readFxRates(); return `เรท THB=${rThb ?? "-"} · USD=${rUsd ?? "-"}`; })()
+                    : "ไม่ติ๊ก = ใช้ PO Cost Unit ตามสกุลเงิน vendor"}
+                </span>
+              </label>
               {!poExportAll && (
                 <div className="border rounded-lg">
                   <div className="flex items-center gap-1 px-2 py-1.5 border-b">
@@ -5856,7 +5903,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
               <DialogTitle>Convert เป็น PO / SO</DialogTitle>
             </DialogHeader>
             <p className="text-[11px] text-muted-foreground -mt-1">
-              Import ไฟล์ (Barcode + Quantity + Vendor code) → Convert เป็น Excel · ใส่รหัส/จำนวนมาเท่าไหร่ Convert เท่านั้น (ไม่ filter รายการออก) · คอลัมน์/หัวตารางเดียวกับ Export PO / SO
+              Import ไฟล์ (Barcode + Quantity + Vendor code + Pocost Unit) → Convert เป็น Excel · ใส่รหัส/จำนวนมาเท่าไหร่ Convert เท่านั้น (ไม่ filter รายการออก) · คอลัมน์/หัวตารางเดียวกับ Export PO / SO
             </p>
 
             <div className="space-y-3">
@@ -5900,7 +5947,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                     {convertExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShoppingCart className="w-3.5 h-3.5" />} Convert Excel PO
                   </Button>
                 </div>
-                <p className="text-[10px] text-muted-foreground">Vendor: ใช้จากไฟล์ก่อน → ไม่มีใช้จากฐานข้อมูล → ไม่มีใช้ Vendor เริ่มต้นที่เลือก · Picking Type = {convertPicking}</p>
+                <p className="text-[10px] text-muted-foreground">Vendor: ใช้จากไฟล์ก่อน → ไม่มีใช้จากฐานข้อมูล → ไม่มีใช้ Vendor เริ่มต้นที่เลือก · Unit Price: Pocost Unit จากไฟล์ก่อน → ว่างดึง PO Cost Unit จากฐานข้อมูล · Picking Type = {convertPicking}</p>
               </div>
 
               {/* Convert SO */}
