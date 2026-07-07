@@ -465,6 +465,7 @@ type ConvertRow = {
   dmVendor: string;       // vendor_code จาก data_master
   costByVendor: Record<string, number>; // PO Cost Unit ของ SKU นี้ แยกตาม vendor code (match ID+Vendor, fallback vendor อื่น)
   fileUnitPrice: number | null;         // Pocost Unit จากไฟล์ import (ถ้ากรอก = override)
+  standardPrice: number | null;         // Standard price จาก data_master (packing_size_qty=1) — fallback ตอน LAK ไม่มี
 };
 
 // ===== SO Doc (SCM Control → tab SO) — สร้างอัตโนมัติตอน Save Order, แยกตาม order_group =====
@@ -4657,6 +4658,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   const [convertItemPerPo, setConvertItemPerPo] = useState(25);        // จำนวน SKU ต่อ 1 Group PO/SO
   const [convertPicking, setConvertPicking] = useState(PO_PICKING_DC); // Picking Type สำหรับ Convert PO
   const [convertUnitLak, setConvertUnitLak] = useState(false); // ติ๊ก = Unit Price แปลงเป็น LAK (Convert PO)
+  const [convertUseMasterCost, setConvertUseMasterCost] = useState(false); // (คู่กับ LAK) ติ๊ก = LAK ที่ไม่มี → ดึง Standard price จาก Master
   const [convertVendorDefault, setConvertVendorDefault] = useState(""); // vendor เริ่มต้น (ถ้าไฟล์ไม่ได้ใส่)
   const [convertCustomer, setConvertCustomer] = useState(SO_DEFAULT_CUSTOMER); // ลูกค้าสำหรับ Convert SO
   const [convertPricelist, setConvertPricelist] = useState(SO_PRICELIST);       // Pricelist สำหรับ Convert SO
@@ -5400,7 +5402,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     const skus = [...new Set([...codeToSku.values()])];
     setConvertStatus(`ดึงข้อมูลสินค้า ${skus.length} รายการ...`); setConvertProgress(45);
     const dmRows = skus.length
-      ? await fetchInChunks("data_master", "sku_code, main_barcode, packing_size_qty, product_name_en, product_name_la, product_name_th, unit_of_measure, vendor_code, vendor_display_name", "sku_code", skus)
+      ? await fetchInChunks("data_master", "sku_code, main_barcode, packing_size_qty, product_name_en, product_name_la, product_name_th, unit_of_measure, vendor_code, vendor_display_name, standard_price", "sku_code", skus)
       : [];
     const infoBySku = new Map<string, any>();
     for (const d of dmRows) {
@@ -5414,6 +5416,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         uom: d.unit_of_measure || cur?.uom || "",
         vendorCode: d.vendor_code || cur?.vendorCode || "",
         vendorName: d.vendor_display_name || cur?.vendorName || "",
+        standardPrice: d.standard_price == null ? (cur?.standardPrice ?? null) : Number(d.standard_price),
       };
       if (!cur || (isUnit && !cur.isUnit)) infoBySku.set(d.sku_code, rec);
     }
@@ -5465,6 +5468,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         dmVendor,
         costByVendor: (sku && costByItem.get(sku)) || {},
         fileUnitPrice: inp.fileUnitPrice,
+        standardPrice: info?.standardPrice ?? null,
       };
     });
     return { rows, nameMap, currencyByVendor };
@@ -5548,11 +5552,16 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       };
       const unitPrice = (r: ConvertRow, finalVendor: string): number | string => {
         const { cost, cur } = pickCost(r, finalVendor);
-        if (cost == null) return "";
-        if (!convertUnitLak) return cost;
-        const lak = costToLak(cost, cur, rThb, rUsd);
-        if (lak == null) { lakMissing++; return ""; }
-        return lak;
+        if (!convertUnitLak) return cost == null ? "" : cost; // โหมดปกติ (ไม่แปลง LAK)
+        // โหมด LAK: แปลง cost → LAK
+        if (cost != null) {
+          const lak = costToLak(cost, cur, rThb, rUsd);
+          if (lak != null) return lak;
+        }
+        // LAK ไม่มี (ไม่มี cost หรือแปลงไม่ได้) → ถ้าติ๊ก "ดึง Cost จาก Master" ใช้ Standard price (packing_size_qty=1)
+        if (convertUseMasterCost && r.standardPrice != null) return r.standardPrice;
+        lakMissing++;
+        return "";
       };
       const groups = chunkConvertByVendor();
       const out: Record<string, any>[] = [];
@@ -6079,7 +6088,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                   </Button>
                 </div>
                 <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
-                  <input type="checkbox" className="h-3.5 w-3.5" checked={convertUnitLak} onChange={(e) => setConvertUnitLak(e.target.checked)} />
+                  <input type="checkbox" className="h-3.5 w-3.5" checked={convertUnitLak} onChange={(e) => { const c = e.target.checked; setConvertUnitLak(c); if (!c) setConvertUseMasterCost(false); }} />
                   <span>Pocost Unit Lak — Unit Price แปลงเป็น LAK ด้วยเรท</span>
                   <span className="ml-auto text-[11px] text-muted-foreground">
                     {convertUnitLak
@@ -6087,6 +6096,13 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                       : "ไม่ติ๊ก = ตามสกุลเงิน vendor"}
                   </span>
                 </label>
+                {convertUnitLak && (
+                  <label className="flex items-center gap-2 text-xs cursor-pointer select-none pl-5">
+                    <input type="checkbox" className="h-3.5 w-3.5" checked={convertUseMasterCost} onChange={(e) => setConvertUseMasterCost(e.target.checked)} />
+                    <span>ดึง Cost จาก Master แทน Pocost Unit Lak ที่ไม่มี</span>
+                    <span className="ml-auto text-[11px] text-muted-foreground">ใช้ Standard price (data_master · packing_size=1)</span>
+                  </label>
+                )}
                 <p className="text-[10px] text-muted-foreground">Vendor: ใช้จากไฟล์ก่อน → มี Vendor เริ่มต้นที่เลือกใช้แทน Master → ไม่มีทั้งคู่ใช้จากฐานข้อมูล · Unit Price: Pocost Unit จากไฟล์ก่อน → ว่างดึง PO Cost Unit match ID+Vendor (ไม่เจอ fallback vendor อื่นของ SKU เดียวกัน) · Picking Type = {convertPicking}</p>
               </div>
 
