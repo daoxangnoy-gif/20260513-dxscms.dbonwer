@@ -461,9 +461,8 @@ type ConvertRow = {
   productNameEn: string;  // สำหรับ PO
   uom: string;
   dmVendor: string;       // vendor_code จาก data_master
-  costCurrency: string;   // สกุลเงินของต้นทุน (จาก vendor เจ้าของ cost) — ใช้ตอนแปลง LAK
-  pocostUnit: number | null;    // PO Cost Unit จากฐานข้อมูล (fallback)
-  fileUnitPrice: number | null; // Pocost Unit จากไฟล์ import (ถ้ากรอก = override)
+  costByVendor: Record<string, number>; // PO Cost Unit ของ SKU นี้ แยกตาม vendor code (match ID+Vendor, fallback vendor อื่น)
+  fileUnitPrice: number | null;         // Pocost Unit จากไฟล์ import (ถ้ากรอก = override)
 };
 
 // ===== SO Doc (SCM Control → tab SO) — สร้างอัตโนมัติตอน Save Order, แยกตาม order_group =====
@@ -4653,6 +4652,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   const [convertCustomer, setConvertCustomer] = useState(SO_DEFAULT_CUSTOMER); // ลูกค้าสำหรับ Convert SO
   const [convertVendorOpts, setConvertVendorOpts] = useState<CustomerOpt[]>([]); // dropdown vendor
   const [convertCustomerOpts, setConvertCustomerOpts] = useState<CustomerOpt[]>([]); // dropdown ลูกค้า
+  const [convertCurrencyByVendor, setConvertCurrencyByVendor] = useState<Record<string, string>>({}); // vendor code → สกุลเงิน (สำหรับแปลง LAK)
   // ตัวเลือก Picking Type เพิ่มเติม = สาขาของ Type Jmart/Kokkok (ค่า = ship_to จาก store_type ตรงตามที่ Odoo ใช้)
   const [pickStoreOpts, setPickStoreOpts] = useState<{ value: string; label: string }[]>([]);
   const [poReportOpen, setPoReportOpen] = useState(false);
@@ -5351,7 +5351,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   };
 
   // enrich: resolve barcode → sku + unit barcode + product/vendor/pocost unit (batch)
-  const enrichConvert = async (inputs: { barcode: string; qty: number; fileVendor: string; fileUnitPrice: number | null }[]): Promise<{ rows: ConvertRow[]; nameMap: Record<string, string> }> => {
+  const enrichConvert = async (inputs: { barcode: string; qty: number; fileVendor: string; fileUnitPrice: number | null }[]): Promise<{ rows: ConvertRow[]; nameMap: Record<string, string>; currencyByVendor: Record<string, string> }> => {
     const codes = [...new Set(inputs.map((i) => i.barcode).filter(Boolean))];
     // 1) code → sku (ลองทีละคอลัมน์ main_barcode / sku_code / barcode)
     const [byMain, bySku, byBc] = await Promise.all([
@@ -5383,14 +5383,24 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       };
       if (!cur || (isUnit && !cur.isUnit)) infoBySku.set(d.sku_code, rec);
     }
-    // 3) PO Cost Unit by sku (ใช้เป็น Unit Price fallback)
-    const pc = skus.length ? await fetchInChunks("po_cost", "item_id, po_cost_unit", "item_id", skus).catch(() => [] as any[]) : [];
-    const pcMap = new Map<string, number | null>();
-    for (const p of pc) { const id = String(p.item_id ?? ""); if (id && !pcMap.has(id)) pcMap.set(id, p.po_cost_unit == null ? null : Number(p.po_cost_unit)); }
-    // 4) vendor name map (ไฟล์ + data_master) — data_master.vendor_display_name ชนะ vendor_master
-    const vendorCodes = [...new Set([...inputs.map((i) => i.fileVendor).filter(Boolean), ...dmRows.map((d: any) => d.vendor_code).filter(Boolean)])] as string[];
+    // 3) PO Cost Unit by (sku, vendor) — เก็บทุก vendor ของ SKU เพื่อ match ID+Vendor ตอน Convert (fallback vendor อื่น)
+    const pc = skus.length ? await fetchInChunks("po_cost", "item_id, vendor, po_cost_unit", "item_id", skus).catch(() => [] as any[]) : [];
+    const costByItem = new Map<string, Record<string, number>>(); // item_id → { vendor: po_cost_unit }
+    const costVendorCodes = new Set<string>();
+    for (const p of pc) {
+      const id = String(p.item_id ?? "");
+      const unit = p.po_cost_unit == null ? null : Number(p.po_cost_unit);
+      if (!id || unit == null || !Number.isFinite(unit)) continue;
+      const vc = String(p.vendor ?? "").trim(); // "" = po_cost ที่ไม่ผูก vendor
+      if (!costByItem.has(id)) costByItem.set(id, {});
+      const m = costByItem.get(id)!;
+      if (m[vc] == null) m[vc] = unit;
+      if (vc) costVendorCodes.add(vc);
+    }
+    // 4) vendor name + สกุลเงิน (ไฟล์ + data_master + vendor เจ้าของ cost) — data_master.vendor_display_name ชนะ vendor_master
+    const vendorCodes = [...new Set([...inputs.map((i) => i.fileVendor).filter(Boolean), ...dmRows.map((d: any) => d.vendor_code).filter(Boolean), ...costVendorCodes])] as string[];
     const nameMap: Record<string, string> = {};
-    const currencyMap = new Map<string, string>(); // vendor_code → supplier_currency (สำหรับแปลง LAK)
+    const currencyByVendor: Record<string, string> = {}; // vendor_code → supplier_currency (สำหรับแปลง LAK)
     if (vendorCodes.length) {
       const [dmN, vmN] = await Promise.all([
         fetchInChunks("data_master", "vendor_code, vendor_display_name", "vendor_code", vendorCodes).catch(() => [] as any[]),
@@ -5398,7 +5408,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       ]);
       for (const v of vmN) {
         if (v.vendor_code && !nameMap[v.vendor_code]) nameMap[v.vendor_code] = v.vendor_name_en || v.vendor_name_la || "";
-        if (v.vendor_code && v.supplier_currency && !currencyMap.has(v.vendor_code)) currencyMap.set(v.vendor_code, String(v.supplier_currency).toUpperCase());
+        if (v.vendor_code && v.supplier_currency && !currencyByVendor[v.vendor_code]) currencyByVendor[v.vendor_code] = String(v.supplier_currency).toUpperCase();
       }
       for (const d of dmN) if (d.vendor_code && d.vendor_display_name) nameMap[d.vendor_code] = d.vendor_display_name;
     }
@@ -5417,12 +5427,11 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         productNameEn: info?.productNameEn || "",
         uom: info?.uom || "Unit",
         dmVendor,
-        costCurrency: currencyMap.get(dmVendor) || "",
-        pocostUnit: sku ? (pcMap.get(sku) ?? null) : null,
+        costByVendor: (sku && costByItem.get(sku)) || {},
         fileUnitPrice: inp.fileUnitPrice,
       };
     });
-    return { rows, nameMap };
+    return { rows, nameMap, currencyByVendor };
   };
 
   const handleConvertImport = async (file: File) => {
@@ -5444,9 +5453,10 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         .map((r) => ({ barcode: String(r[bcIdx] ?? "").trim(), qty: Number(r[qtyIdx]) || 0, fileVendor: vcIdx >= 0 ? String(r[vcIdx] ?? "").trim() : "", fileUnitPrice: puIdx >= 0 ? parsePrice(r[puIdx]) : null }))
         .filter((i) => i.barcode);
       if (inputs.length === 0) { toast({ title: "ไม่พบข้อมูล (ต้องมี Barcode)", variant: "destructive" }); return; }
-      const { rows, nameMap } = await enrichConvert(inputs);
+      const { rows, nameMap, currencyByVendor } = await enrichConvert(inputs);
       setConvertRows(rows);
       setConvertNameMap(nameMap);
+      setConvertCurrencyByVendor(currencyByVendor);
       const notFound = rows.filter((r) => !r.found).length;
       toast({ title: "นำเข้าสำเร็จ", description: `${rows.length} รายการ${notFound ? ` · ไม่พบข้อมูล ${notFound}` : ""}` });
     } catch (e: any) {
@@ -5483,14 +5493,25 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     try {
       const pick = convertPicking;
       const interTransfer = PO_PICKING_DC_IDS.has(pick) ? "" : "true";
-      // Unit Price: Pocost Unit จากไฟล์ก่อน → ว่างดึง PO Cost Unit จาก DB · ติ๊ก LAK → แปลงด้วยเรทตามสกุลเงินต้นทุน
+      // Unit Price: Pocost Unit จากไฟล์ก่อน → ไม่มี ดึง PO Cost Unit match ID+Vendor (vendor ตัวสุดท้าย) → ไม่เจอ fallback vendor อื่นของ SKU เดียวกัน
+      // ติ๊ก LAK → แปลงด้วยเรทตามสกุลเงินของ vendor เจ้าของ cost
       const { rThb, rUsd } = readFxRates();
       let lakMissing = 0;
-      const unitPrice = (r: ConvertRow): number | string => {
-        const base = r.fileUnitPrice ?? r.pocostUnit;
-        if (base == null) return "";
-        if (!convertUnitLak) return base;
-        const lak = costToLak(base, r.costCurrency, rThb, rUsd);
+      const currencyOf = (vc: string) => convertCurrencyByVendor[vc] || "";
+      // คืน { cost, cur } — เลือกตามลำดับ: ไฟล์ > cost ของ finalVendor > cost ของ vendor อื่น (SKU เดียวกัน)
+      const pickCost = (r: ConvertRow, finalVendor: string): { cost: number | null; cur: string } => {
+        if (r.fileUnitPrice != null) return { cost: r.fileUnitPrice, cur: currencyOf(finalVendor) };
+        const cbv = r.costByVendor || {};
+        if (cbv[finalVendor] != null) return { cost: cbv[finalVendor], cur: currencyOf(finalVendor) };
+        const keys = Object.keys(cbv);
+        if (keys.length) { const k = keys[0]; return { cost: cbv[k], cur: currencyOf(k) }; } // fallback vendor อื่น
+        return { cost: null, cur: "" };
+      };
+      const unitPrice = (r: ConvertRow, finalVendor: string): number | string => {
+        const { cost, cur } = pickCost(r, finalVendor);
+        if (cost == null) return "";
+        if (!convertUnitLak) return cost;
+        const lak = costToLak(cost, cur, rThb, rUsd);
         if (lak == null) { lakMissing++; return ""; }
         return lak;
       };
@@ -5516,7 +5537,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
               "Products to Purchase/UoM": "Unit",
               "Products to Purchase/Exclude In Package": "True",
               "Products to Purchase/Quantity": r.qty,
-              "Products to Purchase/Unit Price": unitPrice(r),
+              "Products to Purchase/Unit Price": unitPrice(r, vc),
               "assigned_to": idx === 0 ? "SPC manager01" : "",
               "description": "",
             });
@@ -6012,7 +6033,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                       : "ไม่ติ๊ก = ตามสกุลเงิน vendor"}
                   </span>
                 </label>
-                <p className="text-[10px] text-muted-foreground">Vendor: ใช้จากไฟล์ก่อน → มี Vendor เริ่มต้นที่เลือกใช้แทน Master → ไม่มีทั้งคู่ใช้จากฐานข้อมูล · Unit Price: Pocost Unit จากไฟล์ก่อน → ว่างดึง PO Cost Unit จากฐานข้อมูล · Picking Type = {convertPicking}</p>
+                <p className="text-[10px] text-muted-foreground">Vendor: ใช้จากไฟล์ก่อน → มี Vendor เริ่มต้นที่เลือกใช้แทน Master → ไม่มีทั้งคู่ใช้จากฐานข้อมูล · Unit Price: Pocost Unit จากไฟล์ก่อน → ว่างดึง PO Cost Unit match ID+Vendor (ไม่เจอ fallback vendor อื่นของ SKU เดียวกัน) · Picking Type = {convertPicking}</p>
               </div>
 
               {/* Convert SO */}
