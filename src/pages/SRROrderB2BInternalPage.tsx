@@ -55,6 +55,8 @@ function minNeedDateISO(): string {
 const SO_COMPANY = "Lanexang Green Property Sole Co.,Ltd";
 const SO_WAREHOUSE = "DC Thongpong";
 const SO_PRICELIST = "WSPRICE 2 (Internal B2B)";
+// ตัวเลือก Pricelist สำหรับ Convert SO (dropdown)
+const CONVERT_SO_PRICELISTS = ["WSPRICE 2 (Internal B2B)", "WSPRICE 14 (LGP to KR F&B)"];
 const SO_DEFAULT_CUSTOMER = "40237 KR F&B Co.,LTD"; // Customer เริ่มต้นตอน export
 
 // คอลัมน์ Branch ใน dialog List Brand (1 แบรนด์มีได้หลาย Branch = หลายแถว)
@@ -4657,6 +4659,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   const [convertUnitLak, setConvertUnitLak] = useState(false); // ติ๊ก = Unit Price แปลงเป็น LAK (Convert PO)
   const [convertVendorDefault, setConvertVendorDefault] = useState(""); // vendor เริ่มต้น (ถ้าไฟล์ไม่ได้ใส่)
   const [convertCustomer, setConvertCustomer] = useState(SO_DEFAULT_CUSTOMER); // ลูกค้าสำหรับ Convert SO
+  const [convertPricelist, setConvertPricelist] = useState(SO_PRICELIST);       // Pricelist สำหรับ Convert SO
   const [convertVendorOpts, setConvertVendorOpts] = useState<CustomerOpt[]>([]); // dropdown vendor
   const [convertCustomerOpts, setConvertCustomerOpts] = useState<CustomerOpt[]>([]); // dropdown ลูกค้า
   const [convertCurrencyByVendor, setConvertCurrencyByVendor] = useState<Record<string, string>>({}); // vendor code → สกุลเงิน (สำหรับแปลง LAK)
@@ -5601,6 +5604,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     setConvertExporting(true);
     try {
       const customer = convertCustomer || SO_DEFAULT_CUSTOMER;
+      const pricelist = convertPricelist || SO_PRICELIST;
       const groups = chunkConvertByVendor();
       const base: Record<string, any>[] = [];
       let groupCount = 0;
@@ -5611,7 +5615,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
             base.push({
               "Order Reference": "",
               "Customer": idx === 0 ? customer : "",
-              "Pricelist": idx === 0 ? SO_PRICELIST : "",
+              "Pricelist": idx === 0 ? pricelist : "",
               "Order Lines/Barcode": r.unitBarcode || r.inputCode,
               "Order Lines/Product": r.unitBarcode || r.inputCode,
               "Product Name": r.productName || r.productNameEn,
@@ -6096,11 +6100,22 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                       <CustomerCombo value={convertCustomer} options={convertCustomerOpts} onChange={setConvertCustomer} />
                     </div>
                   </div>
+                  <div className="flex items-center gap-1.5">
+                    <Label className="text-xs">Pricelist</Label>
+                    <select
+                      className="h-8 text-xs border rounded px-2 bg-background max-w-[220px]"
+                      value={convertPricelist}
+                      onChange={(e) => setConvertPricelist(e.target.value)}
+                      title="Pricelist (คอลัมน์ใน Excel SO)"
+                    >
+                      {CONVERT_SO_PRICELISTS.map((o) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </div>
                   <Button size="sm" className="h-8 gap-1.5 text-xs ml-auto" onClick={doConvertExportSO} disabled={convertRows.length === 0 || convertExporting}>
                     {convertExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileSpreadsheet className="w-3.5 h-3.5" />} Convert Excel SO
                   </Button>
                 </div>
-                <p className="text-[10px] text-muted-foreground">ใช้ template SO เดียวกับหน้า SO Order B2B (srr_special_so)</p>
+                <p className="text-[10px] text-muted-foreground">ใช้ template SO เดียวกับหน้า SO Order B2B (srr_special_so) · Pricelist = {convertPricelist}</p>
               </div>
             </div>
 
