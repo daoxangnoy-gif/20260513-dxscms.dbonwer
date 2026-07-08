@@ -4649,7 +4649,8 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   const [poExportSearch, setPoExportSearch] = useState("");
   // ---- Convert dialog (import รหัส+จำนวน → Convert เป็น PO/SO Excel, ไม่ filter) ----
   const [convertOpen, setConvertOpen] = useState(false);
-  const [convertRows, setConvertRows] = useState<ConvertRow[]>([]);
+  const [convertRows, setConvertRows] = useState<ConvertRow[]>([]);       // รายการสำหรับ Convert PO (โหลดเต็ม)
+  const [convertSoRows, setConvertSoRows] = useState<ConvertRow[]>([]);   // รายการสำหรับ Convert SO (โหลดเบา ไม่มี vendor/cost)
   const [convertNameMap, setConvertNameMap] = useState<Record<string, string>>({}); // vendor_code → name
   const [convertImporting, setConvertImporting] = useState(false);
   const [convertProgress, setConvertProgress] = useState(0);   // 0-100 ตอน import Convert
@@ -5388,8 +5389,9 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     XLSX.writeFile(wb, "Convert_Template.xlsx");
   };
 
-  // enrich: resolve barcode → sku + unit barcode + product/vendor/pocost unit (batch)
-  const enrichConvert = async (inputs: { barcode: string; qty: number; fileVendor: string; fileUnitPrice: number | null }[]): Promise<{ rows: ConvertRow[]; nameMap: Record<string, string>; currencyByVendor: Record<string, string> }> => {
+  // enrich: resolve barcode → sku + unit barcode + product (+ vendor/pocost ถ้าไม่ใช่ SO) (batch)
+  // forSO = true → ข้ามการโหลด po_cost + ชื่อ/สกุลเงิน vendor (SO ไม่ใช้ → เร็วกว่า)
+  const enrichConvert = async (inputs: { barcode: string; qty: number; fileVendor: string; fileUnitPrice: number | null }[], forSO = false): Promise<{ rows: ConvertRow[]; nameMap: Record<string, string>; currencyByVendor: Record<string, string> }> => {
     const codes = [...new Set(inputs.map((i) => i.barcode).filter(Boolean))];
     setConvertStatus(`ค้นหารหัสสินค้า ${codes.length} รหัส...`); setConvertProgress(15);
     // 1) code → sku (ลองทีละคอลัมน์ main_barcode / sku_code / barcode)
@@ -5425,35 +5427,37 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       if (!cur || (isUnit && !cur.isUnit)) infoBySku.set(d.sku_code, rec);
     }
     // 3) PO Cost Unit by (sku, vendor) — เก็บทุก vendor ของ SKU เพื่อ match ID+Vendor ตอน Convert (fallback vendor อื่น)
-    setConvertStatus(`ดึงราคา PO Cost ${skus.length} รายการ...`); setConvertProgress(70);
-    const pc = skus.length ? await fetchInChunks("po_cost", "item_id, vendor, po_cost_unit", "item_id", skus).catch(() => [] as any[]) : [];
     const costByItem = new Map<string, Record<string, number>>(); // item_id → { vendor: po_cost_unit }
-    const costVendorCodes = new Set<string>();
-    for (const p of pc) {
-      const id = String(p.item_id ?? "");
-      const unit = p.po_cost_unit == null ? null : Number(p.po_cost_unit);
-      if (!id || unit == null || !Number.isFinite(unit)) continue;
-      const vc = String(p.vendor ?? "").trim(); // "" = po_cost ที่ไม่ผูก vendor
-      if (!costByItem.has(id)) costByItem.set(id, {});
-      const m = costByItem.get(id)!;
-      if (m[vc] == null) m[vc] = unit;
-      if (vc) costVendorCodes.add(vc);
-    }
-    // 4) vendor name + สกุลเงิน (ไฟล์ + data_master + vendor เจ้าของ cost) — data_master.vendor_display_name ชนะ vendor_master
-    const vendorCodes = [...new Set([...inputs.map((i) => i.fileVendor).filter(Boolean), ...dmRows.map((d: any) => d.vendor_code).filter(Boolean), ...costVendorCodes])] as string[];
     const nameMap: Record<string, string> = {};
     const currencyByVendor: Record<string, string> = {}; // vendor_code → supplier_currency (สำหรับแปลง LAK)
-    setConvertStatus(`ดึงข้อมูลผู้สนอง ${vendorCodes.length} ราย...`); setConvertProgress(88);
-    if (vendorCodes.length) {
-      const [dmN, vmN] = await Promise.all([
-        fetchInChunks("data_master", "vendor_code, vendor_display_name", "vendor_code", vendorCodes).catch(() => [] as any[]),
-        fetchInChunks("vendor_master", "vendor_code, vendor_name_en, vendor_name_la, supplier_currency", "vendor_code", vendorCodes).catch(() => [] as any[]),
-      ]);
-      for (const v of vmN) {
-        if (v.vendor_code && !nameMap[v.vendor_code]) nameMap[v.vendor_code] = v.vendor_name_en || v.vendor_name_la || "";
-        if (v.vendor_code && v.supplier_currency && !currencyByVendor[v.vendor_code]) currencyByVendor[v.vendor_code] = String(v.supplier_currency).toUpperCase();
+    if (!forSO) {
+      setConvertStatus(`ดึงราคา PO Cost ${skus.length} รายการ...`); setConvertProgress(70);
+      const pc = skus.length ? await fetchInChunks("po_cost", "item_id, vendor, po_cost_unit", "item_id", skus).catch(() => [] as any[]) : [];
+      const costVendorCodes = new Set<string>();
+      for (const p of pc) {
+        const id = String(p.item_id ?? "");
+        const unit = p.po_cost_unit == null ? null : Number(p.po_cost_unit);
+        if (!id || unit == null || !Number.isFinite(unit)) continue;
+        const vc = String(p.vendor ?? "").trim(); // "" = po_cost ที่ไม่ผูก vendor
+        if (!costByItem.has(id)) costByItem.set(id, {});
+        const m = costByItem.get(id)!;
+        if (m[vc] == null) m[vc] = unit;
+        if (vc) costVendorCodes.add(vc);
       }
-      for (const d of dmN) if (d.vendor_code && d.vendor_display_name) nameMap[d.vendor_code] = d.vendor_display_name;
+      // 4) vendor name + สกุลเงิน (ไฟล์ + data_master + vendor เจ้าของ cost) — data_master.vendor_display_name ชนะ vendor_master
+      const vendorCodes = [...new Set([...inputs.map((i) => i.fileVendor).filter(Boolean), ...dmRows.map((d: any) => d.vendor_code).filter(Boolean), ...costVendorCodes])] as string[];
+      setConvertStatus(`ดึงข้อมูลผู้สนอง ${vendorCodes.length} ราย...`); setConvertProgress(88);
+      if (vendorCodes.length) {
+        const [dmN, vmN] = await Promise.all([
+          fetchInChunks("data_master", "vendor_code, vendor_display_name", "vendor_code", vendorCodes).catch(() => [] as any[]),
+          fetchInChunks("vendor_master", "vendor_code, vendor_name_en, vendor_name_la, supplier_currency", "vendor_code", vendorCodes).catch(() => [] as any[]),
+        ]);
+        for (const v of vmN) {
+          if (v.vendor_code && !nameMap[v.vendor_code]) nameMap[v.vendor_code] = v.vendor_name_en || v.vendor_name_la || "";
+          if (v.vendor_code && v.supplier_currency && !currencyByVendor[v.vendor_code]) currencyByVendor[v.vendor_code] = String(v.supplier_currency).toUpperCase();
+        }
+        for (const d of dmN) if (d.vendor_code && d.vendor_display_name) nameMap[d.vendor_code] = d.vendor_display_name;
+      }
     }
     const rows: ConvertRow[] = inputs.map((inp) => {
       const sku = codeToSku.get(inp.barcode) || "";
@@ -5513,7 +5517,60 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     }
   };
 
-  // group by vendor → chunk ทีละ N (Item Per PO)
+  // Download template SO (Barcode + Quantity — SO ไม่ต้องใช้ Vendor/Pocost)
+  const downloadConvertTemplateSO = () => {
+    const ws = XLSX.utils.aoa_to_sheet([["Barcode", "Quantity"]]);
+    ws["!cols"] = [{ wch: 18 }, { wch: 12 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Template");
+    XLSX.writeFile(wb, "Convert_Template_SO.xlsx");
+  };
+
+  // Import สำหรับ SO เท่านั้น — โหลดเบา (ไม่ดึง vendor/cost) จึงเร็วกว่า Import PO
+  const handleConvertImportSO = async (file: File) => {
+    setConvertImporting(true);
+    setConvertProgress(5); setConvertStatus("อ่านไฟล์...");
+    try {
+      const ab = await file.arrayBuffer();
+      const wb = XLSX.read(ab);
+      const raw: any[][] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
+      if (raw.length < 2) { toast({ title: "ไฟล์ว่าง", variant: "destructive" }); return; }
+      const headers = (raw[0] as any[]).map((h) => String(h ?? "").toLowerCase().trim());
+      const bcIdx = headers.findIndex((h) => h.includes("barcode") || h === "code" || h.includes("รหัส") || h.includes("sku"));
+      const qtyIdx = headers.findIndex((h) => h.includes("qty") || h.includes("quantity") || h.includes("จำนวน"));
+      if (bcIdx < 0 || qtyIdx < 0) { toast({ title: "ไม่พบคอลัมน์ Barcode / Quantity", variant: "destructive" }); return; }
+      const inputs = raw.slice(1)
+        .map((r) => ({ barcode: String(r[bcIdx] ?? "").trim(), qty: Number(r[qtyIdx]) || 0, fileVendor: "", fileUnitPrice: null }))
+        .filter((i) => i.barcode);
+      if (inputs.length === 0) { toast({ title: "ไม่พบข้อมูล (ต้องมี Barcode)", variant: "destructive" }); return; }
+      const { rows } = await enrichConvert(inputs, true); // forSO = ข้ามการโหลด vendor/cost
+      setConvertSoRows(rows);
+      const notFound = rows.filter((r) => !r.found).length;
+      setConvertProgress(100); setConvertStatus(`เสร็จสิ้น · ${rows.length} รายการ`);
+      toast({ title: "นำเข้า SO สำเร็จ", description: `${rows.length} รายการ${notFound ? ` · ไม่พบข้อมูล ${notFound}` : ""}` });
+    } catch (e: any) {
+      setConvertStatus("");
+      toast({ title: "นำเข้าไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setConvertImporting(false);
+    }
+  };
+
+  // group by vendor → chunk ทีละ N (Item Per PO/SO) — รับ rows + วิธีหา vendor ตัวสุดท้าย
+  const chunkByVendor = (rows: ConvertRow[], finalVendorFn: (r: ConvertRow) => string): { vc: string; chunks: ConvertRow[][] }[] => {
+    const N = Math.max(1, Number(convertItemPerPo) || 25);
+    const byVendor = new Map<string, ConvertRow[]>();
+    for (const r of rows) { const vc = finalVendorFn(r); if (!byVendor.has(vc)) byVendor.set(vc, []); byVendor.get(vc)!.push(r); }
+    const out: { vc: string; chunks: ConvertRow[][] }[] = [];
+    for (const [vc, vRows] of byVendor) {
+      const chunks: ConvertRow[][] = [];
+      for (let i = 0; i < vRows.length; i += N) chunks.push(vRows.slice(i, i + N));
+      out.push({ vc, chunks });
+    }
+    return out;
+  };
+
+  // group by vendor → chunk ทีละ N (Item Per PO) — ใช้ convertRows (PO)
   const chunkConvertByVendor = (): { vc: string; chunks: ConvertRow[][] }[] => {
     const N = Math.max(1, Number(convertItemPerPo) || 25);
     const byVendor = new Map<string, ConvertRow[]>();
@@ -5641,14 +5698,15 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     }
   };
 
-  // Convert → SO (ใช้ template srr_special_so เหมือนหน้า SO Order B2B)
+  // Convert → SO (ใช้ template srr_special_so เหมือนหน้า SO Order B2B) — ใช้ convertSoRows (โหลดเบา)
   const doConvertExportSO = async () => {
-    if (convertRows.length === 0) { toast({ title: "ยังไม่มีข้อมูล — กด Import ก่อน", variant: "destructive" }); return; }
+    if (convertSoRows.length === 0) { toast({ title: "ยังไม่มีข้อมูล — กด Import SO ก่อน", variant: "destructive" }); return; }
     setConvertExporting(true);
     try {
       const customer = convertCustomer || SO_DEFAULT_CUSTOMER;
       const pricelist = convertPricelist || SO_PRICELIST;
-      const groups = chunkConvertByVendor();
+      // SO จัดกลุ่มตาม vendor จากไฟล์/Master (ไม่ใช้ Vendor เริ่มต้นของ PO)
+      const groups = chunkByVendor(convertSoRows, (r) => r.fileVendor || r.dmVendor || "");
       const base: Record<string, any>[] = [];
       let groupCount = 0;
       for (const { chunks } of groups) {
@@ -6075,18 +6133,18 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
             </p>
 
             <div className="space-y-3">
-              {/* แถวเครื่องมือ: template + import + สถานะ */}
+              {/* แถวเครื่องมือ PO: template + import + สถานะ */}
               <div className="flex items-center gap-2 flex-wrap">
                 <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={downloadConvertTemplate}>
-                  <FileSpreadsheet className="w-3.5 h-3.5" /> Download Template
+                  <FileSpreadsheet className="w-3.5 h-3.5" /> Template PO
                 </Button>
                 <label className={cn("inline-flex items-center gap-1.5 h-8 px-3 rounded-md border text-xs cursor-pointer hover:bg-muted/50", convertImporting && "opacity-60 pointer-events-none")}>
                   <input type="file" accept=".xlsx,.xls" className="hidden" disabled={convertImporting} onChange={(e) => { const f = e.target.files?.[0]; if (f) handleConvertImport(f); e.target.value = ""; }} />
-                  {convertImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />} Import Convert Excel
+                  {convertImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />} Import PO
                 </label>
                 {!convertImporting && convertRows.length > 0 && (
                   <span className="text-[11px] text-muted-foreground">
-                    {convertRows.length} รายการ · รวม {convertRows.reduce((s, r) => s + (r.qty || 0), 0)} · ไม่พบข้อมูล {convertRows.filter((r) => !r.found).length}
+                    PO: {convertRows.length} รายการ · รวม {convertRows.reduce((s, r) => s + (r.qty || 0), 0)} · ไม่พบข้อมูล {convertRows.filter((r) => !r.found).length}
                   </span>
                 )}
               </div>
@@ -6155,6 +6213,22 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
 
               {/* Convert SO */}
               <div className="border rounded-lg p-3 space-y-2">
+                {/* Import แยกสำหรับ SO — โหลดเบา (ไม่ดึง vendor/cost) เร็วกว่า Import PO */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-medium w-24">Import SO</span>
+                  <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={downloadConvertTemplateSO}>
+                    <FileSpreadsheet className="w-3.5 h-3.5" /> Template SO
+                  </Button>
+                  <label className={cn("inline-flex items-center gap-1.5 h-8 px-3 rounded-md border text-xs cursor-pointer hover:bg-muted/50", convertImporting && "opacity-60 pointer-events-none")}>
+                    <input type="file" accept=".xlsx,.xls" className="hidden" disabled={convertImporting} onChange={(e) => { const f = e.target.files?.[0]; if (f) handleConvertImportSO(f); e.target.value = ""; }} />
+                    {convertImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />} Import SO
+                  </label>
+                  {!convertImporting && convertSoRows.length > 0 && (
+                    <span className="text-[11px] text-muted-foreground">
+                      SO: {convertSoRows.length} รายการ · รวม {convertSoRows.reduce((s, r) => s + (r.qty || 0), 0)} · ไม่พบข้อมูล {convertSoRows.filter((r) => !r.found).length}
+                    </span>
+                  )}
+                </div>
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs font-medium w-24">Convert SO</span>
                   <div className="flex items-center gap-1.5">
@@ -6174,7 +6248,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                       {CONVERT_SO_PRICELISTS.map((o) => <option key={o} value={o}>{o}</option>)}
                     </select>
                   </div>
-                  <Button size="sm" className="h-8 gap-1.5 text-xs ml-auto" onClick={doConvertExportSO} disabled={convertRows.length === 0 || convertExporting}>
+                  <Button size="sm" className="h-8 gap-1.5 text-xs ml-auto" onClick={doConvertExportSO} disabled={convertSoRows.length === 0 || convertExporting}>
                     {convertExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileSpreadsheet className="w-3.5 h-3.5" />} Convert Excel SO
                   </Button>
                 </div>
