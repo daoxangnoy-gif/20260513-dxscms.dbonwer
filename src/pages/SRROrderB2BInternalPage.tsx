@@ -57,6 +57,13 @@ const SO_WAREHOUSE = "DC Thongpong";
 const SO_PRICELIST = "WSPRICE 2 (Internal B2B)";
 // ตัวเลือก Pricelist สำหรับ Convert SO (dropdown)
 const CONVERT_SO_PRICELISTS = ["WSPRICE 2 (Internal B2B)", "WSPRICE 14 (LGP to KR F&B)"];
+// ค่า default ของ Order lines/Route + Warehouse ตาม Pricelist ที่เลือก (Convert SO)
+const SO_PRICELIST_META: Record<string, { route: string; warehouse: string }> = {
+  "WSPRICE 2 (Internal B2B)":   { route: "DC Thongpong: Deliver B2B LGP", warehouse: "DC Thongpong" },
+  "WSPRICE 14 (LGP to KR F&B)": { route: "DC Thongpong : Deliver B2B KFC", warehouse: "DC KFC" },
+};
+const SO_ROUTE_OPTIONS = ["DC Thongpong: Deliver B2B LGP", "DC Thongpong : Deliver B2B KFC"];
+const SO_WAREHOUSE_OPTIONS = ["DC Thongpong", "DC KFC"];
 const SO_DEFAULT_CUSTOMER = "40237 KR F&B Co.,LTD"; // Customer เริ่มต้นตอน export
 
 // คอลัมน์ Branch ใน dialog List Brand (1 แบรนด์มีได้หลาย Branch = หลายแถว)
@@ -4667,6 +4674,8 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   const [convertVendorDefault, setConvertVendorDefault] = useState(""); // vendor เริ่มต้น (ถ้าไฟล์ไม่ได้ใส่)
   const [convertCustomer, setConvertCustomer] = useState(SO_DEFAULT_CUSTOMER); // ลูกค้าสำหรับ Convert SO
   const [convertPricelist, setConvertPricelist] = useState(SO_PRICELIST);       // Pricelist สำหรับ Convert SO
+  const [convertSoRoute, setConvertSoRoute] = useState(SO_PRICELIST_META[SO_PRICELIST]?.route || "");        // Order lines/Route (default ตาม Pricelist)
+  const [convertSoWarehouse, setConvertSoWarehouse] = useState(SO_PRICELIST_META[SO_PRICELIST]?.warehouse || SO_WAREHOUSE); // Warehouse (default ตาม Pricelist)
   const [convertVendorOpts, setConvertVendorOpts] = useState<CustomerOpt[]>([]); // dropdown vendor
   const [convertCustomerOpts, setConvertCustomerOpts] = useState<CustomerOpt[]>([]); // dropdown ลูกค้า
   const [convertCurrencyByVendor, setConvertCurrencyByVendor] = useState<Record<string, string>>({}); // vendor code → สกุลเงิน (สำหรับแปลง LAK)
@@ -5722,8 +5731,9 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
               "Product Name": r.productName || r.productNameEn,
               "UOM": r.uom,
               "Order Lines/Quantity": r.qty,
+              "Order lines/Route": convertSoRoute, // ค่าเต็มทุก row (ขวาของ Quantity)
               "Source Document": "",
-              "Warehouse": idx === 0 ? SO_WAREHOUSE : "",
+              "Warehouse": idx === 0 ? convertSoWarehouse : "",
               "Company": idx === 0 ? SO_COMPANY : "",
             });
           });
@@ -6242,8 +6252,8 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                     <select
                       className="h-8 text-xs border rounded px-2 bg-background max-w-[220px]"
                       value={convertPricelist}
-                      onChange={(e) => setConvertPricelist(e.target.value)}
-                      title="Pricelist (คอลัมน์ใน Excel SO)"
+                      onChange={(e) => { const v = e.target.value; setConvertPricelist(v); const m = SO_PRICELIST_META[v]; if (m) { setConvertSoRoute(m.route); setConvertSoWarehouse(m.warehouse); } }}
+                      title="Pricelist (คอลัมน์ใน Excel SO) — เปลี่ยนแล้วตั้ง Route/Warehouse ให้อัตโนมัติ"
                     >
                       {CONVERT_SO_PRICELISTS.map((o) => <option key={o} value={o}>{o}</option>)}
                     </select>
@@ -6252,7 +6262,23 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                     {convertExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileSpreadsheet className="w-3.5 h-3.5" />} Convert Excel SO
                   </Button>
                 </div>
-                <p className="text-[10px] text-muted-foreground">ใช้ template SO เดียวกับหน้า SO Order B2B (srr_special_so) · Pricelist = {convertPricelist}</p>
+                {/* Route (ทุก row) + Warehouse (header) — default ตาม Pricelist เปลี่ยนเองได้ */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-medium w-24">Route / WH</span>
+                  <div className="flex items-center gap-1.5">
+                    <Label className="text-xs">Order lines/Route</Label>
+                    <select className="h-8 text-xs border rounded px-2 bg-background max-w-[260px]" value={convertSoRoute} onChange={(e) => setConvertSoRoute(e.target.value)} title="Order lines/Route (คอลัมน์ Excel · ทุก row)">
+                      {SO_ROUTE_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Label className="text-xs">Warehouse</Label>
+                    <select className="h-8 text-xs border rounded px-2 bg-background max-w-[160px]" value={convertSoWarehouse} onChange={(e) => setConvertSoWarehouse(e.target.value)} title="Warehouse (คอลัมน์ Excel)">
+                      {SO_WAREHOUSE_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <p className="text-[10px] text-muted-foreground">ใช้ template SO เดียวกับหน้า SO Order B2B (srr_special_so) · Pricelist = {convertPricelist} · Route = {convertSoRoute} · WH = {convertSoWarehouse}</p>
               </div>
             </div>
 
