@@ -457,6 +457,46 @@ function VendorPickCombo({ value, options, onChange }: { value: string; options:
   );
 }
 
+// Dropdown เลือกชื่อสาขา (ค้นหาได้) — ใช้เป็น Warehouse ตอนติ๊ก SO Store (ดึงจาก store_type.store_name)
+function StorePickCombo({ value, options, onChange }: { value: string; options: string[]; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    const base = s ? options.filter((o) => o.toLowerCase().includes(s)) : options;
+    return base.slice(0, 50);
+  }, [q, options]);
+  return (
+    <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setQ(""); }}>
+      <PopoverTrigger asChild>
+        <button className="flex items-center gap-1 h-8 px-2 border rounded-md text-left text-xs w-56 bg-background hover:bg-muted/50">
+          <span className="truncate flex-1">{value || "— เลือกสาขา —"}</span>
+          <ChevronsUpDown className="w-3 h-3 shrink-0 opacity-50" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-72 p-0" align="start">
+        <Command shouldFilter={false}>
+          <CommandInput placeholder="ค้นหาสาขา" value={q} onValueChange={setQ} />
+          <CommandList onWheel={(e) => { e.currentTarget.scrollTop += e.deltaY; }}>
+            <CommandEmpty>ไม่พบสาขา</CommandEmpty>
+            <CommandGroup>
+              {filtered.map((o) => (
+                <CommandItem key={o} value={o} onSelect={() => { onChange(o); setOpen(false); setQ(""); }}>
+                  <Check className={cn("mr-2 h-3.5 w-3.5", value === o ? "opacity-100" : "opacity-0")} />
+                  <span className="truncate">{o}</span>
+                </CommandItem>
+              ))}
+              {q.trim() === "" && options.length > 50 && (
+                <div className="px-2 py-1.5 text-[11px] text-muted-foreground">พิมพ์เพื่อค้นหา (แสดง 50 จาก {options.length})</div>
+              )}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 // ===== Convert (SCM Control → tab PO) — import รหัส+จำนวน แล้ว Convert เป็น PO/SO Excel (ไม่ filter) =====
 // แต่ละแถวหลัง enrich: resolve barcode → sku + unit barcode (packing_size_qty=1) + product/vendor/pocost
 type ConvertRow = {
@@ -4676,6 +4716,9 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   const [convertPricelist, setConvertPricelist] = useState(SO_PRICELIST);       // Pricelist สำหรับ Convert SO
   const [convertSoRoute, setConvertSoRoute] = useState(SO_PRICELIST_META[SO_PRICELIST]?.route || "");        // Order lines/Route (default ตาม Pricelist)
   const [convertSoWarehouse, setConvertSoWarehouse] = useState(SO_PRICELIST_META[SO_PRICELIST]?.warehouse || SO_WAREHOUSE); // Warehouse (default ตาม Pricelist)
+  const [convertSoStore, setConvertSoStore] = useState(false);          // ติ๊ก = SO Store (ไม่มีคอลัมน์ Route · Warehouse = ชื่อสาขา)
+  const [convertSoStoreWh, setConvertSoStoreWh] = useState("");         // Warehouse = ชื่อสาขา (ตอนติ๊ก SO Store)
+  const [convertSoStoreOpts, setConvertSoStoreOpts] = useState<string[]>([]); // รายชื่อสาขา (store_type.store_name)
   const [convertVendorOpts, setConvertVendorOpts] = useState<CustomerOpt[]>([]); // dropdown vendor
   const [convertCustomerOpts, setConvertCustomerOpts] = useState<CustomerOpt[]>([]); // dropdown ลูกค้า
   const [convertCurrencyByVendor, setConvertCurrencyByVendor] = useState<Record<string, string>>({}); // vendor code → สกุลเงิน (สำหรับแปลง LAK)
@@ -5357,6 +5400,22 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     } catch { /* โหลดไม่ได้ = ใช้แค่ 2540/7193 + สาขา default */ }
   };
 
+  // โหลดชื่อสาขา (store_type.store_name ที่ไม่ใช่ DC) → ใช้เป็น Warehouse ตอนติ๊ก SO Store
+  const loadSoStoreOpts = async () => {
+    if (convertSoStoreOpts.length > 0) return;
+    try {
+      const seen = new Set<string>();
+      const out: string[] = [];
+      for (let from = 0; ; from += 1000) {
+        const { data } = await (supabase as any).from("store_type").select("store_name, type_store").neq("type_store", "DC").order("store_name").range(from, from + 999);
+        if (!data || data.length === 0) break;
+        for (const s of data as any[]) { const n = String(s.store_name ?? "").trim(); if (n && !seen.has(n)) { seen.add(n); out.push(n); } }
+        if (data.length < 1000) break;
+      }
+      setConvertSoStoreOpts(out);
+    } catch { /* โหลดไม่ได้ก็ปล่อยว่าง */ }
+  };
+
   // ตัวเลือก Picking Type สำหรับ dropdown (DC 2 ตัว + สาขา Jmart/Kokkok) — ถ้ายังไม่โหลด fallback สาขา default เดิม
   const pickingSelectOpts: { value: string; label: string }[] = [
     { value: PO_PICKING_DC, label: PO_PICKING_DC },
@@ -5704,12 +5763,14 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       const N = Math.max(1, Number(convertItemPerPo) || 25);
       const chunks: ConvertRow[][] = [];
       for (let i = 0; i < convertSoRows.length; i += N) chunks.push(convertSoRows.slice(i, i + N));
+      // SO Store: ไม่มีคอลัมน์ Order lines/Route · Warehouse = ชื่อสาขาที่เลือก
+      const warehouseVal = convertSoStore ? convertSoStoreWh : convertSoWarehouse;
       const base: Record<string, any>[] = [];
       let groupCount = 0;
       for (const chunk of chunks) {
         groupCount++;
         chunk.forEach((r, idx) => {
-          base.push({
+          const row: Record<string, any> = {
             "Order Reference": "",
             "Customer": idx === 0 ? customer : "",
             "Pricelist": idx === 0 ? pricelist : "",
@@ -5718,11 +5779,12 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
             "Product Name": r.productName || r.productNameEn,
             "UOM": r.uom,
             "Order Lines/Quantity": r.qty,
-            "Order lines/Route": convertSoRoute, // ค่าเต็มทุก row (ขวาของ Quantity)
-            "Source Document": "",
-            "Warehouse": idx === 0 ? convertSoWarehouse : "",
-            "Company": idx === 0 ? SO_COMPANY : "",
-          });
+          };
+          if (!convertSoStore) row["Order lines/Route"] = convertSoRoute; // ค่าเต็มทุก row (ขวาของ Quantity) — ตัดออกถ้า SO Store
+          row["Source Document"] = "";
+          row["Warehouse"] = idx === 0 ? warehouseVal : "";
+          row["Company"] = idx === 0 ? SO_COMPANY : "";
+          base.push(row);
         });
       }
       const mapped = await remapRowsByTemplate("srr_special_so", base);
@@ -6248,23 +6310,37 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                     {convertExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileSpreadsheet className="w-3.5 h-3.5" />} Convert Excel SO
                   </Button>
                 </div>
+                {/* SO Store — ตัดคอลัมน์ Route + Warehouse เป็นชื่อสาขา */}
+                <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
+                  <input type="checkbox" className="h-3.5 w-3.5" checked={convertSoStore} onChange={(e) => { const c = e.target.checked; setConvertSoStore(c); if (c) loadSoStoreOpts(); }} />
+                  <span>SO Store — ไม่มีคอลัมน์ Order lines/Route · Warehouse = ชื่อสาขา</span>
+                </label>
                 {/* Route (ทุก row) + Warehouse (header) — default ตาม Pricelist เปลี่ยนเองได้ */}
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs font-medium w-24">Route / WH</span>
-                  <div className="flex items-center gap-1.5">
-                    <Label className="text-xs">Order lines/Route</Label>
-                    <select className="h-8 text-xs border rounded px-2 bg-background max-w-[260px]" value={convertSoRoute} onChange={(e) => setConvertSoRoute(e.target.value)} title="Order lines/Route (คอลัมน์ Excel · ทุก row)">
-                      {SO_ROUTE_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
-                    </select>
-                  </div>
+                  {!convertSoStore && (
+                    <div className="flex items-center gap-1.5">
+                      <Label className="text-xs">Order lines/Route</Label>
+                      <select className="h-8 text-xs border rounded px-2 bg-background max-w-[260px]" value={convertSoRoute} onChange={(e) => setConvertSoRoute(e.target.value)} title="Order lines/Route (คอลัมน์ Excel · ทุก row)">
+                        {SO_ROUTE_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
+                      </select>
+                    </div>
+                  )}
                   <div className="flex items-center gap-1.5">
                     <Label className="text-xs">Warehouse</Label>
-                    <select className="h-8 text-xs border rounded px-2 bg-background max-w-[160px]" value={convertSoWarehouse} onChange={(e) => setConvertSoWarehouse(e.target.value)} title="Warehouse (คอลัมน์ Excel)">
-                      {SO_WAREHOUSE_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
-                    </select>
+                    {convertSoStore ? (
+                      <StorePickCombo value={convertSoStoreWh} options={convertSoStoreOpts} onChange={setConvertSoStoreWh} />
+                    ) : (
+                      <select className="h-8 text-xs border rounded px-2 bg-background max-w-[160px]" value={convertSoWarehouse} onChange={(e) => setConvertSoWarehouse(e.target.value)} title="Warehouse (คอลัมน์ Excel)">
+                        {SO_WAREHOUSE_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
+                      </select>
+                    )}
                   </div>
                 </div>
-                <p className="text-[10px] text-muted-foreground">ใช้ template SO เดียวกับหน้า SO Order B2B (srr_special_so) · SO ลูกค้าเดียว ตัดกลุ่มตาม Item Per SO (ไม่แยก vendor) หัวกลุ่มขึ้นแถวแรก · Pricelist = {convertPricelist} · Route = {convertSoRoute} · WH = {convertSoWarehouse}</p>
+                <p className="text-[10px] text-muted-foreground">
+                  ใช้ template SO เดียวกับหน้า SO Order B2B (srr_special_so) · SO ลูกค้าเดียว ตัดกลุ่มตาม Item Per SO (ไม่แยก vendor) หัวกลุ่มขึ้นแถวแรก · Pricelist = {convertPricelist}
+                  {convertSoStore ? ` · SO Store: ไม่มี Route · WH(สาขา) = ${convertSoStoreWh || "ยังไม่เลือก"}` : ` · Route = ${convertSoRoute} · WH = ${convertSoWarehouse}`}
+                </p>
               </div>
             </div>
 
