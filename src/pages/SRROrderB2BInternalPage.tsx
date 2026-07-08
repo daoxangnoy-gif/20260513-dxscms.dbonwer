@@ -5554,21 +5554,23 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         if (keys.length) { const k = keys[0]; return { cost: cbv[k], cur: currencyOf(k) }; } // fallback vendor อื่น
         return { cost: null, cur: "" };
       };
-      const unitPrice = (r: ConvertRow, finalVendor: string): number | string => {
+      // คืน { value, fromMaster } — fromMaster = ใช้ Standard price จาก Master (สำหรับไฮไลต์สีเหลืองอ่อน)
+      const unitPrice = (r: ConvertRow, finalVendor: string): { value: number | string; fromMaster: boolean } => {
         const { cost, cur } = pickCost(r, finalVendor);
-        if (!convertUnitLak) return cost == null ? "" : cost; // โหมดปกติ (ไม่แปลง LAK)
+        if (!convertUnitLak) return { value: cost == null ? "" : cost, fromMaster: false }; // โหมดปกติ (ไม่แปลง LAK)
         // โหมด LAK: แปลง cost → LAK
         if (cost != null) {
           const lak = costToLak(cost, cur, rThb, rUsd);
-          if (lak != null) return lak;
+          if (lak != null) return { value: lak, fromMaster: false };
         }
         // LAK ไม่มี (ไม่มี cost หรือแปลงไม่ได้) → ถ้าติ๊ก "ดึง Cost จาก Master" ใช้ Standard price (packing_size_qty=1)
-        if (convertUseMasterCost && r.standardPrice != null) return r.standardPrice;
+        if (convertUseMasterCost && r.standardPrice != null) return { value: r.standardPrice, fromMaster: true };
         lakMissing++;
-        return "";
+        return { value: "", fromMaster: false };
       };
       const groups = chunkConvertByVendor();
       const out: Record<string, any>[] = [];
+      const masterRowIdx = new Set<number>(); // index แถวที่ Unit Price มาจาก Master (ไฮไลต์เหลือง)
       let groupCount = 0;
       for (const { vc, chunks } of groups) {
         const vName = convertNameMap[vc] || convertVendorOpts.find((o) => o.code === vc)?.name || "";
@@ -5576,6 +5578,8 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           groupCount++;
           const groupId = chunks.length > 1 ? `${vc || "NOVENDOR"}-${ci + 1}` : (vc || "NOVENDOR");
           chunk.forEach((r, idx) => {
+            const up = unitPrice(r, vc);
+            if (up.fromMaster) masterRowIdx.add(out.length);
             out.push({
               "partner_id": idx === 0 ? vc : "",
               "Picking Type / Database ID": idx === 0 ? pick : "",
@@ -5589,7 +5593,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
               "Products to Purchase/UoM": "Unit",
               "Products to Purchase/Exclude In Package": "True",
               "Products to Purchase/Quantity": r.qty,
-              "Products to Purchase/Unit Price": unitPrice(r, vc),
+              "Products to Purchase/Unit Price": up.value,
               "assigned_to": idx === 0 ? "SPC manager01" : "",
               "description": "",
             });
@@ -5599,11 +5603,37 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       if (convertUnitLak && lakMissing > 0) {
         toast({ title: "เตือน: ขาดเรทแปลง LAK", description: `${lakMissing} รายการที่เป็น THB/USD ยังไม่ได้ตั้งเรท (ตั้งที่ Data Control) → Unit Price ว่าง`, variant: "destructive" });
       }
-      const ws = XLSX.utils.json_to_sheet(out);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "PO");
-      XLSX.writeFile(wb, `${stampNow()}-PO-Convert.xlsx`);
-      toast({ title: "Convert PO สำเร็จ", description: `${out.length} แถว · ${groupCount} PO Group` });
+      const fname = `${stampNow()}-PO-Convert.xlsx`;
+      if (convertUseMasterCost && masterRowIdx.size > 0 && out.length > 0) {
+        // มีแถวที่ดึง Cost จาก Master → ใช้ ExcelJS ไฮไลต์เหลืองอ่อนเฉพาะแถวนั้น
+        const headers = Object.keys(out[0]);
+        const ExcelJS = (await import("exceljs")).default;
+        const wb = new ExcelJS.Workbook();
+        const ws = wb.addWorksheet("PO");
+        ws.columns = headers.map((h) => ({ header: h, key: h }));
+        out.forEach((rowObj, i) => {
+          const row = ws.addRow(rowObj);
+          if (masterRowIdx.has(i)) {
+            for (let c = 1; c <= headers.length; c++) {
+              row.getCell(c).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF9C4" } }; // เหลืองอ่อน
+            }
+          }
+        });
+        const buf = await wb.xlsx.writeBuffer();
+        const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+        const dl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = dl; a.download = fname;
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(dl);
+        toast({ title: "Convert PO สำเร็จ", description: `${out.length} แถว · ${groupCount} PO Group · ไฮไลต์ Master ${masterRowIdx.size} แถว` });
+      } else {
+        const ws = XLSX.utils.json_to_sheet(out);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "PO");
+        XLSX.writeFile(wb, fname);
+        toast({ title: "Convert PO สำเร็จ", description: `${out.length} แถว · ${groupCount} PO Group` });
+      }
     } catch (e: any) {
       toast({ title: "Convert PO ไม่สำเร็จ", description: e.message, variant: "destructive" });
     } finally {
