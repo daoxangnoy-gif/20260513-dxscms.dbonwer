@@ -4659,6 +4659,10 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   const [convertPicking, setConvertPicking] = useState(PO_PICKING_DC); // Picking Type สำหรับ Convert PO
   const [convertUnitLak, setConvertUnitLak] = useState(false); // ติ๊ก = Unit Price แปลงเป็น LAK (Convert PO)
   const [convertUseMasterCost, setConvertUseMasterCost] = useState(false); // (คู่กับ LAK) ติ๊ก = LAK ที่ไม่มี → ดึง Standard price จาก Master
+  // เรทแปลง LAK (ค้างใน localStorage คีย์เดียวกับ Data Control → ใช้ร่วมกันทั้งระบบ)
+  const [convertRateThb, setConvertRateThb] = useState(() => localStorage.getItem("po_cost_rate_thb") || "");
+  const [convertRateUsd, setConvertRateUsd] = useState(() => localStorage.getItem("po_cost_rate_usd") || "");
+  const saveRate = (key: string, v: string, setter: (s: string) => void) => { setter(v); try { localStorage.setItem(key, v); } catch { /* localStorage เต็ม/ปิด */ } };
   const [convertVendorDefault, setConvertVendorDefault] = useState(""); // vendor เริ่มต้น (ถ้าไฟล์ไม่ได้ใส่)
   const [convertCustomer, setConvertCustomer] = useState(SO_DEFAULT_CUSTOMER); // ลูกค้าสำหรับ Convert SO
   const [convertPricelist, setConvertPricelist] = useState(SO_PRICELIST);       // Pricelist สำหรับ Convert SO
@@ -6086,6 +6090,15 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                   <Button size="sm" className="h-8 gap-1.5 text-xs ml-auto" onClick={doConvertExportPO} disabled={convertRows.length === 0 || convertExporting}>
                     {convertExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShoppingCart className="w-3.5 h-3.5" />} Convert Excel PO
                   </Button>
+                </div>
+                {/* เรทแปลง LAK — ใส่แล้วค้างใน localStorage (ใช้ร่วมกับ Data Control) */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs text-muted-foreground">เรทแปลง LAK:</span>
+                  <Label className="text-xs">THB→LAK</Label>
+                  <Input type="number" value={convertRateThb} onChange={(e) => saveRate("po_cost_rate_thb", e.target.value, setConvertRateThb)} className="h-8 w-24 text-xs" placeholder="เช่น 689" />
+                  <Label className="text-xs">USD→LAK</Label>
+                  <Input type="number" value={convertRateUsd} onChange={(e) => saveRate("po_cost_rate_usd", e.target.value, setConvertRateUsd)} className="h-8 w-28 text-xs" placeholder="เช่น 22250" />
+                  <span className="text-[11px] text-muted-foreground">บันทึกอัตโนมัติ · ใช้ตอนติ๊ก Pocost Unit Lak</span>
                 </div>
                 <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
                   <input type="checkbox" className="h-3.5 w-3.5" checked={convertUnitLak} onChange={(e) => { const c = e.target.checked; setConvertUnitLak(c); if (!c) setConvertUseMasterCost(false); }} />
