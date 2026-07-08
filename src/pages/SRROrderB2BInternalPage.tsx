@@ -60,9 +60,9 @@ const CONVERT_SO_PRICELISTS = ["WSPRICE 2 (Internal B2B)", "WSPRICE 14 (LGP to K
 // ค่า default ของ Order lines/Route + Warehouse ตาม Pricelist ที่เลือก (Convert SO)
 const SO_PRICELIST_META: Record<string, { route: string; warehouse: string }> = {
   "WSPRICE 2 (Internal B2B)":   { route: "DC Thongpong: Deliver B2B LGP", warehouse: "DC Thongpong" },
-  "WSPRICE 14 (LGP to KR F&B)": { route: "DC Thongpong : Deliver B2B KFC", warehouse: "DC KFC" },
+  "WSPRICE 14 (LGP to KR F&B)": { route: "DC Thongpong: Deliver B2B KFC", warehouse: "DC KFC" },
 };
-const SO_ROUTE_OPTIONS = ["DC Thongpong: Deliver B2B LGP", "DC Thongpong : Deliver B2B KFC"];
+const SO_ROUTE_OPTIONS = ["DC Thongpong: Deliver B2B LGP", "DC Thongpong: Deliver B2B KFC"];
 const SO_WAREHOUSE_OPTIONS = ["DC Thongpong", "DC KFC"];
 const SO_DEFAULT_CUSTOMER = "40237 KR F&B Co.,LTD"; // Customer เริ่มต้นตอน export
 
