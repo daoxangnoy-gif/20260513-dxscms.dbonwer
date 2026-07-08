@@ -6062,7 +6062,11 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
 
         {/* ===== Convert Dialog (import รหัส+จำนวน → PO/SO Excel, ไม่ filter) ===== */}
         <Dialog open={convertOpen} onOpenChange={setConvertOpen}>
-          <DialogContent className="w-[720px] max-w-[94vw] bg-background overflow-hidden">
+          <DialogContent
+            className="w-[720px] max-w-[94vw] bg-background overflow-hidden"
+            onInteractOutside={(e) => e.preventDefault()}  // คลิกนอกกล่อง/สลับโปรแกรมแล้วกลับมา ไม่ปิดเอง
+            onEscapeKeyDown={(e) => e.preventDefault()}     // กัน Esc ปิดโดยไม่ตั้งใจ — ปิดได้จากปุ่ม X / ปิด เท่านั้น
+          >
             <DialogHeader>
               <DialogTitle>Convert เป็น PO / SO</DialogTitle>
             </DialogHeader>
