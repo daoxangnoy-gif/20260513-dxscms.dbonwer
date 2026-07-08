@@ -5565,20 +5565,6 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     }
   };
 
-  // group by vendor → chunk ทีละ N (Item Per PO/SO) — รับ rows + วิธีหา vendor ตัวสุดท้าย
-  const chunkByVendor = (rows: ConvertRow[], finalVendorFn: (r: ConvertRow) => string): { vc: string; chunks: ConvertRow[][] }[] => {
-    const N = Math.max(1, Number(convertItemPerPo) || 25);
-    const byVendor = new Map<string, ConvertRow[]>();
-    for (const r of rows) { const vc = finalVendorFn(r); if (!byVendor.has(vc)) byVendor.set(vc, []); byVendor.get(vc)!.push(r); }
-    const out: { vc: string; chunks: ConvertRow[][] }[] = [];
-    for (const [vc, vRows] of byVendor) {
-      const chunks: ConvertRow[][] = [];
-      for (let i = 0; i < vRows.length; i += N) chunks.push(vRows.slice(i, i + N));
-      out.push({ vc, chunks });
-    }
-    return out;
-  };
-
   // group by vendor → chunk ทีละ N (Item Per PO) — ใช้ convertRows (PO)
   const chunkConvertByVendor = (): { vc: string; chunks: ConvertRow[][] }[] => {
     const N = Math.max(1, Number(convertItemPerPo) || 25);
@@ -5714,28 +5700,28 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     try {
       const customer = convertCustomer || SO_DEFAULT_CUSTOMER;
       const pricelist = convertPricelist || SO_PRICELIST;
-      // SO จัดกลุ่มตาม vendor จากไฟล์/Master (ไม่ใช้ Vendor เริ่มต้นของ PO)
-      const groups = chunkByVendor(convertSoRows, (r) => r.fileVendor || r.dmVendor || "");
+      // SO = ลูกค้าเดียว → ตัดกลุ่มตาม Item Per SO อย่างเดียว (ไม่แยกตาม vendor) · หัวกลุ่มขึ้นแถวแรกของแต่ละกลุ่ม
+      const N = Math.max(1, Number(convertItemPerPo) || 25);
+      const chunks: ConvertRow[][] = [];
+      for (let i = 0; i < convertSoRows.length; i += N) chunks.push(convertSoRows.slice(i, i + N));
       const base: Record<string, any>[] = [];
       let groupCount = 0;
-      for (const { chunks } of groups) {
-        chunks.forEach((chunk) => {
-          groupCount++;
-          chunk.forEach((r, idx) => {
-            base.push({
-              "Order Reference": "",
-              "Customer": idx === 0 ? customer : "",
-              "Pricelist": idx === 0 ? pricelist : "",
-              "Order Lines/Barcode": r.unitBarcode || r.inputCode,
-              "Order Lines/Product": r.unitBarcode || r.inputCode,
-              "Product Name": r.productName || r.productNameEn,
-              "UOM": r.uom,
-              "Order Lines/Quantity": r.qty,
-              "Order lines/Route": convertSoRoute, // ค่าเต็มทุก row (ขวาของ Quantity)
-              "Source Document": "",
-              "Warehouse": idx === 0 ? convertSoWarehouse : "",
-              "Company": idx === 0 ? SO_COMPANY : "",
-            });
+      for (const chunk of chunks) {
+        groupCount++;
+        chunk.forEach((r, idx) => {
+          base.push({
+            "Order Reference": "",
+            "Customer": idx === 0 ? customer : "",
+            "Pricelist": idx === 0 ? pricelist : "",
+            "Order Lines/Barcode": r.unitBarcode || r.inputCode,
+            "Order Lines/Product": r.unitBarcode || r.inputCode,
+            "Product Name": r.productName || r.productNameEn,
+            "UOM": r.uom,
+            "Order Lines/Quantity": r.qty,
+            "Order lines/Route": convertSoRoute, // ค่าเต็มทุก row (ขวาของ Quantity)
+            "Source Document": "",
+            "Warehouse": idx === 0 ? convertSoWarehouse : "",
+            "Company": idx === 0 ? SO_COMPANY : "",
           });
         });
       }
@@ -6278,7 +6264,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                     </select>
                   </div>
                 </div>
-                <p className="text-[10px] text-muted-foreground">ใช้ template SO เดียวกับหน้า SO Order B2B (srr_special_so) · Pricelist = {convertPricelist} · Route = {convertSoRoute} · WH = {convertSoWarehouse}</p>
+                <p className="text-[10px] text-muted-foreground">ใช้ template SO เดียวกับหน้า SO Order B2B (srr_special_so) · SO ลูกค้าเดียว ตัดกลุ่มตาม Item Per SO (ไม่แยก vendor) หัวกลุ่มขึ้นแถวแรก · Pricelist = {convertPricelist} · Route = {convertSoRoute} · WH = {convertSoWarehouse}</p>
               </div>
             </div>
 
