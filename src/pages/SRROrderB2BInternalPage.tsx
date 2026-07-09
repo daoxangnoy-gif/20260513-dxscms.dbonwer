@@ -5624,6 +5624,42 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     }
   };
 
+  // วาง (paste) 2 คอลัมน์: Barcode + Qty → resolve เหมือน import ไฟล์ (isSO = ข้าม vendor/cost)
+  const handleConvertPaste = async (isSO: boolean) => {
+    let text = "";
+    try { text = await navigator.clipboard.readText(); }
+    catch { toast({ title: "อ่าน Clipboard ไม่ได้", description: "คัดลอกข้อมูล 2 คอลัมน์ (Barcode, Qty) ก่อน แล้วกดวาง", variant: "destructive" }); return; }
+    const inputs = (text || "").split(/\r?\n/).map((line) => {
+      const cells = line.includes("\t") ? line.split("\t") : line.split(/[,;]| {2,}/);
+      const barcode = String(cells[0] ?? "").trim();
+      const qty = cells.length > 1 ? (Number(String(cells[1]).replace(/,/g, "")) || 0) : 0;
+      return { barcode, qty, fileVendor: "", fileUnitPrice: null as number | null };
+    }).filter((i) => i.barcode && !/^(barcode|รหัส|sku|code)$/i.test(i.barcode)); // ข้าม header ถ้ามี
+    if (inputs.length === 0) { toast({ title: "ไม่พบข้อมูลที่วาง", description: "รูปแบบ: Barcode [Tab] Qty ต่อบรรทัด", variant: "destructive" }); return; }
+    setConvertImporting(true);
+    setConvertProgress(5); setConvertStatus("ประมวลผลข้อมูลที่วาง...");
+    try {
+      if (isSO) {
+        const { rows } = await enrichConvert(inputs, true);
+        setConvertSoRows(rows);
+        const nf = rows.filter((r) => !r.found).length;
+        setConvertProgress(100); setConvertStatus(`เสร็จสิ้น · ${rows.length} รายการ`);
+        toast({ title: "วางข้อมูล SO สำเร็จ", description: `${rows.length} รายการ${nf ? ` · ไม่พบข้อมูล ${nf}` : ""}` });
+      } else {
+        const { rows, nameMap, currencyByVendor } = await enrichConvert(inputs);
+        setConvertRows(rows); setConvertNameMap(nameMap); setConvertCurrencyByVendor(currencyByVendor);
+        const nf = rows.filter((r) => !r.found).length;
+        setConvertProgress(100); setConvertStatus(`เสร็จสิ้น · ${rows.length} รายการ`);
+        toast({ title: "วางข้อมูล PO สำเร็จ", description: `${rows.length} รายการ${nf ? ` · ไม่พบข้อมูล ${nf}` : ""}` });
+      }
+    } catch (e: any) {
+      setConvertStatus("");
+      toast({ title: "วางข้อมูลไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setConvertImporting(false);
+    }
+  };
+
   // group by vendor → chunk ทีละ N (Item Per PO) — ใช้ convertRows (PO)
   const chunkConvertByVendor = (): { vc: string; chunks: ConvertRow[][] }[] => {
     const N = Math.max(1, Number(convertItemPerPo) || 25);
@@ -6208,6 +6244,9 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                   <input type="file" accept=".xlsx,.xls" className="hidden" disabled={convertImporting} onChange={(e) => { const f = e.target.files?.[0]; if (f) handleConvertImport(f); e.target.value = ""; }} />
                   {convertImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />} Import PO
                 </label>
+                <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={() => handleConvertPaste(false)} disabled={convertImporting} title="วางข้อมูล 2 คอลัมน์: Barcode [Tab] Qty (คัดลอกจาก Excel แล้วกด)">
+                  <Copy className="w-3.5 h-3.5" /> วาง
+                </Button>
                 {!convertImporting && convertRows.length > 0 && (
                   <span className="text-[11px] text-muted-foreground">
                     PO: {convertRows.length} รายการ · รวม {convertRows.reduce((s, r) => s + (r.qty || 0), 0)} · ไม่พบข้อมูล {convertRows.filter((r) => !r.found).length}
@@ -6289,6 +6328,9 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                     <input type="file" accept=".xlsx,.xls" className="hidden" disabled={convertImporting} onChange={(e) => { const f = e.target.files?.[0]; if (f) handleConvertImportSO(f); e.target.value = ""; }} />
                     {convertImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />} Import SO
                   </label>
+                  <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={() => handleConvertPaste(true)} disabled={convertImporting} title="วางข้อมูล 2 คอลัมน์: Barcode [Tab] Qty (คัดลอกจาก Excel แล้วกด)">
+                    <Copy className="w-3.5 h-3.5" /> วาง
+                  </Button>
                   {!convertImporting && convertSoRows.length > 0 && (
                     <span className="text-[11px] text-muted-foreground">
                       SO: {convertSoRows.length} รายการ · รวม {convertSoRows.reduce((s, r) => s + (r.qty || 0), 0)} · ไม่พบข้อมูล {convertSoRows.filter((r) => !r.found).length}
