@@ -6233,7 +6233,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
               </div>
 
               {/* Convert PO */}
-              <div className="border rounded-lg p-3 space-y-2">
+              <div className="border border-red-300 dark:border-red-900/50 bg-red-50/60 dark:bg-red-950/20 rounded-lg p-3 space-y-2">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs font-medium w-24">Convert PO</span>
                   <select
@@ -6278,7 +6278,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
               </div>
 
               {/* Convert SO */}
-              <div className="border rounded-lg p-3 space-y-2">
+              <div className="border border-amber-300 dark:border-amber-900/50 bg-amber-50/60 dark:bg-amber-950/20 rounded-lg p-3 space-y-2">
                 {/* Import แยกสำหรับ SO — โหลดเบา (ไม่ดึง vendor/cost) เร็วกว่า Import PO */}
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs font-medium w-24">Import SO</span>
