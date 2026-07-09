@@ -5940,8 +5940,11 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       const pricelist = convertPricelist || SO_PRICELIST;
       // SO = ลูกค้าเดียว → ตัดกลุ่มตาม Item Per SO อย่างเดียว (ไม่แยกตาม vendor) · หัวกลุ่มขึ้นแถวแรกของแต่ละกลุ่ม
       const N = Math.max(1, Number(convertItemPerPo) || 25);
+      // ไม่ export รายการที่ resolve ไม่พบ (ดาวน์โหลดดูได้ที่ปุ่ม Skiplist)
+      const soRows = convertSoRows.filter((r) => r.found);
+      if (soRows.length === 0) { toast({ title: "ไม่มีรายการที่พบข้อมูล", description: "ทุกรายการ resolve ไม่พบ — ตรวจ Barcode/SKU", variant: "destructive" }); return; }
       const chunks: ConvertRow[][] = [];
-      for (let i = 0; i < convertSoRows.length; i += N) chunks.push(convertSoRows.slice(i, i + N));
+      for (let i = 0; i < soRows.length; i += N) chunks.push(soRows.slice(i, i + N));
       // SO Store: ไม่มีคอลัมน์ Order lines/Route · Warehouse = ชื่อสาขาที่เลือก
       const warehouseVal = convertSoStore ? convertSoStoreWh : convertSoWarehouse;
       const base: Record<string, any>[] = [];
