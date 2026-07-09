@@ -1523,8 +1523,8 @@ export default function SRROrderB2BInternalPage() {
   // ดาวน์โหลด template สำหรับนำเข้า Monthly usage
   const downloadMuTemplate = () => {
     const ws = XLSX.utils.json_to_sheet([
-      { Barcode: "8857000000001", "จำนวน/เดือน": 10, "Order group": "A", หมายเหตุ: "", "Barcode ทดแทน": "", "ชื่อสินค้า (ถ้าไม่พบใน Master)": "", "Picture (ฝังรูปใน cell นี้)": "" },
-      { Barcode: "8857000000002", "จำนวน/เดือน": 5, "Order group": "B", หมายเหตุ: "", "Barcode ทดแทน": "8857000000099", "ชื่อสินค้า (ถ้าไม่พบใน Master)": "", "Picture (ฝังรูปใน cell นี้)": "" },
+      { Barcode: "8857000000001", "จำนวน/3เดือน": 10, "Order group": "A", หมายเหตุ: "", "Barcode ทดแทน": "", "ชื่อสินค้า (ถ้าไม่พบใน Master)": "", "Picture (ฝังรูปใน cell นี้)": "" },
+      { Barcode: "8857000000002", "จำนวน/3เดือน": 5, "Order group": "B", หมายเหตุ: "", "Barcode ทดแทน": "8857000000099", "ชื่อสินค้า (ถ้าไม่พบใน Master)": "", "Picture (ฝังรูปใน cell นี้)": "" },
     ]);
     ws["!cols"] = [{ wch: 18 }, { wch: 14 }, { wch: 12 }, { wch: 20 }, { wch: 18 }, { wch: 28 }, { wch: 30 }];
     const wb = XLSX.utils.book_new();
@@ -1535,8 +1535,8 @@ export default function SRROrderB2BInternalPage() {
   // template สำหรับ Import หลายแบรนด์ (ชีตเดียว มีคอลัมน์ Brand)
   const downloadMultiTemplate = () => {
     const ws = XLSX.utils.json_to_sheet([
-      { Brand: "Bonchon", Barcode: "8851123212021", "จำนวน/เดือน": 1000, "Order group": "A", หมายเหตุ: "", "ชื่อสินค้า (ถ้าไม่พบใน Master)": "", "Picture (ฝังรูปใน cell นี้)": "" },
-      { Brand: "Khiang", Barcode: "8059495230180", "จำนวน/เดือน": 2, "Order group": "B", หมายเหตุ: "", "ชื่อสินค้า (ถ้าไม่พบใน Master)": "", "Picture (ฝังรูปใน cell นี้)": "" },
+      { Brand: "Bonchon", Barcode: "8851123212021", "จำนวน/3เดือน": 1000, "Order group": "A", หมายเหตุ: "", "ชื่อสินค้า (ถ้าไม่พบใน Master)": "", "Picture (ฝังรูปใน cell นี้)": "" },
+      { Brand: "Khiang", Barcode: "8059495230180", "จำนวน/3เดือน": 2, "Order group": "B", หมายเหตุ: "", "ชื่อสินค้า (ถ้าไม่พบใน Master)": "", "Picture (ฝังรูปใน cell นี้)": "" },
     ]);
     ws["!cols"] = [{ wch: 18 }, { wch: 18 }, { wch: 12 }, { wch: 12 }, { wch: 20 }, { wch: 28 }, { wch: 30 }];
     const wb = XLSX.utils.book_new();
@@ -5783,7 +5783,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           if (!convertSoStore) row["Order lines/Route"] = convertSoRoute; // ค่าเต็มทุก row (ขวาของ Quantity) — ตัดออกถ้า SO Store
           row["Source Document"] = "";
           row["Warehouse"] = idx === 0 ? warehouseVal : "";
-          row["Company"] = idx === 0 ? SO_COMPANY : "";
+          row["Company"] = idx === 0 ? (convertSoStore ? warehouseVal : SO_COMPANY) : ""; // SO Store → Company = Warehouse (ชื่อสาขา)
           base.push(row);
         });
       }
