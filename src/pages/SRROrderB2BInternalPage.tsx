@@ -1868,6 +1868,10 @@ export default function SRROrderB2BInternalPage() {
 </body>
 </html>`;
 
+    // ชื่อไฟล์ Save as PDF: print iframe จะใช้ title ของ "หน้าหลัก" → ตั้ง document.title ชั่วคราว
+    const pdfTitle = `${fnameDate} - 3Monthly Forecast - ${brandName}`;
+    const prevTitle = document.title;
+
     // พิมพ์ผ่าน hidden iframe → เด้ง print preview อย่างเดียว ไม่เปิด tab ใหม่
     const iframe = document.createElement("iframe");
     iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;";
@@ -1879,12 +1883,13 @@ export default function SRROrderB2BInternalPage() {
       toast({ title: "เตรียมหน้าพิมพ์ไม่สำเร็จ", variant: "destructive" });
       return;
     }
-    const cleanup = () => { setTimeout(() => iframe.remove(), 300); };
+    const cleanup = () => { document.title = prevTitle; setTimeout(() => iframe.remove(), 300); };
     iwin.onafterprint = cleanup;
     let printed = false;
     const doPrint = () => {
       if (printed) return;
       printed = true;
+      document.title = pdfTitle; // browser ใช้ title หน้าหลักเป็นชื่อไฟล์ PDF ตอน print iframe
       try { iwin.focus(); iwin.print(); } catch { cleanup(); }
     };
     idoc.open();
