@@ -5714,7 +5714,13 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       if (convertUnitLak && lakMissing > 0) {
         toast({ title: "เตือน: ขาดเรทแปลง LAK", description: `${lakMissing} รายการที่เป็น THB/USD ยังไม่ได้ตั้งเรท (ตั้งที่ Data Control) → Unit Price ว่าง`, variant: "destructive" });
       }
-      const fname = `${stampNow()}-PO-Convert.xlsx`;
+      // ชื่อไฟล์ใส่ชื่อ vendor (เจ้าเดียว = ชื่อ vendor, หลายเจ้า = Multi Vendor)
+      const sanitizeName = (s: string) => (s || "").replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim().slice(0, 60);
+      const vCodes = [...new Set(groups.map((g) => g.vc).filter(Boolean))];
+      const vLabel = vCodes.length === 0 ? "NoVendor"
+        : vCodes.length === 1 ? sanitizeName(convertNameMap[vCodes[0]] || convertVendorOpts.find((o) => o.code === vCodes[0])?.name || vCodes[0])
+        : "Multi Vendor";
+      const fname = `${stampNow()}-PO-${vLabel}.xlsx`;
       if (convertUseMasterCost && masterRowIdx.size > 0 && out.length > 0) {
         // มีแถวที่ดึง Cost จาก Master → ใช้ ExcelJS ไฮไลต์เหลืองอ่อนเฉพาะแถวนั้น
         const headers = Object.keys(out[0]);
@@ -5791,7 +5797,9 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       const ws = XLSX.utils.json_to_sheet(mapped);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "SO");
-      XLSX.writeFile(wb, `${stampNow()}-SO-Convert.xlsx`);
+      // ชื่อไฟล์ใส่ชื่อ customer (SO = ลูกค้าเดียว)
+      const cLabel = (customer || "").replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim().slice(0, 60) || "Customer";
+      XLSX.writeFile(wb, `${stampNow()}-SO-${cLabel}.xlsx`);
       toast({ title: "Convert SO สำเร็จ", description: `${base.length} แถว · ${groupCount} SO Group` });
     } catch (e: any) {
       toast({ title: "Convert SO ไม่สำเร็จ", description: e.message, variant: "destructive" });
