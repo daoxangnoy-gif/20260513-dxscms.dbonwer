@@ -861,6 +861,68 @@ export default function SRROrderB2BInternalPage() {
     }
   };
 
+  // ===== ลบเอกสารที่เลือก (multi) =====
+  const deleteSelectedMuDocs = async () => {
+    const ids = [...muSelected];
+    if (ids.length === 0) return;
+    if (!window.confirm(`ลบเอกสารที่เลือก ${ids.length} ฉบับ และรายการทั้งหมด?`)) return;
+    try {
+      await (supabase as any).from("monthly_usage_item").delete().in("doc_id", ids); // ลบ item ก่อน กัน orphan
+      const { error } = await (supabase as any).from("monthly_usage_doc").delete().in("id", ids);
+      if (error) throw error;
+      toast({ title: `ลบ ${ids.length} เอกสารแล้ว` });
+      setMuSelected(new Set());
+      loadDocs();
+    } catch (e: any) {
+      toast({ title: "ลบไม่สำเร็จ", description: e.message, variant: "destructive" });
+    }
+  };
+
+  // ===== Dialog จัดการโลโก้ (หัวฟอร์ม/PDF = logo_url) — import หลายโลโก้ + ติกเลือก Doc ต่อโลโก้ =====
+  const [logoDialogOpen, setLogoDialogOpen] = useState(false);
+  const [logoItems, setLogoItems] = useState<{ url: string; name: string }[]>([]);
+  const [logoDocMap, setLogoDocMap] = useState<Record<string, number>>({}); // docId → logo index (1 doc ได้ 1 logo)
+  const [logoBusy, setLogoBusy] = useState(false);
+  const openLogoDialog = () => { setLogoItems([]); setLogoDocMap({}); setLogoDialogOpen(true); };
+  const addLogoFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setLogoBusy(true);
+    try {
+      const added: { url: string; name: string }[] = [];
+      for (const f of Array.from(files)) {
+        const url = await uploadPicture(await fileToDataUrl(f));
+        added.push({ url, name: f.name });
+      }
+      setLogoItems((prev) => [...prev, ...added]);
+    } catch (e: any) {
+      toast({ title: "อัปโลโก้ไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally { setLogoBusy(false); }
+  };
+  const toggleLogoDoc = (docId: string, logoIdx: number) => setLogoDocMap((prev) => {
+    const n = { ...prev }; if (n[docId] === logoIdx) delete n[docId]; else n[docId] = logoIdx; return n;
+  });
+  const saveLogoAssignments = async () => {
+    const entries = Object.entries(logoDocMap);
+    if (entries.length === 0) { toast({ title: "ยังไม่ได้เลือก Doc ให้โลโก้", variant: "destructive" }); return; }
+    setLogoBusy(true);
+    try {
+      const byLogo = new Map<number, string[]>();
+      for (const [docId, idx] of entries) { if (!byLogo.has(idx)) byLogo.set(idx, []); byLogo.get(idx)!.push(docId); }
+      let applied = 0;
+      for (const [idx, docIds] of byLogo) {
+        const url = logoItems[idx]?.url; if (!url) continue;
+        const { error } = await (supabase as any).from("monthly_usage_doc").update({ logo_url: url }).in("id", docIds);
+        if (error) throw error;
+        applied += docIds.length;
+      }
+      toast({ title: `ใส่โลโก้ให้ ${applied} เอกสารแล้ว` });
+      setLogoDialogOpen(false);
+      loadDocs();
+    } catch (e: any) {
+      toast({ title: "บันทึกโลโก้ไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally { setLogoBusy(false); }
+  };
+
   // เลือกเอกสาร (multi-select) สำหรับ Export หลายฉบับ
   const [muSelected, setMuSelected] = useState<Set<string>>(new Set());
   const toggleMuSel = (id: string) => setMuSelected((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -2952,12 +3014,70 @@ export default function SRROrderB2BInternalPage() {
                       : "..."}
                   </span>
                 </div>
-              ) : (muSelected.size > 0 && can("b2b_brand", "export") && (
-                <Button size="sm" className="h-7 gap-1.5 text-xs ml-auto" onClick={exportSelectedDocs}>
-                  <Download className="w-3.5 h-3.5" /> Export ที่เลือก ({muSelected.size})
-                </Button>
-              ))}
+              ) : (
+                <div className="ml-auto flex items-center gap-2">
+                  {can("b2b_brand", "edit") && (
+                    <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs" onClick={openLogoDialog} title="Import โลโก้แล้วเลือก Doc ที่จะใช้">
+                      <ImageIcon className="w-3.5 h-3.5" /> จัดการโลโก้
+                    </Button>
+                  )}
+                  {muSelected.size > 0 && can("b2b_brand", "delete") && (
+                    <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs text-destructive border-destructive/40" onClick={deleteSelectedMuDocs}>
+                      <Trash2 className="w-3.5 h-3.5" /> ลบที่เลือก ({muSelected.size})
+                    </Button>
+                  )}
+                  {muSelected.size > 0 && can("b2b_brand", "export") && (
+                    <Button size="sm" className="h-7 gap-1.5 text-xs" onClick={exportSelectedDocs}>
+                      <Download className="w-3.5 h-3.5" /> Export ที่เลือก ({muSelected.size})
+                    </Button>
+                  )}
+                </div>
+              )}
             </div>
+
+            {/* Dialog จัดการโลโก้ — import โลโก้แล้วติกเลือก Doc ที่จะใช้ (logo_url หัวฟอร์ม/PDF) */}
+            <Dialog open={logoDialogOpen} onOpenChange={setLogoDialogOpen}>
+              <DialogContent className="max-w-2xl bg-background max-h-[85vh] overflow-hidden flex flex-col">
+                <DialogHeader>
+                  <DialogTitle className="text-base">จัดการโลโก้ (หัวฟอร์ม / PDF)</DialogTitle>
+                </DialogHeader>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <label className={cn("inline-flex items-center gap-1.5 h-8 px-3 rounded-md border-2 border-violet-300 bg-violet-50 text-violet-700 hover:bg-violet-100 text-xs cursor-pointer", logoBusy && "opacity-60 pointer-events-none")}>
+                    {logoBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />} เพิ่มโลโก้ (เลือกได้หลายไฟล์)
+                    <input type="file" accept="image/*" multiple className="hidden" disabled={logoBusy} onChange={(e) => { addLogoFiles(e.target.files); e.target.value = ""; }} />
+                  </label>
+                  <span className="text-[11px] text-muted-foreground">อัปโลโก้ก่อน แล้วติกเลือก Doc ใต้แต่ละโลโก้ (1 Doc = 1 โลโก้)</span>
+                </div>
+                <div className="flex-1 overflow-auto min-h-0 space-y-3 pr-1">
+                  {logoItems.length === 0 && <div className="text-sm text-muted-foreground text-center py-6">ยังไม่มีโลโก้ — กด "เพิ่มโลโก้"</div>}
+                  {logoItems.map((lg, idx) => (
+                    <div key={idx} className="border rounded-lg p-2">
+                      <div className="flex items-center gap-2 mb-1.5">
+                        <img src={lg.url} alt={lg.name} className="h-12 w-12 object-contain rounded border bg-muted/20" />
+                        <span className="text-xs font-medium">Logo {idx + 1}</span>
+                        <span className="text-[11px] text-muted-foreground truncate flex-1" title={lg.name}>{lg.name}</span>
+                        <span className="text-[11px] text-primary">{Object.values(logoDocMap).filter((v) => v === idx).length} Doc</span>
+                      </div>
+                      <div className="max-h-40 overflow-auto border rounded p-1 grid grid-cols-2 gap-x-3 gap-y-0.5">
+                        {docs.map((d) => (
+                          <label key={d.id} className="flex items-center gap-1.5 text-[11px] px-1 py-0.5 rounded hover:bg-muted/40 cursor-pointer">
+                            <input type="checkbox" className="h-3 w-3" checked={logoDocMap[d.id] === idx} onChange={() => toggleLogoDoc(d.id, idx)} />
+                            <span className="truncate" title={d.doc_label}>{d.brand_name || d.doc_label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setLogoDialogOpen(false)}>ปิด</Button>
+                  <Button onClick={saveLogoAssignments} disabled={logoBusy || Object.keys(logoDocMap).length === 0}>
+                    {logoBusy ? <Loader2 className="w-4 h-4 animate-spin mr-1.5" /> : null} บันทึกโลโก้ ({Object.keys(logoDocMap).length} Doc)
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
             <div className="flex-1 overflow-auto min-h-0">
             <table className="w-full text-sm">
               <thead className="sticky top-0 z-30">
