@@ -5660,6 +5660,23 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     }
   };
 
+  // ดาวน์โหลด Skiplist — รายการที่ resolve ไม่พบใน Master (PO/SO)
+  const downloadConvertSkiplist = (isSO: boolean) => {
+    const rows = (isSO ? convertSoRows : convertRows).filter((r) => !r.found);
+    if (rows.length === 0) { toast({ title: "ไม่มีรายการที่ไม่พบ", variant: "destructive" }); return; }
+    const out = rows.map((r, i) => ({
+      "#": i + 1,
+      Barcode: r.inputCode || r.unitBarcode || "",
+      Quantity: r.qty,
+      "เหตุผล": "ไม่พบใน Master (data_master)",
+    }));
+    const ws = XLSX.utils.json_to_sheet(out);
+    ws["!cols"] = [{ wch: 5 }, { wch: 22 }, { wch: 10 }, { wch: 28 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Skiplist");
+    XLSX.writeFile(wb, `${stampNow()}-${isSO ? "SO" : "PO"}-Skiplist.xlsx`);
+  };
+
   // group by vendor → chunk ทีละ N (Item Per PO) — ใช้ convertRows (PO)
   const chunkConvertByVendor = (): { vc: string; chunks: ConvertRow[][] }[] => {
     const N = Math.max(1, Number(convertItemPerPo) || 25);
@@ -6252,6 +6269,11 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                     PO: {convertRows.length} รายการ · รวม {convertRows.reduce((s, r) => s + (r.qty || 0), 0)} · ไม่พบข้อมูล {convertRows.filter((r) => !r.found).length}
                   </span>
                 )}
+                {!convertImporting && convertRows.some((r) => !r.found) && (
+                  <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px] text-destructive border-destructive/40" onClick={() => downloadConvertSkiplist(false)} title="ดาวน์โหลดรายการที่ไม่พบใน Master">
+                    <Download className="w-3 h-3" /> Skiplist ({convertRows.filter((r) => !r.found).length})
+                  </Button>
+                )}
               </div>
 
               {/* แถบ % ตอน import Convert + นับรายการ */}
@@ -6335,6 +6357,11 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                     <span className="text-[11px] text-muted-foreground">
                       SO: {convertSoRows.length} รายการ · รวม {convertSoRows.reduce((s, r) => s + (r.qty || 0), 0)} · ไม่พบข้อมูล {convertSoRows.filter((r) => !r.found).length}
                     </span>
+                  )}
+                  {!convertImporting && convertSoRows.some((r) => !r.found) && (
+                    <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px] text-destructive border-destructive/40" onClick={() => downloadConvertSkiplist(true)} title="ดาวน์โหลดรายการที่ไม่พบใน Master">
+                      <Download className="w-3 h-3" /> Skiplist ({convertSoRows.filter((r) => !r.found).length})
+                    </Button>
                   )}
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
