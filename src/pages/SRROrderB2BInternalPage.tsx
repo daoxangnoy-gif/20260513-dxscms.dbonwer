@@ -1774,8 +1774,10 @@ export default function SRROrderB2BInternalPage() {
 
     const rowsHtml = rows
       .map(
-        (r, i) => `
-        <tr>
+        (r, i) => {
+          const nf = !r.sku_code || r.product_name === "ไม่พบข้อมูล"; // ไม่พบใน data_master
+          return `
+        <tr${nf ? ' class="nf"' : ""}>
           <td class="c">${i + 1}</td>
           <td>${esc(r.barcode || r.barcode_unit)}</td>
           <td>${esc(r.product_name_en || r.product_name)}</td>
@@ -1783,7 +1785,8 @@ export default function SRROrderB2BInternalPage() {
           <td class="c">${esc(r.uom)}</td>
           <td class="c">${esc(r.monthly_qty)}</td>
           <td>${esc(r.remark)}</td>
-        </tr>`,
+        </tr>`;
+        },
       )
       .join("");
 
@@ -1808,6 +1811,7 @@ export default function SRROrderB2BInternalPage() {
   tr { page-break-inside: avoid; }
   th, td { border: 1px solid #333; padding: 5px 7px; font-size: 12px; vertical-align: middle; word-break: break-word; overflow-wrap: anywhere; }
   th { background: #f0f0f0; text-align: center; }
+  tr.nf td { background: #fde2e2; }   /* ไม่พบใน data_master → ไฮไลต์แดงอ่อน */
   td.c { text-align: center; }
   td.pic { text-align: center; padding: 3px; }
   td.pic img { max-width: 90px; max-height: 70px; object-fit: contain; }
