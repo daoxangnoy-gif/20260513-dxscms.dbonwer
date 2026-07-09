@@ -318,9 +318,9 @@ const MU_COLS = [
   { key: "iname", label: "ชื่อสินค้า (import)", def: 220, min: 120 },
   { key: "ibarcode", label: "Barcode (import)", def: 150, min: 90 },
   { key: "pname", label: "Product name (LA)", def: 240, min: 120 },
-  { key: "mqty", label: "Monthly qty", def: 110, min: 80 },
+  { key: "mqty", label: "จำนวน/3เดือน", def: 120, min: 90 },
   { key: "order_group", label: "Order group", def: 130, min: 90 },
-  { key: "dqty", label: "Daily qty (÷30)", def: 110, min: 70 },
+  { key: "dqty", label: "จำนวน/เดือน (÷3)", def: 120, min: 90 },
   { key: "pic", label: "Picture", def: 150, min: 120 },
   { key: "remark", label: "Remark", def: 200, min: 100 },
   // รายการทดแทน (replacement) — ขวาสุดข้าง Remark
@@ -3607,7 +3607,7 @@ export default function SRROrderB2BInternalPage() {
                   <tbody>
                     {muRows.map((row, idx) => {
                       const daily =
-                        row.monthly_qty.trim() && !isNaN(Number(row.monthly_qty)) ? (Number(row.monthly_qty) / 30).toFixed(2) : "";
+                        row.monthly_qty.trim() && !isNaN(Number(row.monthly_qty)) ? (Number(row.monthly_qty) / 3).toFixed(2) : "";
                       const notFound = row.product_name === "ไม่พบข้อมูล";
                       return (
                         <tr key={idx} className={cn("border-t align-middle", muEditSel.has(idx) && "bg-primary/5")}>
