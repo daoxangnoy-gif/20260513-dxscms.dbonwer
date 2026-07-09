@@ -3056,6 +3056,21 @@ export default function SRROrderB2BInternalPage() {
                         <img src={lg.url} alt={lg.name} className="h-12 w-12 object-contain rounded border bg-muted/20" />
                         <span className="text-xs font-medium">Logo {idx + 1}</span>
                         <span className="text-[11px] text-muted-foreground truncate flex-1" title={lg.name}>{lg.name}</span>
+                        <label className="flex items-center gap-1 text-[11px] cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            className="h-3.5 w-3.5"
+                            checked={docs.length > 0 && docs.every((d) => logoDocMap[d.id] === idx)}
+                            ref={(el) => { if (el) el.indeterminate = docs.some((d) => logoDocMap[d.id] === idx) && !docs.every((d) => logoDocMap[d.id] === idx); }}
+                            onChange={(e) => setLogoDocMap((prev) => {
+                              const n = { ...prev };
+                              if (e.target.checked) { for (const d of docs) n[d.id] = idx; }
+                              else { for (const d of docs) if (n[d.id] === idx) delete n[d.id]; }
+                              return n;
+                            })}
+                          />
+                          เลือกทั้งหมด
+                        </label>
                         <span className="text-[11px] text-primary">{Object.values(logoDocMap).filter((v) => v === idx).length} Doc</span>
                       </div>
                       <div className="max-h-40 overflow-auto border rounded p-1 grid grid-cols-2 gap-x-3 gap-y-0.5">
