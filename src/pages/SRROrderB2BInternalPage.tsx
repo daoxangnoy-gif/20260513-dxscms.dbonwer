@@ -1769,6 +1769,8 @@ export default function SRROrderB2BInternalPage() {
     const pad = (n: number) => String(n).padStart(2, "0");
     const reqStr = `${pad(now.getDate())}-${pad(now.getMonth() + 1)}-${now.getFullYear()}`;
     const needStr = fmtDMY(needDateISO);
+    // ชื่อไฟล์ default ตอน Save as PDF (browser ใช้ document.title) เช่น "20260709 - 3Monthly Forecast - Zen"
+    const fnameDate = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
 
     const rowsHtml = rows
       .map(
@@ -1789,7 +1791,7 @@ export default function SRROrderB2BInternalPage() {
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Monthly Usage Request - ${esc(brandName)}</title>
+<title>${fnameDate} - 3Monthly Forecast - ${esc(brandName)}</title>
 <style>
   @page { size: A4; margin: 12mm; }
   * { box-sizing: border-box; }
