@@ -6204,7 +6204,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                 <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={downloadConvertTemplate}>
                   <FileSpreadsheet className="w-3.5 h-3.5" /> Template PO
                 </Button>
-                <label className={cn("inline-flex items-center gap-1.5 h-8 px-3 rounded-md border text-xs cursor-pointer hover:bg-muted/50", convertImporting && "opacity-60 pointer-events-none")}>
+                <label className={cn("inline-flex items-center gap-1.5 h-8 px-3 rounded-md border border-red-700 bg-red-600 text-white text-xs cursor-pointer hover:bg-red-700 transition-colors", convertImporting && "opacity-60 pointer-events-none")}>
                   <input type="file" accept=".xlsx,.xls" className="hidden" disabled={convertImporting} onChange={(e) => { const f = e.target.files?.[0]; if (f) handleConvertImport(f); e.target.value = ""; }} />
                   {convertImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />} Import PO
                 </label>
@@ -6285,7 +6285,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                   <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={downloadConvertTemplateSO}>
                     <FileSpreadsheet className="w-3.5 h-3.5" /> Template SO
                   </Button>
-                  <label className={cn("inline-flex items-center gap-1.5 h-8 px-3 rounded-md border text-xs cursor-pointer hover:bg-muted/50", convertImporting && "opacity-60 pointer-events-none")}>
+                  <label className={cn("inline-flex items-center gap-1.5 h-8 px-3 rounded-md border border-amber-600 bg-amber-500 text-white text-xs cursor-pointer hover:bg-amber-600 transition-colors", convertImporting && "opacity-60 pointer-events-none")}>
                     <input type="file" accept=".xlsx,.xls" className="hidden" disabled={convertImporting} onChange={(e) => { const f = e.target.files?.[0]; if (f) handleConvertImportSO(f); e.target.value = ""; }} />
                     {convertImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />} Import SO
                   </label>
