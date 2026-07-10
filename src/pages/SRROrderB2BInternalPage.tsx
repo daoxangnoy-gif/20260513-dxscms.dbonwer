@@ -4549,6 +4549,7 @@ type PORow = {
   id: string;
   barcode: string;
   product_name_en: string;
+  product_name_la: string;
   stock_dc: number | null;
   stock_dc_kr: number | null;
   // จาก PO Receive (เอา line วันที่ PO ล่าสุดของ ID นั้น)
@@ -5236,7 +5237,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         return rec;
       };
       const [dm, stock, pc, krRows, recRows] = await Promise.all([
-        skus.length ? fetchInChunks("data_master", "sku_code, division, department, product_name_en, vendor_code, vendor_display_name, main_barcode, packing_size_qty", "sku_code", skus) : Promise.resolve([] as any[]),
+        skus.length ? fetchInChunks("data_master", "sku_code, division, department, product_name_en, product_name_la, vendor_code, vendor_display_name, main_barcode, packing_size_qty", "sku_code", skus) : Promise.resolve([] as any[]),
         skus.length ? fetchInChunks("stock", "id, item_id, type_store, quantity", "item_id", skus, "id") : Promise.resolve([] as any[]),
         (skus.length ? fetchInChunks("po_cost", "item_id, moq, po_cost, po_cost_unit, vendor", "item_id", skus) : Promise.resolve([] as any[])).catch(() => [] as any[]),
         (skus.length ? fetchInChunks("scm_stock_kr", "id, qty", "id", skus) : Promise.resolve([] as any[])).catch(() => [] as any[]),
@@ -5333,6 +5334,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           id: a.sku,
           barcode: rowBarcode,
           product_name_en: d.product_name_en || a.product_name || "",
+          product_name_la: d.product_name_la || a.product_name || "",
           stock_dc: stockDcMap.has(a.sku) ? (stockDcMap.get(a.sku) as number) : null,
           stock_dc_kr: krMap.has(a.sku) ? (krMap.get(a.sku) as number) : null,
           po_number: str(rec.order_ref),
@@ -6040,6 +6042,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         ID: r.id,
         Barcode: r.barcode,
         "Product name EN": r.product_name_en,
+        "Product name LA": r.product_name_la,
         "Picture": "", // ใส่สูตร =IMAGE ด้านล่าง
         "Picture From": r.pictures.length
           ? r.pictures[0].brand + (r.pictures.length > 1 ? ` +${r.pictures.length - 1}` : "")
@@ -6055,7 +6058,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       return base;
     });
     const headers = Object.keys(out[0]);
-    const wCol = (h: string) => h === "Product name EN" ? 34 : h === "Vendor name" ? 24
+    const wCol = (h: string) => (h === "Product name EN" || h === "Product name LA") ? 34 : h === "Vendor name" ? 24
       : (h === "Remark" || h === "Action" || h === "Action2") ? 22 : (h === "Brand" || h === "Order group") ? 20 : h === "Picture From" ? 14 : h === "Picture" ? 12 : 12;
 
     const ExcelJS = (await import("exceljs")).default;
