@@ -951,10 +951,10 @@ export default function SRROrderB2BInternalPage() {
       for (const d of (dm || []) as any[]) { if (d.sku_code && !dmMap[d.sku_code]) dmMap[d.sku_code] = d; }
     }
     const headers = ["#", "ID (SKU)", "Barcode", "Barcode Unit", "Product name", "UOM",
-      "3monthly qty", "Monthly qty", "Remark", "รูป", "รูป (IMAGE)",
+      "3monthly qty", "Monthly qty", "Remark", "Order group", "รูป", "รูป (IMAGE)",
       "Division Group", "Division", "Department", "Buying Status", "Vendor Origin", "Product name (import)"];
-    const widths = [4, 14, 16, 16, 36, 8, 14, 12, 30, 14, 18, 16, 14, 16, 14, 22, 36];
-    const PIC_COL = 10; // 1-based: "รูป"(ลิงก์) · "รูป (IMAGE)" = PIC_COL+1
+    const widths = [4, 14, 16, 16, 36, 8, 14, 12, 30, 16, 14, 18, 16, 14, 16, 14, 22, 36];
+    const PIC_COL = 11; // 1-based: "รูป"(ลิงก์) · "รูป (IMAGE)" = PIC_COL+1
     const ws = wb.addWorksheet(sheetName);
     ws.columns = headers.map((h, i) => ({ header: h, width: widths[i] }));
     ws.getRow(1).font = { bold: true };
@@ -967,7 +967,7 @@ export default function SRROrderB2BInternalPage() {
         it.product_name || "", it.uom || "",
         it.monthly_qty ?? "", // 3monthly qty (ค่าเดิม)
         it.monthly_qty != null && it.monthly_qty !== "" ? (Number(it.monthly_qty) / 3).toFixed(2) : "", // Monthly qty = 3monthly / 3
-        it.remark || "", "", "", // "รูป"(ลิงก์) + "รูป (IMAGE)"(สูตร) — ใส่ด้านล่าง
+        it.remark || "", it.order_group || "", "", "", // Order group + "รูป"(ลิงก์) + "รูป (IMAGE)"(สูตร) — ใส่ด้านล่าง
         d.division_group || "", d.division || "", d.department || "",
         d.buying_status || "", vendorOrigin,
         it.imported_name || "", // Product name (import) — ชื่อดิบจากไฟล์
@@ -1042,10 +1042,10 @@ export default function SRROrderB2BInternalPage() {
         for (const d of (dm || []) as any[]) { if (d.sku_code && !dmMap[d.sku_code]) dmMap[d.sku_code] = d; }
       }
       const headers = ["#", "แบรนด์", "ID (SKU)", "Barcode", "Barcode Unit", "Product name", "UOM",
-        "3monthly qty", "Monthly qty", "Remark", "รูป", "รูป (IMAGE)",
+        "3monthly qty", "Monthly qty", "Remark", "Order group", "รูป", "รูป (IMAGE)",
         "Division Group", "Division", "Department", "Buying Status", "Vendor Origin", "Product name (import)"];
-      const widths = [4, 20, 14, 16, 16, 36, 8, 14, 12, 30, 14, 18, 16, 14, 16, 14, 22, 36];
-      const PIC_COL = 11; // 1-based: "รูป"(ลิงก์) · "รูป (IMAGE)" = PIC_COL+1
+      const widths = [4, 20, 14, 16, 16, 36, 8, 14, 12, 30, 16, 14, 18, 16, 14, 16, 14, 22, 36];
+      const PIC_COL = 12; // 1-based: "รูป"(ลิงก์) · "รูป (IMAGE)" = PIC_COL+1
       const wb = new ExcelJS.Workbook();
       const ws = wb.addWorksheet("Monthly usage");
       ws.columns = headers.map((h, i) => ({ header: h, width: widths[i] }));
@@ -1060,7 +1060,7 @@ export default function SRROrderB2BInternalPage() {
           it.product_name || "", it.uom || "",
           it.monthly_qty ?? "", // 3monthly qty (ค่าเดิม)
           it.monthly_qty != null && it.monthly_qty !== "" ? (Number(it.monthly_qty) / 3).toFixed(2) : "", // Monthly qty = 3monthly / 3
-          it.remark || "", "", "", // "รูป"(ลิงก์) + "รูป (IMAGE)"(สูตร) — ใส่ด้านล่าง
+          it.remark || "", it.order_group || "", "", "", // Order group + "รูป"(ลิงก์) + "รูป (IMAGE)"(สูตร) — ใส่ด้านล่าง
           d.division_group || "", d.division || "", d.department || "",
           d.buying_status || "", vendorOrigin,
           it.imported_name || "", // Product name (import) — ชื่อดิบจากไฟล์
