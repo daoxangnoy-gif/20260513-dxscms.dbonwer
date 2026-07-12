@@ -65,11 +65,11 @@ export default function LoginPage() {
 
       <Card className="w-full max-w-md shadow-2xl border-0 bg-white/95 backdrop-blur-sm relative z-10">
         <CardHeader className="text-center pb-4">
-          <div className="mx-auto mb-3 w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center">
+          <div className="mx-auto mb-3 flex items-center justify-center">
             <img
               src={dxScmLogo}
               alt="DX SCM Logo"
-              className="w-10 h-10 object-contain"
+              className="w-24 h-24 object-contain"
             />
           </div>
           <CardTitle className="text-xl font-bold">DX Supplychain Management</CardTitle>
