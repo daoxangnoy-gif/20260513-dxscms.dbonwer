@@ -5588,6 +5588,8 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       }
       out.sort((a, b) => a.localeCompare(b));
       setConvertRoPartnerOpts(out);
+      // default Partner = ตัวที่ขึ้นต้น "Lanexang" (เลือกเปลี่ยนเองได้ภายหลัง) — ตั้งเฉพาะตอนที่ยังไม่ได้เลือก
+      setConvertRoPartner((prev) => prev || out.find((o) => /^lanexang/i.test(o)) || "");
     } catch { /* โหลดไม่ได้ก็ปล่อยว่าง */ }
   };
 
