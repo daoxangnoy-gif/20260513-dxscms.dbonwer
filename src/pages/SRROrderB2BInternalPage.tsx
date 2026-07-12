@@ -6145,29 +6145,36 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   // Convert → RO (คอลัมน์ใหม่ตามสเปค · ตัดกลุ่มตาม Item Per PO/SO · header group ขึ้นแถวแรกของแต่ละกลุ่ม)
   const doConvertExportRO = async () => {
     if (convertRoRows.length === 0) { toast({ title: "ยังไม่มีข้อมูล — กด Import RO ก่อน", variant: "destructive" }); return; }
-    if (!convertRoPartner) { toast({ title: "ยังไม่ได้เลือก Partner (Product owner)", variant: "destructive" }); return; }
+    // ทิศทาง: reverse (Store to DC) → Company=Product Owner(ค่าเดียว), Partner=สาขา(รายแถว) · ปกติ → Company=สาขา(รายแถว), Partner=Product Owner(ค่าเดียว)
+    const reverse = convertRoStoreToDc;
+    const ownerFixed = (reverse ? convertRoCompany : convertRoPartner).trim();   // Product Owner — ค่าเดียวทุกกลุ่ม (จาก dropdown)
+    const storeFallback = (reverse ? convertRoPartner : convertRoCompany).trim(); // สาขา default ถ้าไฟล์ไม่ระบุ (จาก dropdown)
+    if (!ownerFixed) { toast({ title: `ยังไม่ได้เลือก ${reverse ? "Company" : "Partner"} (Product Owner)`, variant: "destructive" }); return; }
     setConvertExporting(true);
     try {
       const N = Math.max(1, Number(convertItemPerRo) || 25);
       const roRows = convertRoRows.filter((r) => r.found); // ไม่ export รายการที่ resolve ไม่พบ (ดูที่ Skiplist)
       if (roRows.length === 0) { toast({ title: "ไม่มีรายการที่พบข้อมูล", description: "ทุกรายการ resolve ไม่พบ — ตรวจ Barcode/SKU", variant: "destructive" }); return; }
-      // Company/Priority รายแถว: ค่าจากไฟล์ก่อน → ว่างใช้ค่า dropdown (ค่าเริ่มต้น)
-      const effCompany = (r: ConvertRow) => (r.roCompany || convertRoCompany || "").trim();
+      // ค่าสาขา (Store) รายแถว = คอลัมน์ Company ในไฟล์ → ว่างใช้ค่า dropdown · Priority รายแถวเช่นกัน
+      const effStore = (r: ConvertRow) => (r.roCompany || storeFallback || "").trim();
       const effPriority = (r: ConvertRow) => (r.roPriority || convertRoPriority || "normal").trim();
-      // ต้องมี Company ทุกแถว (จากไฟล์ หรือเลือก dropdown) — ไม่งั้น RO header ไม่มีสาขา
-      const noCompany = roRows.filter((r) => !effCompany(r)).length;
-      if (noCompany > 0) { toast({ title: `มี ${noCompany} รายการไม่มี Company`, description: "ใส่คอลัมน์ Company ในไฟล์ หรือเลือก Company (ค่าเริ่มต้น) ในหน้าจอ", variant: "destructive" }); return; }
+      // ต้องมีสาขาทุกแถว (จากไฟล์ หรือ dropdown) — ไม่งั้น RO header ไม่มีสาขา
+      const noStore = roRows.filter((r) => !effStore(r)).length;
+      if (noStore > 0) { toast({ title: `มี ${noStore} รายการไม่มีสาขา`, description: "ใส่คอลัมน์ Company (ชื่อสาขา) ในไฟล์ หรือเลือกค่าเริ่มต้นในหน้าจอ", variant: "destructive" }); return; }
       // ตัดกลุ่ม 2 ชั้น: จับกลุ่มตาม (Company + Priority) ก่อน → ในแต่ละกลุ่มค่อยตัดทีละ N (Item Per RO) · เก็บลำดับที่พบครั้งแรก
-      const groups = new Map<string, { company: string; priority: string; rows: ConvertRow[] }>();
+      const groups = new Map<string, { store: string; priority: string; rows: ConvertRow[] }>();
       for (const r of roRows) {
-        const company = effCompany(r), priority = effPriority(r);
-        const key = `${company} ${priority}`;
-        if (!groups.has(key)) groups.set(key, { company, priority, rows: [] });
+        const store = effStore(r), priority = effPriority(r);
+        const key = `${store} ${priority}`;
+        if (!groups.has(key)) groups.set(key, { store, priority, rows: [] });
         groups.get(key)!.rows.push(r);
       }
       const out: Record<string, any>[] = [];
       let groupCount = 0;
       for (const g of groups.values()) {
+        // ลงช่อง Company/Partner ตามทิศทาง — สาขา (g.store) ไปลงฝั่งที่ต่างกันรายแถว
+        const company = reverse ? ownerFixed : g.store;
+        const partner = reverse ? g.store : ownerFixed;
         for (let i = 0; i < g.rows.length; i += N) {
           const chunk = g.rows.slice(i, i + N);
           groupCount++;
@@ -6176,8 +6183,8 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
             const bc = r.unitBarcode || r.inputCode; // Main barcode (packing_size_qty=1) จาก enrich
             out.push({
               "Order Reference": "",
-              "Company": head ? g.company : "",
-              "Partner": head ? convertRoPartner : "",
+              "Company": head ? company : "",
+              "Partner": head ? partner : "",
               "RPM Type": head ? "DC Item" : "",
               "Currency": head ? "LAK" : "",
               "Order Lines/Barcode": bc,
@@ -6198,7 +6205,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       const ws = XLSX.utils.json_to_sheet(out);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "RO");
-      const companies = [...new Set(roRows.map((r) => effCompany(r)))];
+      const companies = [...new Set(roRows.map((r) => effStore(r)))];
       const cLabel = companies.length === 1
         ? (companies[0].replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim().slice(0, 60) || "RO")
         : `multi-${companies.length}สาขา`;
@@ -6847,7 +6854,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                   <span className="text-[11px] text-muted-foreground">ตัดกลุ่มทีละ {Math.max(1, Number(convertItemPerRo) || 25)} หัวกลุ่มขึ้นแถวแรก</span>
                 </div>
                 <p className="text-[10px] text-muted-foreground">
-                  รองรับ <b>หลายสาขา / หลาย Priority</b> ในไฟล์เดียว (คอลัมน์ Company + Priority รายแถว · เว้นว่าง = ใช้ค่าเริ่มต้นด้านบน) · <b>ตัดกลุ่ม 2 ชั้น:</b> จับกลุ่มตาม Company+Priority ก่อน → ในกลุ่มค่อยตัดทีละ Item Per RO ({convertItemPerRo}) · Partner ใช้ค่าเดียวทุกกลุ่ม · RPM Type = DC Item · Currency = LAK · is dc to store / Request Type / Add item Po = TRUE · Without Price = FALSE · Exclude In Package = TRUE · Barcode = Main barcode (packing_size_qty=1) · header ขึ้นแถวแรกของแต่ละกลุ่ม
+                  รองรับ <b>หลายสาขา / หลาย Priority</b> ในไฟล์เดียว (คอลัมน์ Company ในไฟล์ = <b>ชื่อสาขา</b> รายแถว + Priority · เว้นว่าง = ใช้ค่าเริ่มต้นด้านบน) · <b>ตัดกลุ่ม 2 ชั้น:</b> จับกลุ่มตาม สาขา+Priority ก่อน → ในกลุ่มค่อยตัดทีละ Item Per RO ({convertItemPerRo}) · {convertRoStoreToDc ? <b>โหมด Store→DC: สาขา(จากไฟล์) ลงช่อง Partner · Company = Product Owner ค่าเดียว</b> : "Company = สาขา · Partner = Product Owner ค่าเดียวทุกกลุ่ม"} · RPM Type = DC Item · Currency = LAK · is dc to store / Request Type / Add item Po = TRUE · Without Price = FALSE · Exclude In Package = TRUE · Barcode = Main barcode (packing_size_qty=1) · header ขึ้นแถวแรกของแต่ละกลุ่ม
                 </p>
               </div>
             </div>
