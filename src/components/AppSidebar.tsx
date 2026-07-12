@@ -146,8 +146,11 @@ export default function AppSidebar({
         "flex items-center h-14 border-b border-sidebar-border flex-shrink-0 gap-2",
         expanded ? "px-3" : "px-0 justify-center"
       )}>
-        <div className="bg-white rounded-md p-1 flex items-center justify-center flex-shrink-0 shadow-sm ring-1 ring-black/5">
-          <img src={appLogo} alt="DX SCMS" className="h-8 w-auto" />
+        <div className={cn(
+          "bg-white rounded-md flex items-center justify-center flex-shrink-0 shadow-sm ring-1 ring-black/5",
+          expanded ? "p-1" : "p-0.5"
+        )}>
+          <img src={appLogo} alt="DX SCMS" className={cn("w-auto", expanded ? "h-8" : "h-10")} />
         </div>
         {expanded && (
           <>
