@@ -6560,30 +6560,6 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
             </p>
 
             <div className="space-y-3">
-              {/* แถวเครื่องมือ PO: template + import + สถานะ */}
-              <div className="flex items-center gap-2 flex-wrap">
-                <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={downloadConvertTemplate}>
-                  <FileSpreadsheet className="w-3.5 h-3.5" /> Template PO
-                </Button>
-                <label className={cn("inline-flex items-center gap-1.5 h-8 px-3 rounded-md border border-red-700 bg-red-600 text-white text-xs cursor-pointer hover:bg-red-700 transition-colors", convertImporting && "opacity-60 pointer-events-none")}>
-                  <input type="file" accept=".xlsx,.xls" className="hidden" disabled={convertImporting} onChange={(e) => { const f = e.target.files?.[0]; if (f) handleConvertImport(f); e.target.value = ""; }} />
-                  {convertImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />} Import PO
-                </label>
-                <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={() => handleConvertPaste(false)} disabled={convertImporting} title="วางข้อมูล 2 คอลัมน์: Barcode [Tab] Qty (คัดลอกจาก Excel แล้วกด)">
-                  <Copy className="w-3.5 h-3.5" /> วาง
-                </Button>
-                {!convertImporting && convertRows.length > 0 && (
-                  <span className="text-[11px] text-muted-foreground">
-                    PO: {convertRows.length} รายการ · รวม {convertRows.reduce((s, r) => s + (r.qty || 0), 0)} · ไม่พบข้อมูล {convertRows.filter((r) => !r.found).length}
-                  </span>
-                )}
-                {!convertImporting && convertRows.some((r) => !r.found) && (
-                  <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px] text-destructive border-destructive/40" onClick={() => downloadConvertSkiplist(false)} title="ดาวน์โหลดรายการที่ไม่พบใน Master">
-                    <Download className="w-3 h-3" /> Skiplist ({convertRows.filter((r) => !r.found).length})
-                  </Button>
-                )}
-              </div>
-
               {/* แถบ % ตอน import Convert + นับรายการ */}
               {convertImporting && (
                 <div className="flex items-center gap-2">
@@ -6603,6 +6579,30 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
 
               {/* Convert PO */}
               <div className="border border-red-300 dark:border-red-900/50 bg-red-50/60 dark:bg-red-950/20 rounded-lg p-3 space-y-2">
+                {/* Import PO — Template + Import + วาง + สถานะ (ย้ายเข้ากล่องให้เหมือน SO) */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-medium w-24">Import PO</span>
+                  <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={downloadConvertTemplate}>
+                    <FileSpreadsheet className="w-3.5 h-3.5" /> Template PO
+                  </Button>
+                  <label className={cn("inline-flex items-center gap-1.5 h-8 px-3 rounded-md border border-red-700 bg-red-600 text-white text-xs cursor-pointer hover:bg-red-700 transition-colors", convertImporting && "opacity-60 pointer-events-none")}>
+                    <input type="file" accept=".xlsx,.xls" className="hidden" disabled={convertImporting} onChange={(e) => { const f = e.target.files?.[0]; if (f) handleConvertImport(f); e.target.value = ""; }} />
+                    {convertImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />} Import PO
+                  </label>
+                  <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={() => handleConvertPaste(false)} disabled={convertImporting} title="วางข้อมูล 2 คอลัมน์: Barcode [Tab] Qty (คัดลอกจาก Excel แล้วกด)">
+                    <Copy className="w-3.5 h-3.5" /> วาง
+                  </Button>
+                  {!convertImporting && convertRows.length > 0 && (
+                    <span className="text-[11px] text-muted-foreground">
+                      PO: {convertRows.length} รายการ · รวม {convertRows.reduce((s, r) => s + (r.qty || 0), 0)} · ไม่พบข้อมูล {convertRows.filter((r) => !r.found).length}
+                    </span>
+                  )}
+                  {!convertImporting && convertRows.some((r) => !r.found) && (
+                    <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px] text-destructive border-destructive/40" onClick={() => downloadConvertSkiplist(false)} title="ดาวน์โหลดรายการที่ไม่พบใน Master">
+                      <Download className="w-3 h-3" /> Skiplist ({convertRows.filter((r) => !r.found).length})
+                    </Button>
+                  )}
+                </div>
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs font-medium w-24">Convert PO</span>
                   <select
