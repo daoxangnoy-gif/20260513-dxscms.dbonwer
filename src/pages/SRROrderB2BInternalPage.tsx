@@ -4878,6 +4878,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   const [convertRoCompany, setConvertRoCompany] = useState("");                // Company = ชื่อสาขา (store_type non-DC — reuse convertSoStoreOpts)
   const [convertRoPartner, setConvertRoPartner] = useState("");                // Partner = product_owner
   const [convertRoPriority, setConvertRoPriority] = useState("normal");        // Priority: normal | promotion | urgent
+  const [convertRoStoreToDc, setConvertRoStoreToDc] = useState(false);         // ขาโอนกลับ Store→DC: สลับ dropdown (Company=Product Owner, Partner=Store)
   const [convertRoPartnerOpts, setConvertRoPartnerOpts] = useState<string[]>([]); // distinct product_owner (data_master)
   // ตัวเลือก Picking Type เพิ่มเติม = สาขาของ Type Jmart/Kokkok (ค่า = ship_to จาก store_type ตรงตามที่ Odoo ใช้)
   const [pickStoreOpts, setPickStoreOpts] = useState<{ value: string; label: string }[]>([]);
@@ -6801,16 +6802,31 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                     </Button>
                   )}
                 </div>
-                {/* Convert RO — Company (สาขา) / Partner (Product owner) / Priority */}
+                {/* Store to DC (ขาโอนกลับ) — สลับ dropdown: Company=Product Owner, Partner=Store */}
+                <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    className="h-3.5 w-3.5"
+                    checked={convertRoStoreToDc}
+                    onChange={(e) => {
+                      setConvertRoStoreToDc(e.target.checked);
+                      // สลับค่าที่เลือกไว้ให้ตรงความหมายใหม่ (Company<->Partner)
+                      setConvertRoCompany(convertRoPartner);
+                      setConvertRoPartner(convertRoCompany);
+                    }}
+                  />
+                  <span>Store to DC (ขาโอนกลับ) — สลับ Dropdown: <b>Company = Product Owner</b> · <b>Partner = สาขา (Store)</b></span>
+                </label>
+                {/* Convert RO — Company / Partner / Priority (สลับความหมายตาม Store to DC) */}
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs font-medium w-24">Convert RO</span>
                   <div className="flex items-center gap-1.5">
-                    <Label className="text-xs">Company <span className="text-muted-foreground">(ค่าเริ่มต้น)</span></Label>
-                    <StorePickCombo value={convertRoCompany} options={convertSoStoreOpts} onChange={setConvertRoCompany} />
+                    <Label className="text-xs">Company <span className="text-muted-foreground">({convertRoStoreToDc ? "Product Owner" : "สาขา"} · ค่าเริ่มต้น)</span></Label>
+                    <StorePickCombo value={convertRoCompany} options={convertRoStoreToDc ? convertRoPartnerOpts : convertSoStoreOpts} onChange={setConvertRoCompany} />
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <Label className="text-xs">Partner</Label>
-                    <StorePickCombo value={convertRoPartner} options={convertRoPartnerOpts} onChange={setConvertRoPartner} />
+                    <Label className="text-xs">Partner <span className="text-muted-foreground">({convertRoStoreToDc ? "สาขา" : "Product Owner"})</span></Label>
+                    <StorePickCombo value={convertRoPartner} options={convertRoStoreToDc ? convertSoStoreOpts : convertRoPartnerOpts} onChange={setConvertRoPartner} />
                   </div>
                   <div className="flex items-center gap-1.5">
                     <Label className="text-xs">Priority <span className="text-muted-foreground">(ค่าเริ่มต้น)</span></Label>
