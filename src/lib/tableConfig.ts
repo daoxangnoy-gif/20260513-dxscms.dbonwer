@@ -42,7 +42,7 @@ export const SRR_SUB_MENUS = [
   { key: "dc_item", label: "SRR DC ITEM" },
   { key: "direct_item", label: "SRR DIRECT ITEM" },
   { key: "special_order", label: "Special Order" },
-  { key: "order_b2b", label: "Order B2B" },
+  // { key: "order_b2b", label: "Order B2B" },   // ซ่อนไว้ก่อน — ไม่ได้ใช้แล้ว (ใช้ Order B2B internal แทน)
   { key: "order_b2b_internal", label: "Order B2B internal" },
   { key: "srr_payment_overdue", label: "Payment Overdue" },
   { key: "srr_job_assign", label: "Job Assign" },
