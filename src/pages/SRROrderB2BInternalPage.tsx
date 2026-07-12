@@ -4850,7 +4850,9 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   const [convertProgress, setConvertProgress] = useState(0);   // 0-100 ตอน import Convert
   const [convertStatus, setConvertStatus] = useState("");      // ข้อความสถานะ + นับรายการ
   const [convertExporting, setConvertExporting] = useState(false);
-  const [convertItemPerPo, setConvertItemPerPo] = useState(25);        // จำนวน SKU ต่อ 1 Group PO/SO
+  const [convertItemPerPo, setConvertItemPerPo] = useState(25);        // จำนวน SKU ต่อ 1 Group PO
+  const [convertItemPerSo, setConvertItemPerSo] = useState(25);        // จำนวน SKU ต่อ 1 Group SO
+  const [convertItemPerRo, setConvertItemPerRo] = useState(25);        // จำนวน SKU ต่อ 1 Group RO
   const [convertPicking, setConvertPicking] = useState(PO_PICKING_DC); // Picking Type สำหรับ Convert PO
   const [convertUnitLak, setConvertUnitLak] = useState(false); // ติ๊ก = Unit Price แปลงเป็น LAK (Convert PO)
   const [convertUseMasterCost, setConvertUseMasterCost] = useState(false); // (คู่กับ LAK) ติ๊ก = LAK ที่ไม่มี → ดึง Standard price จาก Master
@@ -5990,7 +5992,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       const customer = convertCustomer || SO_DEFAULT_CUSTOMER;
       const pricelist = convertPricelist || SO_PRICELIST;
       // SO = ลูกค้าเดียว → ตัดกลุ่มตาม Item Per SO อย่างเดียว (ไม่แยกตาม vendor) · หัวกลุ่มขึ้นแถวแรกของแต่ละกลุ่ม
-      const N = Math.max(1, Number(convertItemPerPo) || 25);
+      const N = Math.max(1, Number(convertItemPerSo) || 25);
       // ไม่ export รายการที่ resolve ไม่พบ (ดาวน์โหลดดูได้ที่ปุ่ม Skiplist)
       const soRows = convertSoRows.filter((r) => r.found);
       if (soRows.length === 0) { toast({ title: "ไม่มีรายการที่พบข้อมูล", description: "ทุกรายการ resolve ไม่พบ — ตรวจ Barcode/SKU", variant: "destructive" }); return; }
@@ -6123,7 +6125,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     if (!convertRoPartner) { toast({ title: "ยังไม่ได้เลือก Partner (Product owner)", variant: "destructive" }); return; }
     setConvertExporting(true);
     try {
-      const N = Math.max(1, Number(convertItemPerPo) || 25);
+      const N = Math.max(1, Number(convertItemPerRo) || 25);
       const roRows = convertRoRows.filter((r) => r.found); // ไม่ export รายการที่ resolve ไม่พบ (ดูที่ Skiplist)
       if (roRows.length === 0) { toast({ title: "ไม่มีรายการที่พบข้อมูล", description: "ทุกรายการ resolve ไม่พบ — ตรวจ Barcode/SKU", variant: "destructive" }); return; }
       const chunks: ConvertRow[][] = [];
@@ -6570,13 +6572,6 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                 </div>
               )}
 
-              {/* Item Per PO */}
-              <div className="flex items-center gap-2">
-                <Label className="text-xs whitespace-nowrap">Item Per PO/SO (SKU ต่อ 1 Group)</Label>
-                <Input type="number" min={1} value={convertItemPerPo} onChange={(e) => setConvertItemPerPo(Math.max(1, Number(e.target.value) || 1))} className="h-8 w-24 text-xs" />
-                <span className="text-[11px] text-muted-foreground">จัดกลุ่มตาม Vendor ก่อน แล้วตัดทีละ {Math.max(1, Number(convertItemPerPo) || 25)}</span>
-              </div>
-
               {/* Convert PO */}
               <div className="border border-red-300 dark:border-red-900/50 bg-red-50/60 dark:bg-red-950/20 rounded-lg p-3 space-y-2">
                 {/* Import PO — Template + Import + วาง + สถานะ (ย้ายเข้ากล่องให้เหมือน SO) */}
@@ -6617,6 +6612,12 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                   <Button size="sm" className="h-8 gap-1.5 text-xs ml-auto" onClick={doConvertExportPO} disabled={convertRows.length === 0 || convertExporting}>
                     {convertExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ShoppingCart className="w-3.5 h-3.5" />} Convert Excel PO
                   </Button>
+                </div>
+                {/* Item Per PO — จำนวน SKU ต่อ 1 Group (เฉพาะ PO) */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-medium w-24">Item Per PO</span>
+                  <Input type="number" min={1} value={convertItemPerPo} onChange={(e) => setConvertItemPerPo(Math.max(1, Number(e.target.value) || 1))} className="h-8 w-24 text-xs" />
+                  <span className="text-[11px] text-muted-foreground">จัดกลุ่มตาม Vendor ก่อน แล้วตัดทีละ {Math.max(1, Number(convertItemPerPo) || 25)}</span>
                 </div>
                 {/* เรทแปลง LAK — ใส่แล้วค้างใน localStorage (ใช้ร่วมกับ Data Control) */}
                 <div className="flex items-center gap-2 flex-wrap">
@@ -6694,6 +6695,12 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                   <Button size="sm" className="h-8 gap-1.5 text-xs ml-auto" onClick={doConvertExportSO} disabled={convertSoRows.length === 0 || convertExporting}>
                     {convertExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileSpreadsheet className="w-3.5 h-3.5" />} Convert Excel SO
                   </Button>
+                </div>
+                {/* Item Per SO — จำนวน SKU ต่อ 1 Group (เฉพาะ SO) */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-medium w-24">Item Per SO</span>
+                  <Input type="number" min={1} value={convertItemPerSo} onChange={(e) => setConvertItemPerSo(Math.max(1, Number(e.target.value) || 1))} className="h-8 w-24 text-xs" />
+                  <span className="text-[11px] text-muted-foreground">ลูกค้าเดียว ตัดกลุ่มทีละ {Math.max(1, Number(convertItemPerSo) || 25)} (ไม่แยก vendor)</span>
                 </div>
                 {/* SO Store — ตัดคอลัมน์ Route + Warehouse เป็นชื่อสาขา */}
                 <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
@@ -6777,8 +6784,14 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                     {convertExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileSpreadsheet className="w-3.5 h-3.5" />} Convert Excel RO
                   </Button>
                 </div>
+                {/* Item Per RO — จำนวน SKU ต่อ 1 Group (เฉพาะ RO) */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-medium w-24">Item Per RO</span>
+                  <Input type="number" min={1} value={convertItemPerRo} onChange={(e) => setConvertItemPerRo(Math.max(1, Number(e.target.value) || 1))} className="h-8 w-24 text-xs" />
+                  <span className="text-[11px] text-muted-foreground">ตัดกลุ่มทีละ {Math.max(1, Number(convertItemPerRo) || 25)} หัวกลุ่มขึ้นแถวแรก</span>
+                </div>
                 <p className="text-[10px] text-muted-foreground">
-                  RPM Type = DC Item · Currency = LAK · is dc to store / Request Type / Add item Po = TRUE · Without Price = FALSE · Exclude In Package = TRUE · Barcode = Main barcode (packing_size_qty=1) · ตัดกลุ่มตาม Item Per PO/SO ({convertItemPerPo}) หัวกลุ่มขึ้นแถวแรก
+                  RPM Type = DC Item · Currency = LAK · is dc to store / Request Type / Add item Po = TRUE · Without Price = FALSE · Exclude In Package = TRUE · Barcode = Main barcode (packing_size_qty=1) · ตัดกลุ่มตาม Item Per RO ({convertItemPerRo}) หัวกลุ่มขึ้นแถวแรก
                 </p>
               </div>
             </div>
