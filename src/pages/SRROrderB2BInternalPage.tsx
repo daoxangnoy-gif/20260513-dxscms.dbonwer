@@ -4869,6 +4869,12 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   const [convertVendorOpts, setConvertVendorOpts] = useState<CustomerOpt[]>([]); // dropdown vendor
   const [convertCustomerOpts, setConvertCustomerOpts] = useState<CustomerOpt[]>([]); // dropdown ลูกค้า
   const [convertCurrencyByVendor, setConvertCurrencyByVendor] = useState<Record<string, string>>({}); // vendor code → สกุลเงิน (สำหรับแปลง LAK)
+  // ---- Convert RO (คล้าย SO แต่คอลัมน์ต่าง — RPM Type=DC Item, Priority, header group ขึ้นแถวแรกของกลุ่ม) ----
+  const [convertRoRows, setConvertRoRows] = useState<ConvertRow[]>([]);        // รายการ RO (โหลดเบา ไม่มี vendor/cost)
+  const [convertRoCompany, setConvertRoCompany] = useState("");                // Company = ชื่อสาขา (store_type non-DC — reuse convertSoStoreOpts)
+  const [convertRoPartner, setConvertRoPartner] = useState("");                // Partner = product_owner
+  const [convertRoPriority, setConvertRoPriority] = useState("normal");        // Priority: normal | promotion | urgent
+  const [convertRoPartnerOpts, setConvertRoPartnerOpts] = useState<string[]>([]); // distinct product_owner (data_master)
   // ตัวเลือก Picking Type เพิ่มเติม = สาขาของ Type Jmart/Kokkok (ค่า = ship_to จาก store_type ตรงตามที่ Odoo ใช้)
   const [pickStoreOpts, setPickStoreOpts] = useState<{ value: string; label: string }[]>([]);
   const [poReportOpen, setPoReportOpen] = useState(false);
@@ -5564,6 +5570,23 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     } catch { /* โหลดไม่ได้ก็ปล่อยว่าง */ }
   };
 
+  // โหลด distinct product_owner (data_master) → Partner dropdown ของ Convert RO (cache หลังโหลดครั้งแรก)
+  const loadRoPartnerOpts = async () => {
+    if (convertRoPartnerOpts.length > 0) return;
+    try {
+      const seen = new Set<string>();
+      const out: string[] = [];
+      for (let from = 0; from < 300000; from += 1000) {
+        const { data } = await (supabase as any).from("data_master").select("product_owner").not("product_owner", "is", null).range(from, from + 999);
+        if (!data || data.length === 0) break;
+        for (const d of data as any[]) { const v = String(d.product_owner ?? "").trim(); if (v && !seen.has(v)) { seen.add(v); out.push(v); } }
+        if (data.length < 1000) break;
+      }
+      out.sort((a, b) => a.localeCompare(b));
+      setConvertRoPartnerOpts(out);
+    } catch { /* โหลดไม่ได้ก็ปล่อยว่าง */ }
+  };
+
   // ตัวเลือก Picking Type สำหรับ dropdown (DC 2 ตัว + สาขา Jmart/Kokkok) — ถ้ายังไม่โหลด fallback สาขา default เดิม
   const pickingSelectOpts: { value: string; label: string }[] = [
     { value: PO_PICKING_DC, label: PO_PICKING_DC },
@@ -6012,6 +6035,139 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
     }
   };
 
+  // ===== Convert RO (คล้าย SO แต่คอลัมน์ต่าง) — มี Import/วาง ของตัวเอง (โหลดเบา ไม่ดึง vendor/cost) =====
+  const downloadConvertTemplateRO = () => {
+    const ws = XLSX.utils.aoa_to_sheet([["Barcode", "Quantity"]]);
+    ws["!cols"] = [{ wch: 18 }, { wch: 12 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Template");
+    XLSX.writeFile(wb, "Convert_Template_RO.xlsx");
+  };
+
+  const handleConvertImportRO = async (file: File) => {
+    setConvertImporting(true);
+    setConvertProgress(5); setConvertStatus("อ่านไฟล์...");
+    try {
+      const ab = await file.arrayBuffer();
+      const wb = XLSX.read(ab);
+      const raw: any[][] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 });
+      if (raw.length < 2) { toast({ title: "ไฟล์ว่าง", variant: "destructive" }); return; }
+      const headers = (raw[0] as any[]).map((h) => String(h ?? "").toLowerCase().trim());
+      const bcIdx = headers.findIndex((h) => h.includes("barcode") || h === "code" || h.includes("รหัส") || h.includes("sku"));
+      const qtyIdx = headers.findIndex((h) => h.includes("qty") || h.includes("quantity") || h.includes("จำนวน"));
+      if (bcIdx < 0 || qtyIdx < 0) { toast({ title: "ไม่พบคอลัมน์ Barcode / Quantity", variant: "destructive" }); return; }
+      const inputs = raw.slice(1)
+        .map((r) => ({ barcode: String(r[bcIdx] ?? "").trim(), qty: Number(r[qtyIdx]) || 0, fileVendor: "", fileUnitPrice: null }))
+        .filter((i) => i.barcode);
+      if (inputs.length === 0) { toast({ title: "ไม่พบข้อมูล (ต้องมี Barcode)", variant: "destructive" }); return; }
+      const { rows } = await enrichConvert(inputs, true); // forSO = ข้ามการโหลด vendor/cost
+      setConvertRoRows(rows);
+      const notFound = rows.filter((r) => !r.found).length;
+      setConvertProgress(100); setConvertStatus(`เสร็จสิ้น · ${rows.length} รายการ`);
+      toast({ title: "นำเข้า RO สำเร็จ", description: `${rows.length} รายการ${notFound ? ` · ไม่พบข้อมูล ${notFound}` : ""}` });
+    } catch (e: any) {
+      setConvertStatus("");
+      toast({ title: "นำเข้าไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setConvertImporting(false);
+    }
+  };
+
+  const handleConvertPasteRO = async () => {
+    let text = "";
+    try { text = await navigator.clipboard.readText(); }
+    catch { toast({ title: "อ่าน Clipboard ไม่ได้", description: "คัดลอกข้อมูล 2 คอลัมน์ (Barcode, Qty) ก่อน แล้วกดวาง", variant: "destructive" }); return; }
+    const inputs = (text || "").split(/\r?\n/).map((line) => {
+      const cells = line.includes("\t") ? line.split("\t") : line.split(/[,;]| {2,}/);
+      const barcode = String(cells[0] ?? "").trim();
+      const qty = cells.length > 1 ? (Number(String(cells[1]).replace(/,/g, "")) || 0) : 0;
+      return { barcode, qty, fileVendor: "", fileUnitPrice: null as number | null };
+    }).filter((i) => i.barcode && !/^(barcode|รหัส|sku|code)$/i.test(i.barcode));
+    if (inputs.length === 0) { toast({ title: "ไม่พบข้อมูลที่วาง", description: "รูปแบบ: Barcode [Tab] Qty ต่อบรรทัด", variant: "destructive" }); return; }
+    setConvertImporting(true);
+    setConvertProgress(5); setConvertStatus("ประมวลผลข้อมูลที่วาง...");
+    try {
+      const { rows } = await enrichConvert(inputs, true);
+      setConvertRoRows(rows);
+      const nf = rows.filter((r) => !r.found).length;
+      setConvertProgress(100); setConvertStatus(`เสร็จสิ้น · ${rows.length} รายการ`);
+      toast({ title: "วางข้อมูล RO สำเร็จ", description: `${rows.length} รายการ${nf ? ` · ไม่พบข้อมูล ${nf}` : ""}` });
+    } catch (e: any) {
+      setConvertStatus("");
+      toast({ title: "วางข้อมูลไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setConvertImporting(false);
+    }
+  };
+
+  const downloadConvertSkiplistRO = () => {
+    const rows = convertRoRows.filter((r) => !r.found);
+    if (rows.length === 0) { toast({ title: "ไม่มีรายการที่ไม่พบ", variant: "destructive" }); return; }
+    const out = rows.map((r, i) => ({
+      "#": i + 1,
+      Barcode: r.inputCode || r.unitBarcode || "",
+      Quantity: r.qty,
+      "เหตุผล": "ไม่พบใน Master (data_master)",
+    }));
+    const ws = XLSX.utils.json_to_sheet(out);
+    ws["!cols"] = [{ wch: 5 }, { wch: 22 }, { wch: 10 }, { wch: 28 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Skiplist");
+    XLSX.writeFile(wb, `${stampNow()}-RO-Skiplist.xlsx`);
+  };
+
+  // Convert → RO (คอลัมน์ใหม่ตามสเปค · ตัดกลุ่มตาม Item Per PO/SO · header group ขึ้นแถวแรกของแต่ละกลุ่ม)
+  const doConvertExportRO = async () => {
+    if (convertRoRows.length === 0) { toast({ title: "ยังไม่มีข้อมูล — กด Import RO ก่อน", variant: "destructive" }); return; }
+    if (!convertRoCompany) { toast({ title: "ยังไม่ได้เลือก Company (ชื่อสาขา)", variant: "destructive" }); return; }
+    if (!convertRoPartner) { toast({ title: "ยังไม่ได้เลือก Partner (Product owner)", variant: "destructive" }); return; }
+    setConvertExporting(true);
+    try {
+      const N = Math.max(1, Number(convertItemPerPo) || 25);
+      const roRows = convertRoRows.filter((r) => r.found); // ไม่ export รายการที่ resolve ไม่พบ (ดูที่ Skiplist)
+      if (roRows.length === 0) { toast({ title: "ไม่มีรายการที่พบข้อมูล", description: "ทุกรายการ resolve ไม่พบ — ตรวจ Barcode/SKU", variant: "destructive" }); return; }
+      const chunks: ConvertRow[][] = [];
+      for (let i = 0; i < roRows.length; i += N) chunks.push(roRows.slice(i, i + N));
+      const out: Record<string, any>[] = [];
+      let groupCount = 0;
+      for (const chunk of chunks) {
+        groupCount++;
+        chunk.forEach((r, idx) => {
+          const head = idx === 0; // header group → ค่าขึ้นเฉพาะแถวแรกของกลุ่ม
+          const bc = r.unitBarcode || r.inputCode; // Main barcode (packing_size_qty=1) จาก enrich
+          out.push({
+            "Order Reference": "",
+            "Company": head ? convertRoCompany : "",
+            "Partner": head ? convertRoPartner : "",
+            "RPM Type": head ? "DC Item" : "",
+            "Currency": head ? "LAK" : "",
+            "Order Lines/Barcode": bc,
+            "Order Lines/Product": bc,
+            "Order Lines/Unit of Measure": r.uom,
+            "Order Lines/Quantity": r.qty,
+            "Order Lines/Exclude In Package": "TRUE",
+            "Order Lines/Unit Price": "",
+            "Priority": head ? convertRoPriority : "",
+            "is dc to store": head ? "TRUE" : "",
+            "Without Price": head ? "FALSE" : "",
+            "Request Type": head ? "TRUE" : "",
+            "Add item Po": head ? "TRUE" : "",
+          });
+        });
+      }
+      const ws = XLSX.utils.json_to_sheet(out);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "RO");
+      const cLabel = (convertRoCompany || "").replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").trim().slice(0, 60) || "RO";
+      XLSX.writeFile(wb, `${stampNow()}-RO-${cLabel}.xlsx`);
+      toast({ title: "Convert RO สำเร็จ", description: `${out.length} แถว · ${groupCount} RO Group` });
+    } catch (e: any) {
+      toast({ title: "Convert RO ไม่สำเร็จ", description: e.message, variant: "destructive" });
+    } finally {
+      setConvertExporting(false);
+    }
+  };
+
   // export ตาราง PO เป็น Excel (รวมคอลัมน์ pivot + tracking ว่าง)
   const exportPO = async () => {
     if (filteredPoRows.length === 0) { toast({ title: "ไม่มีข้อมูลให้ export", variant: "destructive" }); return; }
@@ -6282,7 +6438,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           <Button
             size="sm" variant="outline"
             className="h-8 gap-1.5 text-xs border-primary/60 text-primary"
-            onClick={() => { if (convertVendorOpts.length === 0 || convertCustomerOpts.length === 0) loadConvertOpts(); loadPickStoreOpts(); setConvertOpen(true); }}
+            onClick={() => { if (convertVendorOpts.length === 0 || convertCustomerOpts.length === 0) loadConvertOpts(); loadPickStoreOpts(); loadSoStoreOpts(); loadRoPartnerOpts(); setConvertOpen(true); }}
             title="Convert: import รหัส+จำนวน → PO/SO Excel (ไม่ filter รายการ)"
           >
             <Route className="w-3.5 h-3.5" /> Convert
@@ -6392,7 +6548,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         {/* ===== Convert Dialog (import รหัส+จำนวน → PO/SO Excel, ไม่ filter) ===== */}
         <Dialog open={convertOpen} onOpenChange={setConvertOpen}>
           <DialogContent
-            className="w-[720px] max-w-[94vw] bg-background overflow-hidden"
+            className="w-[720px] max-w-[94vw] max-h-[90vh] overflow-y-auto bg-background"
             onInteractOutside={(e) => e.preventDefault()}  // คลิกนอกกล่อง/สลับโปรแกรมแล้วกลับมา ไม่ปิดเอง
             onEscapeKeyDown={(e) => e.preventDefault()}     // กัน Esc ปิดโดยไม่ตั้งใจ — ปิดได้จากปุ่ม X / ปิด เท่านั้น
           >
@@ -6569,6 +6725,60 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                 <p className="text-[10px] text-muted-foreground">
                   ใช้ template SO เดียวกับหน้า SO Order B2B (srr_special_so) · SO ลูกค้าเดียว ตัดกลุ่มตาม Item Per SO (ไม่แยก vendor) หัวกลุ่มขึ้นแถวแรก · Pricelist = {convertPricelist}
                   {convertSoStore ? ` · SO Store: ไม่มี Route · WH(สาขา) = ${convertSoStoreWh || "ยังไม่เลือก"}` : ` · Route = ${convertSoRoute} · WH = ${convertSoWarehouse}`}
+                </p>
+              </div>
+
+              {/* Convert RO — คล้าย SO แต่คอลัมน์ต่าง (DC Item / LAK / Priority / header group) */}
+              <div className="border border-emerald-300 dark:border-emerald-900/50 bg-emerald-50/60 dark:bg-emerald-950/20 rounded-lg p-3 space-y-2">
+                {/* Import RO — โหลดเบา (ไม่ดึง vendor/cost) */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-medium w-24">Import RO</span>
+                  <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={downloadConvertTemplateRO}>
+                    <FileSpreadsheet className="w-3.5 h-3.5" /> Template RO
+                  </Button>
+                  <label className={cn("inline-flex items-center gap-1.5 h-8 px-3 rounded-md border border-emerald-600 bg-emerald-500 text-white text-xs cursor-pointer hover:bg-emerald-600 transition-colors", convertImporting && "opacity-60 pointer-events-none")}>
+                    <input type="file" accept=".xlsx,.xls" className="hidden" disabled={convertImporting} onChange={(e) => { const f = e.target.files?.[0]; if (f) handleConvertImportRO(f); e.target.value = ""; }} />
+                    {convertImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />} Import RO
+                  </label>
+                  <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={handleConvertPasteRO} disabled={convertImporting} title="วางข้อมูล 2 คอลัมน์: Barcode [Tab] Qty (คัดลอกจาก Excel แล้วกด)">
+                    <Copy className="w-3.5 h-3.5" /> วาง
+                  </Button>
+                  {!convertImporting && convertRoRows.length > 0 && (
+                    <span className="text-[11px] text-muted-foreground">
+                      RO: {convertRoRows.length} รายการ · รวม {convertRoRows.reduce((s, r) => s + (r.qty || 0), 0)} · ไม่พบข้อมูล {convertRoRows.filter((r) => !r.found).length}
+                    </span>
+                  )}
+                  {!convertImporting && convertRoRows.some((r) => !r.found) && (
+                    <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px] text-destructive border-destructive/40" onClick={downloadConvertSkiplistRO} title="ดาวน์โหลดรายการที่ไม่พบใน Master">
+                      <Download className="w-3 h-3" /> Skiplist ({convertRoRows.filter((r) => !r.found).length})
+                    </Button>
+                  )}
+                </div>
+                {/* Convert RO — Company (สาขา) / Partner (Product owner) / Priority */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs font-medium w-24">Convert RO</span>
+                  <div className="flex items-center gap-1.5">
+                    <Label className="text-xs">Company</Label>
+                    <StorePickCombo value={convertRoCompany} options={convertSoStoreOpts} onChange={setConvertRoCompany} />
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Label className="text-xs">Partner</Label>
+                    <StorePickCombo value={convertRoPartner} options={convertRoPartnerOpts} onChange={setConvertRoPartner} />
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <Label className="text-xs">Priority</Label>
+                    <select className="h-8 text-xs border rounded px-2 bg-background" value={convertRoPriority} onChange={(e) => setConvertRoPriority(e.target.value)} title="Priority (header group)">
+                      <option value="normal">normal</option>
+                      <option value="promotion">promotion</option>
+                      <option value="urgent">urgent</option>
+                    </select>
+                  </div>
+                  <Button size="sm" className="h-8 gap-1.5 text-xs ml-auto" onClick={doConvertExportRO} disabled={convertRoRows.length === 0 || convertExporting}>
+                    {convertExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileSpreadsheet className="w-3.5 h-3.5" />} Convert Excel RO
+                  </Button>
+                </div>
+                <p className="text-[10px] text-muted-foreground">
+                  RPM Type = DC Item · Currency = LAK · is dc to store / Request Type / Add item Po = TRUE · Without Price = FALSE · Exclude In Package = TRUE · Barcode = Main barcode (packing_size_qty=1) · ตัดกลุ่มตาม Item Per PO/SO ({convertItemPerPo}) หัวกลุ่มขึ้นแถวแรก
                 </p>
               </div>
             </div>
