@@ -4876,10 +4876,9 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
   // ---- Convert RO (คล้าย SO แต่คอลัมน์ต่าง — RPM Type=DC Item, Priority, header group ขึ้นแถวแรกของกลุ่ม) ----
   const [convertRoRows, setConvertRoRows] = useState<ConvertRow[]>([]);        // รายการ RO (โหลดเบา ไม่มี vendor/cost)
   const [convertRoCompany, setConvertRoCompany] = useState("");                // Company = ชื่อสาขา (store_type non-DC — reuse convertSoStoreOpts)
-  const [convertRoPartner, setConvertRoPartner] = useState("");                // Partner = product_owner
+  const [convertRoPartner, setConvertRoPartner] = useState("Lanexang Green Property Sole Co.,Ltd"); // Partner = product_owner (พิมพ์เอง · default ในโค้ด ไม่โหลด DB)
   const [convertRoPriority, setConvertRoPriority] = useState("normal");        // Priority: normal | promotion | urgent
-  const [convertRoStoreToDc, setConvertRoStoreToDc] = useState(false);         // ขาโอนกลับ Store→DC: สลับ dropdown (Company=Product Owner, Partner=Store)
-  const [convertRoPartnerOpts, setConvertRoPartnerOpts] = useState<string[]>([]); // distinct product_owner (data_master)
+  const [convertRoStoreToDc, setConvertRoStoreToDc] = useState(false);         // ขาโอนกลับ Store→DC: สลับ Company/Partner (Company=Product Owner, Partner=Store)
   // ตัวเลือก Picking Type เพิ่มเติม = สาขาของ Type Jmart/Kokkok (ค่า = ship_to จาก store_type ตรงตามที่ Odoo ใช้)
   const [pickStoreOpts, setPickStoreOpts] = useState<{ value: string; label: string }[]>([]);
   const [poReportOpen, setPoReportOpen] = useState(false);
@@ -5572,25 +5571,6 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         if (data.length < 1000) break;
       }
       setConvertSoStoreOpts(out);
-    } catch { /* โหลดไม่ได้ก็ปล่อยว่าง */ }
-  };
-
-  // โหลด distinct product_owner (data_master) → Partner dropdown ของ Convert RO (cache หลังโหลดครั้งแรก)
-  const loadRoPartnerOpts = async () => {
-    if (convertRoPartnerOpts.length > 0) return;
-    try {
-      const seen = new Set<string>();
-      const out: string[] = [];
-      for (let from = 0; from < 300000; from += 1000) {
-        const { data } = await (supabase as any).from("data_master").select("product_owner").not("product_owner", "is", null).range(from, from + 999);
-        if (!data || data.length === 0) break;
-        for (const d of data as any[]) { const v = String(d.product_owner ?? "").trim(); if (v && !seen.has(v)) { seen.add(v); out.push(v); } }
-        if (data.length < 1000) break;
-      }
-      out.sort((a, b) => a.localeCompare(b));
-      setConvertRoPartnerOpts(out);
-      // default Partner = ตัวที่ขึ้นต้น "Lanexang" (เลือกเปลี่ยนเองได้ภายหลัง) — ตั้งเฉพาะตอนที่ยังไม่ได้เลือก
-      setConvertRoPartner((prev) => prev || out.find((o) => /^lanexang/i.test(o)) || "");
     } catch { /* โหลดไม่ได้ก็ปล่อยว่าง */ }
   };
 
@@ -6488,7 +6468,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           <Button
             size="sm" variant="outline"
             className="h-8 gap-1.5 text-xs border-primary/60 text-primary"
-            onClick={() => { if (convertVendorOpts.length === 0 || convertCustomerOpts.length === 0) loadConvertOpts(); loadPickStoreOpts(); loadSoStoreOpts(); loadRoPartnerOpts(); setConvertOpen(true); }}
+            onClick={() => { if (convertVendorOpts.length === 0 || convertCustomerOpts.length === 0) loadConvertOpts(); loadPickStoreOpts(); loadSoStoreOpts(); setConvertOpen(true); }}
             title="Convert: import รหัส+จำนวน → PO/SO Excel (ไม่ filter รายการ)"
           >
             <Route className="w-3.5 h-3.5" /> Convert
@@ -6822,18 +6802,26 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                       setConvertRoPartner(convertRoCompany);
                     }}
                   />
-                  <span>Store to DC (ขาโอนกลับ) — สลับ Dropdown: <b>Company = Product Owner</b> · <b>Partner = สาขา (Store)</b></span>
+                  <span>Store to DC (ขาโอนกลับ) — สลับช่อง: <b>Company = Product Owner</b> · <b>Partner = สาขา (Store)</b></span>
                 </label>
                 {/* Convert RO — Company / Partner / Priority (สลับความหมายตาม Store to DC) */}
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs font-medium w-24">Convert RO</span>
                   <div className="flex items-center gap-1.5">
                     <Label className="text-xs">Company <span className="text-muted-foreground">({convertRoStoreToDc ? "Product Owner" : "สาขา"} · ค่าเริ่มต้น)</span></Label>
-                    <StorePickCombo value={convertRoCompany} options={convertRoStoreToDc ? convertRoPartnerOpts : convertSoStoreOpts} onChange={setConvertRoCompany} />
+                    {convertRoStoreToDc ? (
+                      <Input value={convertRoCompany} onChange={(e) => setConvertRoCompany(e.target.value)} placeholder="พิมพ์ Product Owner" className="h-8 w-56 text-xs" title="Product Owner (พิมพ์เอง)" />
+                    ) : (
+                      <StorePickCombo value={convertRoCompany} options={convertSoStoreOpts} onChange={setConvertRoCompany} />
+                    )}
                   </div>
                   <div className="flex items-center gap-1.5">
                     <Label className="text-xs">Partner <span className="text-muted-foreground">({convertRoStoreToDc ? "สาขา" : "Product Owner"})</span></Label>
-                    <StorePickCombo value={convertRoPartner} options={convertRoStoreToDc ? convertSoStoreOpts : convertRoPartnerOpts} onChange={setConvertRoPartner} />
+                    {convertRoStoreToDc ? (
+                      <StorePickCombo value={convertRoPartner} options={convertSoStoreOpts} onChange={setConvertRoPartner} />
+                    ) : (
+                      <Input value={convertRoPartner} onChange={(e) => setConvertRoPartner(e.target.value)} placeholder="พิมพ์ Product Owner" className="h-8 w-56 text-xs" title="Product Owner (พิมพ์เอง)" />
+                    )}
                   </div>
                   <div className="flex items-center gap-1.5">
                     <Label className="text-xs">Priority <span className="text-muted-foreground">(ค่าเริ่มต้น)</span></Label>
