@@ -516,6 +516,7 @@ type ConvertRow = {
   roCompany?: string;                   // RO: Company (สาขา) รายแถวจากไฟล์ — ว่าง = ใช้ค่า dropdown
   roPriority?: string;                  // RO: Priority รายแถวจากไฟล์ — ว่าง = ใช้ค่า dropdown
   soCustomer?: string;                  // SO: Customer รายแถวจากไฟล์ — ว่าง = ใช้ค่า dropdown
+  soGroup?: string;                     // SO: Order Group รายแถว — คำเดียวกัน = 1 SO (ในลูกค้าเดียว) · ว่าง = auto ตัดทีละ N
 };
 
 // ===== SO Doc (SCM Control → tab SO) — สร้างอัตโนมัติตอน Save Order, แยกตาม order_group =====
@@ -5618,7 +5619,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
 
   // enrich: resolve barcode → sku + unit barcode + product (+ vendor/pocost ถ้าไม่ใช่ SO) (batch)
   // forSO = true → ข้ามการโหลด po_cost + ชื่อ/สกุลเงิน vendor (SO ไม่ใช้ → เร็วกว่า)
-  const enrichConvert = async (inputs: { barcode: string; qty: number; fileVendor: string; fileUnitPrice: number | null; roCompany?: string; roPriority?: string; soCustomer?: string }[], forSO = false): Promise<{ rows: ConvertRow[]; nameMap: Record<string, string>; currencyByVendor: Record<string, string> }> => {
+  const enrichConvert = async (inputs: { barcode: string; qty: number; fileVendor: string; fileUnitPrice: number | null; roCompany?: string; roPriority?: string; soCustomer?: string; soGroup?: string }[], forSO = false): Promise<{ rows: ConvertRow[]; nameMap: Record<string, string>; currencyByVendor: Record<string, string> }> => {
     const codes = [...new Set(inputs.map((i) => i.barcode).filter(Boolean))];
     setConvertStatus(`ค้นหารหัสสินค้า ${codes.length} รหัส...`); setConvertProgress(15);
     // 1) code → sku (ลองทีละคอลัมน์ main_barcode / sku_code / barcode)
@@ -5707,6 +5708,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
         roCompany: inp.roCompany,
         roPriority: inp.roPriority,
         soCustomer: inp.soCustomer,
+        soGroup: inp.soGroup,
       };
     });
     return { rows, nameMap, currencyByVendor };
@@ -5749,12 +5751,12 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
 
   // Download template SO (Barcode + Quantity — SO ไม่ต้องใช้ Vendor/Pocost)
   const downloadConvertTemplateSO = () => {
-    // Customer = รายแถว · เว้นว่างได้ = ใช้ค่า dropdown ในหน้าจอ (รองรับหลายลูกค้าในไฟล์เดียว)
+    // Customer + Order Group = รายแถว · เว้นว่างได้ · Order Group: คำเดียวกัน = 1 SO (ในลูกค้าเดียว) เช่น G01 G02
     const ws = XLSX.utils.aoa_to_sheet([
-      ["Barcode", "Quantity", "Customer"],
-      ["", "", ""],
+      ["Barcode", "Quantity", "Customer", "Order Group"],
+      ["", "", "", "G01"],
     ]);
-    ws["!cols"] = [{ wch: 18 }, { wch: 12 }, { wch: 32 }];
+    ws["!cols"] = [{ wch: 18 }, { wch: 12 }, { wch: 32 }, { wch: 14 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Template");
     XLSX.writeFile(wb, "Convert_Template_SO.xlsx");
@@ -5774,6 +5776,8 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       const qtyIdx = headers.findIndex((h) => h.includes("qty") || h.includes("quantity") || h.includes("จำนวน"));
       // Customer = รายแถว (ถ้าไม่มีคอลัมน์ / เว้นว่าง → ใช้ค่า dropdown ตอน export)
       const custIdx = headers.findIndex((h) => h.includes("customer") || h.includes("ลูกค้า"));
+      // Order Group = รายแถว · คำเดียวกัน = 1 SO (ในลูกค้าเดียว) · เว้นว่าง = auto ตัดทีละ N
+      const grpIdx = headers.findIndex((h) => (h.includes("order") && h.includes("group")) || h.includes("กลุ่ม") || h === "group");
       if (bcIdx < 0 || qtyIdx < 0) { toast({ title: "ไม่พบคอลัมน์ Barcode / Quantity", variant: "destructive" }); return; }
       const inputs = raw.slice(1)
         .map((r) => ({
@@ -5782,6 +5786,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
           fileVendor: "",
           fileUnitPrice: null,
           soCustomer: custIdx >= 0 ? String(r[custIdx] ?? "").trim() : "",
+          soGroup: grpIdx >= 0 ? String(r[grpIdx] ?? "").trim() : "",
         }))
         .filter((i) => i.barcode);
       if (inputs.length === 0) { toast({ title: "ไม่พบข้อมูล (ต้องมี Barcode)", variant: "destructive" }); return; }
@@ -5807,9 +5812,10 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       const cells = line.includes("\t") ? line.split("\t") : line.split(/[,;]| {2,}/);
       const barcode = String(cells[0] ?? "").trim();
       const qty = cells.length > 1 ? (Number(String(cells[1]).replace(/,/g, "")) || 0) : 0;
-      // SO: คอลัมน์ 3 = Customer (วางมาได้เลย ถ้าไม่วาง = ใช้ค่า dropdown)
+      // SO: คอลัมน์ 3 = Customer, คอลัมน์ 4 = Order Group (วางมาได้เลย ถ้าไม่วาง = ใช้ค่า dropdown / auto)
       const soCustomer = isSO ? String(cells[2] ?? "").trim() : "";
-      return { barcode, qty, fileVendor: "", fileUnitPrice: null as number | null, soCustomer };
+      const soGroup = isSO ? String(cells[3] ?? "").trim() : "";
+      return { barcode, qty, fileVendor: "", fileUnitPrice: null as number | null, soCustomer, soGroup };
     }).filter((i) => i.barcode && !/^(barcode|รหัส|sku|code)$/i.test(i.barcode)); // ข้าม header ถ้ามี
     if (inputs.length === 0) { toast({ title: "ไม่พบข้อมูลที่วาง", description: "รูปแบบ: Barcode [Tab] Qty ต่อบรรทัด", variant: "destructive" }); return; }
     setConvertImporting(true);
@@ -6003,7 +6009,14 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
       const custGroups = new Map<string, ConvertRow[]>();
       for (const r of soRows) { const c = effCustomer(r); if (!custGroups.has(c)) custGroups.set(c, []); custGroups.get(c)!.push(r); }
       const chunks: { customer: string; rows: ConvertRow[] }[] = [];
-      for (const [c, rows] of custGroups) { for (let i = 0; i < rows.length; i += N) chunks.push({ customer: c, rows: rows.slice(i, i + N) }); }
+      for (const [c, rows] of custGroups) {
+        // แถวที่ระบุ Order Group → คำเดียวกัน = 1 SO (ไม่ตัด N) · แถวที่ไม่ระบุ → auto ตัดทีละ N
+        const named = new Map<string, ConvertRow[]>();
+        const unnamed: ConvertRow[] = [];
+        for (const r of rows) { const g = (r.soGroup || "").trim(); if (g) { if (!named.has(g)) named.set(g, []); named.get(g)!.push(r); } else unnamed.push(r); }
+        for (const gr of named.values()) chunks.push({ customer: c, rows: gr });
+        for (let i = 0; i < unnamed.length; i += N) chunks.push({ customer: c, rows: unnamed.slice(i, i + N) });
+      }
       // SO Store: ไม่มีคอลัมน์ Order lines/Route · Warehouse = ชื่อสาขาที่เลือก
       const warehouseVal = convertSoStore ? convertSoStoreWh : convertSoWarehouse;
       const base: Record<string, any>[] = [];
@@ -6709,7 +6722,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                     <input type="file" accept=".xlsx,.xls" className="hidden" disabled={convertImporting} onChange={(e) => { const f = e.target.files?.[0]; if (f) handleConvertImportSO(f); e.target.value = ""; }} />
                     {convertImporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />} Import SO
                   </label>
-                  <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={() => handleConvertPaste(true)} disabled={convertImporting} title="วางข้อมูล 3 คอลัมน์: Barcode [Tab] Qty [Tab] Customer (Customer เว้นว่างได้)">
+                  <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs" onClick={() => handleConvertPaste(true)} disabled={convertImporting} title="วางข้อมูล 4 คอลัมน์: Barcode [Tab] Qty [Tab] Customer [Tab] Order Group (Customer/Order Group เว้นว่างได้)">
                     <Copy className="w-3.5 h-3.5" /> วาง
                   </Button>
                   {!convertImporting && convertSoRows.length > 0 && (
@@ -6750,7 +6763,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-xs font-medium w-24">Item Per SO</span>
                   <Input type="number" min={1} value={convertItemPerSo} onChange={(e) => setConvertItemPerSo(Math.max(1, Number(e.target.value) || 1))} className="h-8 w-24 text-xs" />
-                  <span className="text-[11px] text-muted-foreground">ตัดกลุ่มตามลูกค้าก่อน แล้วตัดทีละ {Math.max(1, Number(convertItemPerSo) || 25)} (ไม่แยก vendor)</span>
+                  <span className="text-[11px] text-muted-foreground">ตัดกลุ่มตามลูกค้าก่อน แล้วตัดทีละ {Math.max(1, Number(convertItemPerSo) || 25)} · <b>แถวที่ระบุ Order Group จะไม่ถูกตัดด้วย N</b> (คำเดียวกัน = 1 SO)</span>
                 </div>
                 {/* SO Store — ตัดคอลัมน์ Route + Warehouse เป็นชื่อสาขา */}
                 <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
@@ -6780,7 +6793,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                   </div>
                 </div>
                 <p className="text-[10px] text-muted-foreground">
-                  ใช้ template SO เดียวกับหน้า SO Order B2B (srr_special_so) · รองรับ <b>หลายลูกค้า</b> ในไฟล์เดียว (คอลัมน์ Customer รายแถว · เว้นว่าง = ใช้ค่าเริ่มต้น) · <b>ตัดกลุ่ม 2 ชั้น:</b> จับกลุ่มตามลูกค้าก่อน → ในลูกค้าค่อยตัดทีละ Item Per SO (ไม่แยก vendor) หัวกลุ่มขึ้นแถวแรก · Pricelist = {convertPricelist}
+                  ใช้ template SO เดียวกับหน้า SO Order B2B (srr_special_so) · รองรับ <b>หลายลูกค้า + หลาย Order Group</b> ในไฟล์เดียว (คอลัมน์ Customer + Order Group รายแถว · เว้นว่าง = ใช้ค่าเริ่มต้น) · <b>จัดกลุ่ม:</b> ลูกค้า → ถ้าระบุ Order Group คำเดียวกัน = 1 SO / ถ้าไม่ระบุ auto ตัดทีละ Item Per SO · หัวกลุ่มขึ้นแถวแรก · Pricelist = {convertPricelist}
                   {convertSoStore ? ` · SO Store: ไม่มี Route · WH(สาขา) = ${convertSoStoreWh || "ยังไม่เลือก"}` : ` · Route = ${convertSoRoute} · WH = ${convertSoWarehouse}`}
                 </p>
               </div>
