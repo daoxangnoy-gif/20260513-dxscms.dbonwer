@@ -6021,7 +6021,7 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
             "UOM": r.uom,
             "Order Lines/Quantity": r.qty,
           };
-          if (!convertSoStore) row["Order lines/Route"] = convertSoRoute; // ค่าเต็มทุก row (ขวาของ Quantity) — ตัดออกถ้า SO Store
+          if (!convertSoStore) row["Order Lines/Route"] = convertSoRoute; // ค่าเต็มทุก row (ขวาของ Quantity) — ตัดออกถ้า SO Store
           row["Source Document"] = "";
           row["Warehouse"] = idx === 0 ? warehouseVal : "";
           row["Company"] = idx === 0 ? (convertSoStore ? warehouseVal : SO_COMPANY) : ""; // SO Store → Company = Warehouse (ชื่อสาขา)
@@ -6762,8 +6762,8 @@ function SCMPOTab({ vendorOriginMap, poSubTab, setPoSubTab }: {
                   <span className="text-xs font-medium w-24">Route / WH</span>
                   {!convertSoStore && (
                     <div className="flex items-center gap-1.5">
-                      <Label className="text-xs">Order lines/Route</Label>
-                      <select className="h-8 text-xs border rounded px-2 bg-background max-w-[260px]" value={convertSoRoute} onChange={(e) => setConvertSoRoute(e.target.value)} title="Order lines/Route (คอลัมน์ Excel · ทุก row)">
+                      <Label className="text-xs">Order Lines/Route</Label>
+                      <select className="h-8 text-xs border rounded px-2 bg-background max-w-[260px]" value={convertSoRoute} onChange={(e) => setConvertSoRoute(e.target.value)} title="Order Lines/Route (คอลัมน์ Excel · ทุก row)">
                         {SO_ROUTE_OPTIONS.map((o) => <option key={o} value={o}>{o}</option>)}
                       </select>
                     </div>
