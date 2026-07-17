@@ -177,7 +177,7 @@ export default function LogPoCostPage() {
         POCost: r.po_cost ?? "",
         POCostUnit: r.po_cost_unit ?? "",
         ExRate: exRateOf(r.vendor) ?? "",
-        POCostLAK: lakOf(r.po_cost, r.vendor) ?? "",
+        POCostUnitLAK: lakOf(r.po_cost_unit, r.vendor) ?? "",
         "MOQ_Old": moqCh?.old ?? "",
         "MOQ_New": moqCh?.new ?? "",
         "POCost_Old": costCh?.old ?? "",
@@ -252,7 +252,7 @@ export default function LogPoCostPage() {
               <th className="px-2 py-1.5 border-b border-border text-right">PO Cost</th>
               <th className="px-2 py-1.5 border-b border-border text-right">PO Cost/Unit</th>
               <th className="px-2 py-1.5 border-b border-border text-right">Ex Rate</th>
-              <th className="px-2 py-1.5 border-b border-border text-right">PO Cost (LAK)</th>
+              <th className="px-2 py-1.5 border-b border-border text-right">PO Cost Unit (LAK)</th>
               <th className="px-2 py-1.5 border-b border-border">Changes (old → new)</th>
             </tr>
           </thead>
@@ -292,8 +292,10 @@ export default function LogPoCostPage() {
                   </td>
                   <td className="px-2 py-1 text-right">
                     {(() => {
-                      const lak = lakOf(r.po_cost, r.vendor);
-                      return lak != null ? Math.round(lak).toLocaleString() : <span className="text-muted-foreground">-</span>;
+                      const lak = lakOf(r.po_cost_unit, r.vendor);
+                      return lak != null
+                        ? lak.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })
+                        : <span className="text-muted-foreground">-</span>;
                     })()}
                   </td>
                   <td className="px-2 py-1">
