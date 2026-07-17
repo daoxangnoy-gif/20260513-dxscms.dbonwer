@@ -45,6 +45,15 @@ function fmtMoney(v: number): string {
   return v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+/** ค่าในช่อง Changes: po_cost/po_cost_unit = #,###,###.00, ตัวเลขอื่น (moq ฯลฯ) = เต็มจำนวน */
+function fmtChangeVal(col: string, v: any): string {
+  if (v === null || v === undefined || v === "") return "∅";
+  const n = Number(v);
+  if (!Number.isFinite(n)) return String(v);
+  if (col === "po_cost" || col === "po_cost_unit") return fmtMoney(n);
+  return n.toLocaleString();
+}
+
 function renderChanges(changes: any): { col: string; old: any; new: any }[] {
   if (!changes || typeof changes !== "object") return [];
   return Object.entries(changes).map(([col, v]: [string, any]) => ({
@@ -309,9 +318,9 @@ export default function LogPoCostPage() {
                         {ch.map((c, i) => (
                           <div key={i} className="text-[11px]">
                             <span className="font-semibold text-foreground">{c.col}:</span>{" "}
-                            <span className="text-red-600 line-through">{c.old ?? "∅"}</span>
+                            <span className="text-red-600 line-through">{fmtChangeVal(c.col, c.old)}</span>
                             {" → "}
-                            <span className="text-emerald-700 font-medium">{c.new ?? "∅"}</span>
+                            <span className="text-emerald-700 font-medium">{fmtChangeVal(c.col, c.new)}</span>
                           </div>
                         ))}
                       </div>
