@@ -72,6 +72,7 @@ export default function LogPoCostPage() {
   const [search, setSearch] = useState("");
   const [activityFilter, setActivityFilter] = useState<string>("ALL");
   const [currencyMap, setCurrencyMap] = useState<Record<string, string>>({}); // vendor_code -> currency
+  const [vendorNameMap, setVendorNameMap] = useState<Record<string, string>>({}); // vendor_code -> name
 
   // เรทแลกเปลี่ยน (ตัวเดียวกับหน้า PO Cost import เก็บใน localStorage)
   const rThb = useMemo(() => { const n = parseFloat(localStorage.getItem("po_cost_rate_thb") || ""); return Number.isFinite(n) && n > 0 ? n : null; }, []);
@@ -81,17 +82,25 @@ export default function LogPoCostPage() {
   useEffect(() => {
     (async () => {
       const m: Record<string, string> = {};
+      const names: Record<string, string> = {};
       const PAGE = 1000;
       for (let from = 0; ; from += PAGE) {
         const { data, error } = await supabase
           .from("vendor_master")
-          .select("vendor_code, supplier_currency")
+          .select("vendor_code, supplier_currency, vendor_name_en, vendor_name_la")
           .range(from, from + PAGE - 1);
         if (error || !data || data.length === 0) break;
-        for (const v of data as any[]) { if (v.vendor_code) m[String(v.vendor_code)] = String(v.supplier_currency || "").toUpperCase(); }
+        for (const v of data as any[]) {
+          if (!v.vendor_code) continue;
+          const code = String(v.vendor_code);
+          m[code] = String(v.supplier_currency || "").toUpperCase();
+          const name = v.vendor_name_en || v.vendor_name_la || "";
+          if (name) names[code] = String(name);
+        }
         if (data.length < PAGE) break;
       }
       setCurrencyMap(m);
+      setVendorNameMap(names);
     })();
   }, []);
 
@@ -106,6 +115,13 @@ export default function LogPoCostPage() {
   const lakOf = (po: number | null, vendor: string | null): number | null => {
     const rate = exRateOf(vendor);
     return po != null && rate != null ? po * rate : null;
+  };
+
+  /** "DC0324 - Vendor Name" (เหลือแค่ code ถ้าไม่พบชื่อใน vendor_master) */
+  const vendorDisplay = (vendor: string | null): string => {
+    if (!vendor) return "";
+    const name = vendorNameMap[vendor];
+    return name ? `${vendor} - ${name}` : vendor;
   };
 
   const load = async () => {
@@ -291,7 +307,9 @@ export default function LogPoCostPage() {
                   <td className="px-2 py-1 font-mono">{r.item_id || "-"}</td>
                   <td className="px-2 py-1 font-mono">{r.goodcode || "-"}</td>
                   <td className="px-2 py-1 max-w-[260px] truncate" title={r.product_name || ""}>{r.product_name || "-"}</td>
-                  <td className="px-2 py-1">{r.vendor || "-"}</td>
+                  <td className="px-2 py-1 max-w-[220px] truncate" title={vendorDisplay(r.vendor)}>
+                    {vendorDisplay(r.vendor) || "-"}
+                  </td>
                   <td className="px-2 py-1">{currencyMap[r.vendor || ""] || <span className="text-muted-foreground">-</span>}</td>
                   <td className="px-2 py-1 text-right">{r.moq ?? "-"}</td>
                   <td className="px-2 py-1 text-right">{r.po_cost != null ? fmtMoney(Number(r.po_cost)) : "-"}</td>
