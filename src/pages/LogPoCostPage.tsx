@@ -40,6 +40,11 @@ function fmtDate(iso: string): string {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}`;
 }
 
+/** #,###,###.00 */
+function fmtMoney(v: number): string {
+  return v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 function renderChanges(changes: any): { col: string; old: any; new: any }[] {
   if (!changes || typeof changes !== "object") return [];
   return Object.entries(changes).map(([col, v]: [string, any]) => ({
@@ -280,8 +285,8 @@ export default function LogPoCostPage() {
                   <td className="px-2 py-1">{r.vendor || "-"}</td>
                   <td className="px-2 py-1">{currencyMap[r.vendor || ""] || <span className="text-muted-foreground">-</span>}</td>
                   <td className="px-2 py-1 text-right">{r.moq ?? "-"}</td>
-                  <td className="px-2 py-1 text-right">{r.po_cost ?? "-"}</td>
-                  <td className="px-2 py-1 text-right">{r.po_cost_unit != null ? Number(r.po_cost_unit).toFixed(4) : "-"}</td>
+                  <td className="px-2 py-1 text-right">{r.po_cost != null ? fmtMoney(Number(r.po_cost)) : "-"}</td>
+                  <td className="px-2 py-1 text-right">{r.po_cost_unit != null ? fmtMoney(Number(r.po_cost_unit)) : "-"}</td>
                   <td className="px-2 py-1 text-right">
                     {(() => {
                       const cur = currencyMap[r.vendor || ""] || "";
